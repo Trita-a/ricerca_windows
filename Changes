@@ -1,3 +1,7 @@
 V5.0 
 Aggiunto etichetta per il tempo di avvio e fine ricerca
 Aggiungo il tipo di file, adesso riporta nella colonna treeview file il tipo di estensione corretta
+V6.0
+Sistemato il pulsante interrompi
+inserito Nome File nella Treeview
+eliminato il bug dei label in basso a DX
