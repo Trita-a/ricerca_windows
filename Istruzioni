@@ -1,38 +1,85 @@
-Guida alle Opzioni di Performance
-Le opzioni di performance che ho implementato consentono di ottimizzare la velocità di ricerca e limitare i tempi di esecuzione. Ecco come funzionano in dettaglio:
-
+Guida Completa alle Impostazioni - File Search Tool
+Impostazioni di Ricerca Base
+1. Selezione Tema
+    •	Funzionalità: Cambia l'aspetto grafico dell'applicazione
+    •	Come funziona: Seleziona uno dei temi disponibili dal menu a tendina
+    •	Dove trovarla: Parte superiore dell'interfaccia con etichetta "Tema:"
+    •	Valore predefinito: "darkly"
+2. Directory di Ricerca
+    •	Funzionalità: Specifica la cartella in cui cercare
+    •	Come funziona: Inserisci il percorso manualmente o usa il pulsante "Sfoglia"
+    •	Dove trovarla: Sezione "Directory di ricerca"
+    •	Suggerimento: Il pulsante "Sfoglia" apre una finestra di dialogo per selezionare facilmente la cartella
+3. Parole Chiave
+    •	Funzionalità: Definisce i termini da cercare
+    •	Come funziona: Inserisci una o più parole separate da virgole
+    •	Dove trovarla: Sezione "Parole chiave"
+    •	Esempio: "documento, fattura, contratto" cercherà file che contengono una di queste parole
+4. Opzioni di Ricerca Base
+    •	Cerca file: Cerca nei nomi dei file
+    •	Cerca cartelle: Cerca nei nomi delle cartelle
+    •	Cerca nei contenuti: Cerca all'interno dei file (solo formati supportati)
+    •	Dove trovarle: Sezione "Opzioni di ricerca", checkbox multiple
+    •	Nota: La ricerca nei contenuti è più lenta; verrà mostrato un avviso quando la si attiva
+5. Profondità di Ricerca
+    •	Funzionalità: Limita quanto in profondità cercare nelle sottocartelle
+    •	Come funziona: Imposta un numero da 0 (nessun limite) a 10
+    •	Dove trovarla: Sezione "Opzioni di ricerca", campo "Profondità max"
+    •	Valore predefinito: 0 (esplora tutte le sottocartelle senza limiti)
+Filtri Avanzati
+1. Dimensione File
+    •	Funzionalità: Filtra i file in base alla dimensione
+    •	Come funziona: Imposta valori minimi e massimi in KB
+    •	Dove trovarla: Finestra "Filtri avanzati", sezione "Dimensione file"
+    •	Esempio: Min 10KB, Max 1000KB troverà solo file tra queste dimensioni
+2. Data Modifica
+    •	Funzionalità: Filtra i file in base alla data di modifica
+    •	Come funziona: Imposta date di inizio e fine nel formato DD-MM-YYYY
+    •	Dove trovarla: Finestra "Filtri avanzati", sezione "Data modifica"
+    •	Esempio: Da 01-01-2024 a 13-03-2025 troverà file modificati in questo intervallo
+3. Estensioni File
+    •	Funzionalità: Filtra i file in base all'estensione
+    •	Come funziona: Inserisci le estensioni separate da virgole
+    •	Dove trovarla: Finestra "Filtri avanzati", sezione "Estensioni file"
+    •	Esempio: ".pdf, .docx, .xlsx" troverà solo file PDF, Word e Excel
+Opzioni di Performance
 1. Timeout della Ricerca
-  Funzionalità: Interrompe automaticamente la ricerca dopo un tempo specificato
-  Come funziona: Quando attivi questa opzione, la ricerca viene interrotta al raggiungimento del limite di tempo impostato (in secondi)
-  Vantaggi: Evita che ricerche in cartelle molto grandi o su dischi lenti si prolunghino eccessivamente
-  Dove trovarla: Nel pannello "Opzioni di Performance" con la checkbox "Timeout ricerca" e relativo campo per i secondi
+    •	Funzionalità: Interrompe automaticamente la ricerca dopo un tempo specificato
+    •	Come funziona: Imposta un limite di tempo in secondi
+    •	Dove trovarla: Pannello "Opzioni di Performance", checkbox "Timeout ricerca"
+    •	Valore predefinito: Disattivato (checkbox deselezionata)
 2. Thread Paralleli
-  Funzionalità: Esegue la ricerca nei contenuti dei file in parallelo
-  Come funziona: Distribuisce l'analisi dei contenuti dei file su più thread di esecuzione simultanei
-  Vantaggi: Su computer multi-core, accelera notevolmente la ricerca nei contenuti dei file
-  Dove trovarla: Nel pannello "Opzioni di Performance", opzione "Thread" con spinner numerico
-  Suggerimento: Impostare un numero di thread pari o leggermente inferiore al numero di core del processore
+    •	Funzionalità: Esegue la ricerca nei contenuti in parallelo
+    •	Come funziona: Distribuisce l'analisi dei contenuti su più thread
+    •	Dove trovarla: Pannello "Opzioni di Performance", opzione "Thread"
+    •	Valore predefinito: 4 thread
+    •	Suggerimento: Impostare un valore pari al numero di core del processore
 3. Dimensione Massima File
-  Funzionalità: Limita la dimensione dei file di cui analizzare il contenuto
-  Come funziona: I file che superano la dimensione specificata (in MB) verranno saltati per la ricerca nei contenuti
-  Vantaggi: Evita rallentamenti dovuti all'analisi di file molto grandi
-  Dove trovarla: Nel pannello "Opzioni di Performance", opzione "Max file MB"
+    •	Funzionalità: Limita la dimensione dei file analizzati
+    •	Come funziona: I file più grandi del valore in MB verranno ignorati
+    •	Dove trovarla: Pannello "Opzioni di Performance", opzione "Max file MB"
+    •	Valore predefinito: 10 MB
 4. Numero Massimo di Risultati
-  Funzionalità: Limita il numero di risultati mostrati
-  Come funziona: La ricerca si ferma automaticamente una volta raggiunto il numero massimo di risultati impostato
-  Vantaggi: Evita di sovraccaricare l'interfaccia con troppi risultati e accelera il completamento della ricerca
-  Dove trovarla: Nel pannello "Opzioni di Performance", opzione "Max risultati"
+    •	Funzionalità: Limita i risultati mostrati
+    •	Come funziona: La ricerca si interrompe al raggiungimento del limite
+    •	Dove trovarla: Pannello "Opzioni di Performance", opzione "Max risultati"
+    •	Valore predefinito: 1000 risultati
 5. Indicizzazione
-  Funzionalità: Memorizza i contenuti dei file analizzati per velocizzare ricerche future
-  Come funziona: Crea un indice in memoria dei file già analizzati, in modo da non doverli rileggere nelle ricerche successive
-  Vantaggi: Ricerche ripetute nella stessa cartella diventano molto più veloci
-  Dove trovarla: Nel pannello "Opzioni di Performance", checkbox "Indicizzazione"
-  Nota: L'indice viene mantenuto solo durante l'esecuzione del programma
-  Ottimizzazioni Tecniche (interne)
-  Oltre alle opzioni visibili, ho implementato diverse ottimizzazioni interne:
-  
-  Lettura a blocchi: I file di grandi dimensioni vengono letti per blocchi per ridurre l'uso della memoria
-  Campionamento: Per file molto grandi, vengono analizzati solo l'inizio e la fine del file
-  Memorizzazione in cache: I tipi di file e i metadati vengono memorizzati per evitare calcoli ripetuti
-  Scansione ottimizzata: Utilizzo di os.scandir() invece di os.walk() per migliori prestazioni di scansione directory
-  Queste ottimizzazioni permettono all'applicazione di gestire ricerche molto più veloci, specialmente su grandi volumi di dati o quando si cerca nei contenuti dei file.
+    •	Funzionalità: Memorizza i contenuti per ricerche future
+    •	Come funziona: Crea un indice dei file già analizzati
+    •	Dove trovarla: Pannello "Opzioni di Performance", checkbox "Indicizzazione"
+    •	Valore predefinito: Attivato
+Gestione Risultati
+1. Selezione Risultati
+    •	Seleziona tutto: Seleziona tutti i risultati nella lista
+    •	Deseleziona tutto: Rimuove tutte le selezioni
+    •	Inverti selezione: Inverte lo stato di selezione di tutti gli elementi
+    •	Dove trovarle: Pulsanti sopra la lista risultati
+2. Operazioni su File Selezionati
+    •	Copia selezionati: Copia i file/cartelle selezionati in una nuova posizione
+    •	Comprimi selezionati: Crea un archivio ZIP con i file/cartelle selezionati
+    •	Dove trovarle: Pulsanti sotto la lista risultati
+3. Informazioni Temporali
+    •	Avvio ricerca: Mostra l'ora di inizio della ricerca
+    •	Fine ricerca: Mostra l'ora di completamento della ricerca
+    •	Dove trovarle: Sezione "Informazioni temporali"
