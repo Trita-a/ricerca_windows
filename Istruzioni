@@ -1,0 +1,38 @@
+Guida alle Opzioni di Performance
+Le opzioni di performance che ho implementato consentono di ottimizzare la velocità di ricerca e limitare i tempi di esecuzione. Ecco come funzionano in dettaglio:
+
+1. Timeout della Ricerca
+  Funzionalità: Interrompe automaticamente la ricerca dopo un tempo specificato
+  Come funziona: Quando attivi questa opzione, la ricerca viene interrotta al raggiungimento del limite di tempo impostato (in secondi)
+  Vantaggi: Evita che ricerche in cartelle molto grandi o su dischi lenti si prolunghino eccessivamente
+  Dove trovarla: Nel pannello "Opzioni di Performance" con la checkbox "Timeout ricerca" e relativo campo per i secondi
+2. Thread Paralleli
+  Funzionalità: Esegue la ricerca nei contenuti dei file in parallelo
+  Come funziona: Distribuisce l'analisi dei contenuti dei file su più thread di esecuzione simultanei
+  Vantaggi: Su computer multi-core, accelera notevolmente la ricerca nei contenuti dei file
+  Dove trovarla: Nel pannello "Opzioni di Performance", opzione "Thread" con spinner numerico
+  Suggerimento: Impostare un numero di thread pari o leggermente inferiore al numero di core del processore
+3. Dimensione Massima File
+  Funzionalità: Limita la dimensione dei file di cui analizzare il contenuto
+  Come funziona: I file che superano la dimensione specificata (in MB) verranno saltati per la ricerca nei contenuti
+  Vantaggi: Evita rallentamenti dovuti all'analisi di file molto grandi
+  Dove trovarla: Nel pannello "Opzioni di Performance", opzione "Max file MB"
+4. Numero Massimo di Risultati
+  Funzionalità: Limita il numero di risultati mostrati
+  Come funziona: La ricerca si ferma automaticamente una volta raggiunto il numero massimo di risultati impostato
+  Vantaggi: Evita di sovraccaricare l'interfaccia con troppi risultati e accelera il completamento della ricerca
+  Dove trovarla: Nel pannello "Opzioni di Performance", opzione "Max risultati"
+5. Indicizzazione
+  Funzionalità: Memorizza i contenuti dei file analizzati per velocizzare ricerche future
+  Come funziona: Crea un indice in memoria dei file già analizzati, in modo da non doverli rileggere nelle ricerche successive
+  Vantaggi: Ricerche ripetute nella stessa cartella diventano molto più veloci
+  Dove trovarla: Nel pannello "Opzioni di Performance", checkbox "Indicizzazione"
+  Nota: L'indice viene mantenuto solo durante l'esecuzione del programma
+  Ottimizzazioni Tecniche (interne)
+  Oltre alle opzioni visibili, ho implementato diverse ottimizzazioni interne:
+  
+  Lettura a blocchi: I file di grandi dimensioni vengono letti per blocchi per ridurre l'uso della memoria
+  Campionamento: Per file molto grandi, vengono analizzati solo l'inizio e la fine del file
+  Memorizzazione in cache: I tipi di file e i metadati vengono memorizzati per evitare calcoli ripetuti
+  Scansione ottimizzata: Utilizzo di os.scandir() invece di os.walk() per migliori prestazioni di scansione directory
+  Queste ottimizzazioni permettono all'applicazione di gestire ricerche molto più veloci, specialmente su grandi volumi di dati o quando si cerca nei contenuti dei file.
