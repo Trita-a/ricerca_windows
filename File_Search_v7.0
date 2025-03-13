@@ -138,6 +138,15 @@ class FileSearchApp:
         self.check_and_notify_missing_libraries()
         self.debug_mode = True
 
+    # Gestione CTRL+C e chiusura
+    def handle_interrupt(sig, frame):
+        if self.is_searching:
+            self.stop_search_process()
+        else:
+            self.root.quit()
+
+    signal.signal(signal.SIGINT, handle_interrupt)
+
     def log_debug(self, message):
         """Funzione per logging, stampa solo quando debug_mode è True"""
         if self.debug_mode:
@@ -457,7 +466,7 @@ class FileSearchApp:
         theme_combobox = ttk.Combobox(theme_frame, values=themes, width=15)
         theme_combobox.pack(side=LEFT, padx=5)
         theme_combobox.current(themes.index("darkly"))
-        theme_combobox.bind("<<ComboboxSelected>>", lambda e: ttk.Style().theme_use(theme_combobox.get()))
+        theme_combobox.bind("<<ComboboxSelected>>", lambda e: [ttk.Style().theme_use(theme_combobox.get()),self.update_theme_colors()])
         
         # Sezione selezione directory
         path_frame = ttk.LabelFrame(main_frame, text="Directory di ricerca", padding="5")
@@ -994,269 +1003,433 @@ class FileSearchApp:
         if not selected_items:
             messagebox.showwarning("Attenzione", "Seleziona almeno un elemento da copiare")
             return
-            
+                
         dest_dir = filedialog.askdirectory(title="Seleziona directory di destinazione")
         if not dest_dir:
             return
             
-        total_items = len(selected_items)
-        copied = 0
-        errors = 0
+        # Conteggio elementi
+        total = len(selected_items)
+        processed = 0
+        errors = []
         
-        for i, item in enumerate(selected_items):
-            values = self.results_list.item(item)['values']
-            item_type = values[0]
-            source_path = values[5]  # Path è nella sesta colonna
-            
-            try:
-                dest_path = os.path.join(dest_dir, os.path.basename(source_path))
-                
-                if item_type != "Directory":  # File
-                    shutil.copy2(source_path, dest_path)
-                else:  # Cartella
-                    shutil.copytree(source_path, dest_path)
-                copied += 1
-                
-            except Exception as e:
-                errors += 1
-                print(f"Errore durante la copia di {source_path}: {str(e)}")
-            
-            # Aggiorna la progress bar
-            progress = ((i + 1) / total_items) * 100
-            self.progress_bar["value"] = progress
-            self.status_label["text"] = f"Copiati {i + 1} di {total_items} elementi"
-            self.root.update()
-                
-        message = f"Copia completata.\nCopiati con successo: {copied}"
-        if errors > 0:
-            message += f"\nErrori: {errors}"
-            
-        self.status_label["text"] = "Copia completata"
-        messagebox.showinfo("Completato", message)
-
-    def _search_thread(self, search_path, search_terms, search_content):
-        """Thread principale di ricerca con timeout e ottimizzazioni"""
+        self.progress_bar["value"] = 0
+        self.status_label["text"] = "Avvio copia..."
+        self.root.update()
+        
         try:
-            start_time = time.time()
-            timeout_limit = self.timeout_seconds.get() if self.timeout_enabled.get() else None
-            max_file_size = self.max_file_size_mb.get() * 1024 * 1024  # Converti da MB a byte
-            max_results = self.max_results.get()
-            items_processed = 0
-            files_checked = 0
-            files_filtered = 0
-            total_items_estimated = 500  # Stima iniziale
-            self.search_results = []  # Reset risultati precedenti
+            for item in selected_items:
+                values = self.results_list.item(item)['values']
+                item_type, _, _, _, _, source_path = values
+                
+                # Assicurati che il percorso esista ancora
+                if not os.path.exists(source_path):
+                    errors.append(f"Percorso non trovato: {source_path}")
+                    continue
+                    
+                # Nome del file o cartella
+                basename = os.path.basename(source_path)
+                destination = os.path.join(dest_dir, basename)
+                
+                # Gestione dei percorsi duplicati
+                if os.path.exists(destination):
+                    counter = 1
+                    name, ext = os.path.splitext(basename)
+                    while os.path.exists(os.path.join(dest_dir, f"{name}_{counter}{ext}")):
+                        counter += 1
+                    destination = os.path.join(dest_dir, f"{name}_{counter}{ext}")
+                
+                try:
+                    if item_type == "Directory":
+                        shutil.copytree(source_path, destination)
+                    else:
+                        shutil.copy2(source_path, destination)
+                except Exception as e:
+                    errors.append(f"Errore durante la copia di {source_path}: {str(e)}")
+                    
+                processed += 1
+                progress = (processed / total) * 100
+                self.progress_bar["value"] = progress
+                self.status_label["text"] = f"Copiati {processed} di {total} elementi"
+                self.root.update()
+                
+            if errors:
+                error_message = "Completato con errori:\n\n" + "\n".join(errors[:10])
+                if len(errors) > 10:
+                    error_message += f"\n\n... e altri {len(errors) - 10} errori."
+                messagebox.showwarning("Attenzione", error_message)
+            else:
+                messagebox.showinfo("Completato", f"Copia completata con successo!\n{processed} elementi copiati in:\n{dest_dir}")
+                
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore durante il processo di copia: {str(e)}")
             
-            # Cache per i tipi di file
-            mime_cache = {}
-            
-            # Queue per processare i file in parallelo
-            content_search_queue = queue.Queue()
-            
-            # Crea un pool di thread per processare i contenuti
-            self.search_executor = concurrent.futures.ThreadPoolExecutor(
-                max_workers=self.worker_threads.get())
+        finally:
+            self.progress_bar["value"] = 0
+            self.status_label["text"] = "In attesa..."
+
+    def _search_thread(self, search_path, search_terms, search_content=False):
+        """Thread principale di ricerca"""
+        try:
+            # Inizializza l'executor per la ricerca parallela nei contenuti
+            max_workers = self.worker_threads.get()
+            self.search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
             futures = []
             
-            # Inizializza il tempo limite
-            time_limit = start_time + timeout_limit if timeout_limit else None
+            # Contatori per statistiche
+            files_checked = 0
+            dirs_checked = 0
+            start_time = time.time()
+            timeout = self.timeout_seconds.get() if self.timeout_enabled.get() else 0
             
-            def is_time_expired():
-                """Controlla se è stato superato il timeout"""
-                if time_limit and time.time() > time_limit:
-                    self.log_debug(f"Timeout raggiunto dopo {time.time() - start_time:.2f} secondi")
-                    return True
-                return False
+            # Segnala avvio ricerca
+            self.progress_queue.put(("status", "Ricerca avviata..."))
             
-            def scan_directory(current_path, depth=0):
-                nonlocal items_processed, files_checked, files_filtered
-                
-                # Controllo timeout e interruzione
-                if self.stop_search or is_time_expired() or len(self.search_results) >= max_results:
-                    return
-                
-                # Controllo profondità massima
-                if self.max_depth > 0 and depth > self.max_depth:
-                    return
-                    
+            # Filtri avanzati
+            min_size = self.advanced_filters["size_min"]
+            max_size = self.advanced_filters["size_max"]
+            min_date_str = self.advanced_filters["date_min"]
+            max_date_str = self.advanced_filters["date_max"]
+            extensions = self.advanced_filters["extensions"]
+            
+            # Converti stringhe di date in oggetti datetime
+            min_date = None
+            max_date = None
+            
+            if min_date_str:
                 try:
-                    # Usa scandir che è più veloce di listdir
-                    with os.scandir(current_path) as entries:
-                        dir_items = list(entries)  # Converti iterator in lista
-                        
-                        # Aggiorna la stima totale di elementi
-                        if depth == 0:
-                            # Stima migliorata del numero totale di elementi
-                            sample_size = min(100, len(dir_items))
-                            if sample_size > 0:
-                                avg_items_per_dir = sum(len(os.listdir(entry.path)) 
-                                                    for entry in dir_items[:sample_size] 
-                                                    if entry.is_dir() and self.safe_listdir(entry.path) is not None) / sample_size
-                                total_items_estimated = len(dir_items) * (1 + avg_items_per_dir)
-                                self.log_debug(f"Elementi stimati: {total_items_estimated}")
-                        
-                        for entry in dir_items:
-                            if self.stop_search or is_time_expired() or len(self.search_results) >= max_results:
-                                return
-                                
-                            items_processed += 1
-                            if items_processed % 10 == 0:  # Aggiorna lo stato ogni 50 elementi
-                                elapsed = time.time() - start_time
-                                percent_complete = min(99, int((items_processed / total_items_estimated) * 100))
-                                remaining = "?"
-                                if percent_complete > 0:
-                                    remaining = f"{(elapsed / percent_complete * (100 - percent_complete)):.1f}s"
-                                
-                                self.progress_queue.put(("progress", percent_complete))
-                                self.progress_queue.put(("status", 
-                                    f"Processati {items_processed} elementi | {files_checked} file verificati | Tempo rimanente: {remaining}"))
-                            
-                            try:
-                                # Gestione file
-                                if entry.is_file():
-                                    # Applica filtri prima di processare ulteriormente
-                                    if not self.apply_advanced_filters(entry.path):
-                                        files_filtered += 1
-                                        continue
-                                    
-                                    # Controlla dimensione massima
+                    min_date = datetime.strptime(min_date_str, "%d-%m-%Y")
+                except ValueError:
+                    self.log_debug(f"Data minima non valida: {min_date_str}")
+            
+            if max_date_str:
+                try:
+                    max_date = datetime.strptime(max_date_str, "%d-%m-%Y")
+                    # Imposta l'ora alla fine della giornata
+                    max_date = datetime.combine(max_date.date(), datetime.max.time())
+                except ValueError:
+                    self.log_debug(f"Data massima non valida: {max_date_str}")
+            
+            # Funzioni helper per la ricerca
+            def check_file_match(file_path, file_name, size, modified_time):
+                """Verifica se un file corrisponde ai criteri di ricerca base senza analizzare il contenuto"""
+                # Verifica estensione
+                if extensions and not any(file_name.lower().endswith(ext.lower()) for ext in extensions):
+                    return False
+                
+                # Verifica dimensione
+                if min_size > 0 and size < min_size:
+                    return False
+                if max_size > 0 and size > max_size:
+                    return False
+                
+                # Verifica data
+                if min_date and modified_time < min_date:
+                    return False
+                if max_date and modified_time > max_date:
+                    return False
+                
+                # Verifica parole chiave nel nome
+                if not any(term.lower() in file_name.lower() for term in search_terms):
+                    # Se le parole chiave non sono nel nome, verifica se dobbiamo cercare nei contenuti
+                    if not search_content:
+                        return False
+                    # Se dobbiamo cercare nei contenuti, restituisci True per continuare la verifica
+                    return True
+                
+                # Se arriviamo qui, il file corrisponde ai criteri di base
+                return True
+            
+            def search_in_file_content(file_path, file_ext):
+                """Cerca nei contenuti del file basandosi sull'estensione"""
+                try:
+                    # Controlla la dimensione del file
+                    file_size = os.path.getsize(file_path)
+                    max_size_bytes = self.max_file_size_mb.get() * 1024 * 1024
+                    
+                    if file_size > max_size_bytes:
+                        return False
+                    
+                    # Cerca nei vari tipi di file supportati
+                    ext_lower = file_ext.lower()
+                    
+                    # File di testo semplice
+                    if ext_lower in ['.txt', '.log', '.md', '.csv', '.json', '.xml', '.html', '.htm']:
+                        try:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                return any(term.lower() in content.lower() for term in search_terms)
+                        except Exception as e:
+                            self.log_debug(f"Errore lettura file {file_path}: {str(e)}")
+                            return False
+                    
+                    # File Word (.docx)
+                    elif ext_lower == '.docx' and file_format_support["docx"]:
+                        try:
+                            doc = docx.Document(file_path)
+                            text = " ".join([paragraph.text for paragraph in doc.paragraphs])
+                            return any(term.lower() in text.lower() for term in search_terms)
+                        except Exception as e:
+                            self.log_debug(f"Errore lettura DOCX {file_path}: {str(e)}")
+                            return False
+                    
+                    # File PDF
+                    elif ext_lower == '.pdf' and file_format_support["pdf"]:
+                        try:
+                            with open(file_path, 'rb') as f:
+                                reader = PyPDF2.PdfFileReader(f)
+                                text = ""
+                                for page_num in range(reader.numPages):
                                     try:
-                                        file_size = entry.stat().st_size
-                                        if file_size > max_file_size:
-                                            files_filtered += 1
-                                            self.log_debug(f"File troppo grande: {entry.name} ({file_size/1024/1024:.1f} MB)")
-                                            continue
+                                        text += reader.getPage(page_num).extractText()
                                     except:
                                         pass
-                                    
-                                    # Cerca nei nomi dei file
-                                    file_matched = False
-                                    if self.search_files.get() and any(term.lower() in entry.name.lower() for term in search_terms):
-                                        file_type = self.get_file_type(entry.path, mime_cache)
-                                        metadata = self.get_file_metadata(entry.path)
-                                        
-                                        result = {
-                                            'type': file_type,
-                                            'author': entry.name,
-                                            'size': metadata['size'],
-                                            'modified': metadata['modified'],
-                                            'created': metadata['created'],
-                                            'path': entry.path
-                                        }
-                                        self.search_results.append(result)
-                                        file_matched = True
-                                        
-                                    # Aggiungi alla coda di ricerca nei contenuti solo se serve e non è già stato trovato
-                                    if search_content and not file_matched and self.is_text_file(entry.path):
-                                        # Invece di processare immediatamente, aggiungi alla coda
-                                        future = self.search_executor.submit(
-                                            self.search_file_content, entry.path, search_terms
-                                        )
-                                        futures.append(future)
-                                        files_checked += 1
-                                
-                                # Gestione directory
-                                elif entry.is_dir():
-                                    if self.search_folders.get() and any(term.lower() in entry.name.lower() for term in search_terms):
-                                        metadata = self.get_file_metadata(entry.path)
-                                        result = {
-                                            'type': 'Directory',
-                                            'author': entry.name,
-                                            'size': metadata['size'],
-                                            'modified': metadata['modified'],
-                                            'created': metadata['created'],
-                                            'path': entry.path
-                                        }
-                                        self.search_results.append(result)
-                                    
-                                    # Esplora sottocartelle
-                                    scan_directory(entry.path, depth + 1)
-                                    
-                            except PermissionError:
-                                self.log_debug(f"Permesso negato per {entry.path}")
-                            except Exception as e:
-                                self.log_debug(f"Errore con {entry.path}: {str(e)}")
-                                
-                except PermissionError:
-                    self.log_debug(f"Permesso negato per {current_path}")
-                except Exception as e:
-                    self.log_debug(f"Errore in {current_path}: {str(e)}")
-            
-            # Avvia la scansione ricorsiva
-            scan_directory(search_path)
-            
-            # Mostra status della ricerca nei contenuti
-            if search_content and futures:
-                self.progress_queue.put(("status", f"Cercando nei contenuti di {len(futures)} file..."))
-                
-                # Monitora i futures con timeout
-                completed = 0
-                while futures and not self.stop_search:
-                    # Controlla se è stato superato il timeout
-                    if is_time_expired():
-                        self.log_debug("Timeout durante la ricerca nei contenuti")
-                        for future in futures:
-                            future.cancel()
-                        self.progress_queue.put(("timeout", None))
-                        return
-                    
-                    # Trova e processa i primi futures completati
-                    done, not_done = concurrent.futures.wait(
-                        futures, 
-                        timeout=0.5,
-                        return_when=concurrent.futures.FIRST_COMPLETED
-                    )
-                    
-                    # Elabora i futures completati
-                    for future in done:
-                        try:
-                            result = future.result()
-                            if result:
-                                self.search_results.append(result)
+                                return any(term.lower() in text.lower() for term in search_terms)
                         except Exception as e:
-                            self.log_debug(f"Errore nell'elaborazione del contenuto: {str(e)}")
-                        
-                        completed += 1
-                        # Aggiorna la progress bar
-                        percent = min(99, int((completed / len(futures)) * 100))
-                        self.progress_queue.put(("progress", percent))
-                        self.progress_queue.put(("status", f"Cercando nei contenuti: {completed}/{len(futures)} file"))
+                            self.log_debug(f"Errore lettura PDF {file_path}: {str(e)}")
+                            return False
                     
-                    # Aggiorna l'elenco dei futures ancora in esecuzione
-                    futures = list(not_done)
+                    # File PowerPoint
+                    elif ext_lower == '.pptx' and file_format_support["pptx"]:
+                        try:
+                            presentation = pptx.Presentation(file_path)
+                            text = ""
+                            for slide in presentation.slides:
+                                for shape in slide.shapes:
+                                    if hasattr(shape, "text"):
+                                        text += shape.text
+                            return any(term.lower() in text.lower() for term in search_terms)
+                        except Exception as e:
+                            self.log_debug(f"Errore lettura PPTX {file_path}: {str(e)}")
+                            return False
+                    
+                    # File Excel
+                    elif ext_lower in ['.xlsx', '.xls'] and file_format_support["excel"]:
+                        try:
+                            workbook = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+                            text = ""
+                            for sheet_name in workbook.sheetnames:
+                                sheet = workbook[sheet_name]
+                                for row in sheet.iter_rows(values_only=True):
+                                    for cell in row:
+                                        if cell is not None:
+                                            text += str(cell) + " "
+                            return any(term.lower() in text.lower() for term in search_terms)
+                        except Exception as e:
+                            self.log_debug(f"Errore lettura Excel {file_path}: {str(e)}")
+                            return False
+                    
+                    # File RTF
+                    elif ext_lower == '.rtf' and file_format_support["rtf"]:
+                        try:
+                            with open(file_path, 'r', errors='ignore') as f:
+                                rtf_content = f.read()
+                                text = rtf_to_text(rtf_content)
+                                return any(term.lower() in text.lower() for term in search_terms)
+                        except Exception as e:
+                            self.log_debug(f"Errore lettura RTF {file_path}: {str(e)}")
+                            return False
+                    
+                    # File OpenDocument (.odt)
+                    elif ext_lower == '.odt' and file_format_support["odt"]:
+                        try:
+                            doc = odfdo.Document(file_path)
+                            text = doc.get_formatted_text()
+                            return any(term.lower() in text.lower() for term in search_terms)
+                        except NameError:
+                            # Prova con l'altra libreria ODT
+                            try:
+                                odt_doc = opendocument.load(file_path)
+                                text = ""
+                                for element in odt_doc.getElementsByType(text.P):
+                                    text += teletype.extractText(element) + " "
+                                return any(term.lower() in text.lower() for term in search_terms)
+                            except Exception as e:
+                                self.log_debug(f"Errore lettura ODT {file_path}: {str(e)}")
+                                return False
+                        except Exception as e:
+                            self.log_debug(f"Errore lettura ODT {file_path}: {str(e)}")
+                            return False
+                    
+                    # Per altri tipi di file, non cerchiamo nel contenuto
+                    return False
+                    
+                except Exception as e:
+                    self.log_debug(f"Errore analisi contenuto {file_path}: {str(e)}")
+                    return False
             
-            # Completa la ricerca            
-            elapsed_time = time.time() - start_time
-            self
+            # Inizia la ricerca ricorsiva
+            for root, dirs, files in os.walk(search_path):
+                # Controlla se la ricerca è stata interrotta
+                if self.stop_search:
+                    self.progress_queue.put(("status", "Ricerca interrotta dall'utente"))
+                    self.progress_queue.put(("complete", True))
+                    if self.search_executor:
+                        self.search_executor.shutdown(wait=False)
+                    return
+                    
+                # Verifica se è scaduto il timeout
+                if timeout > 0 and time.time() - start_time > timeout:
+                    self.progress_queue.put(("status", "Timeout ricerca"))
+                    self.progress_queue.put(("timeout", True))
+                    if self.search_executor:
+                        self.search_executor.shutdown(wait=False)
+                    return
+                    
+                # Controlla la profondità 
+                current_depth = root[len(search_path):].count(os.path.sep)
+                if self.max_depth > 0 and current_depth >= self.max_depth:
+                    dirs[:] = []  # Non scendere ulteriormente nelle directory
+                
+                # Salta cartelle nascoste se richiesto
+                if self.ignore_hidden.get():
+                    dirs[:] = [d for d in dirs if not d.startswith('.')]
+                    files = [f for f in files if not f.startswith('.')]
+                    
+                # Cerca nelle directory se richiesto
+                if self.search_folders.get():
+                    for dir_name in dirs:
+                        dirs_checked += 1
+                        
+                        # Segnala progresso
+                        if dirs_checked % 10 == 0:
+                            self.progress_queue.put(("status", f"Analizzando: {dirs_checked} cartelle, {files_checked} file"))
+                        
+                        # Verifica se il nome della directory corrisponde
+                        if any(term.lower() in dir_name.lower() for term in search_terms):
+                            dir_path = os.path.join(root, dir_name)
+                            modified_time = datetime.fromtimestamp(os.path.getmtime(dir_path))
+                            created_time = datetime.fromtimestamp(os.path.getctime(dir_path))
+                            
+                            # Verifica filtri data
+                            if min_date and modified_time < min_date:
+                                continue
+                            if max_date and modified_time > max_date:
+                                continue
+                                
+                            # Aggiunge risultato
+                            self.search_results.append({
+                                'type': "Directory",
+                                'name': dir_name,
+                                'size': "-",
+                                'modified': modified_time.strftime('%d-%m-%Y %H:%M'),
+                                'created': created_time.strftime('%d-%m-%Y %H:%M'),
+                                'path': dir_path
+                            })
+                
+                # Cerca nei file se richiesto
+                if self.search_files.get():
+                    for file_name in files:
+                        files_checked += 1
+                        
+                        # Verifica limitazione numero file
+                        if files_checked >= self.max_files_to_check.get():
+                            self.progress_queue.put(("status", f"Raggiunto limite di {self.max_files_to_check.get()} file"))
+                            break
+                            
+                        # Aggiorna progresso periodicamente
+                        if files_checked % 50 == 0:
+                            self.progress_queue.put(("status", f"Analizzati {files_checked} file in {dirs_checked} cartelle"))
+                            self.progress_queue.put(("progress", min(90, int(files_checked / self.max_files_to_check.get() * 100))))
+                        
+                        # Processa il file
+                        file_path = os.path.join(root, file_name)
+                        try:
+                            # Ottieni metadati del file
+                            file_size = os.path.getsize(file_path)
+                            modified_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                            created_time = datetime.fromtimestamp(os.path.getctime(file_path))
+                            
+                            # Estensione file
+                            _, file_ext = os.path.splitext(file_name)
+                            
+                            # Tipo di file (basato su MIME type)
+                            mime_type, _ = mimetypes.guess_type(file_path)
+                            file_type = mime_type if mime_type else f"File {file_ext}"
+                            
+                            # Verifica preliminare (senza analizzare il contenuto)
+                            if check_file_match(file_path, file_name, file_size, modified_time):
+                                # Se dobbiamo cercare nel contenuto
+                                content_match = True  # Default a True se non è necessario cercare nel contenuto
+                                
+                                if search_content and not any(term.lower() in file_name.lower() for term in search_terms):
+                                    # Aggiungi il task alla coda
+                                    future = self.search_executor.submit(search_in_file_content, file_path, file_ext)
+                                    futures.append((future, {
+                                        'type': file_type,
+                                        'name': file_name,
+                                        'size': self.format_size(file_size),
+                                        'modified': modified_time.strftime('%d-%m-%Y %H:%M'),
+                                        'created': created_time.strftime('%d-%m-%Y %H:%M'),
+                                        'path': file_path
+                                    }))
+                                    content_match = False  # Da determinare in base al risultato future
+                                
+                                # Se corrisponde al nome o non dobbiamo cercare nel contenuto
+                                if any(term.lower() in file_name.lower() for term in search_terms):
+                                    self.search_results.append({
+                                        'type': file_type,
+                                        'name': file_name,
+                                        'size': self.format_size(file_size),
+                                        'modified': modified_time.strftime('%d-%m-%Y %H:%M'),
+                                        'created': created_time.strftime('%d-%m-%Y %H:%M'),
+                                        'path': file_path
+                                    })
+                                    
+                                    # Verifica limitazione risultati
+                                    if len(self.search_results) >= self.max_results.get():
+                                        self.progress_queue.put(("status", f"Raggiunto limite di {self.max_results.get()} risultati"))
+                                        break
+                        
+                        except Exception as e:
+                            self.log_debug(f"Errore processando {file_path}: {str(e)}")
+                    
+                    # Verifica se è necessario arrestare la ricerca
+                    if len(self.search_results) >= self.max_results.get():
+                        break
             
-            # Completa la ricerca            
-            elapsed_time = time.time() - start_time
-            self.log_debug(f"Ricerca completata in {elapsed_time:.2f} secondi")
-            self.log_debug(f"Elementi processati: {items_processed}, File analizzati: {files_checked}, File filtrati: {files_filtered}")
-            
-            # Chiudi l'executor thread pool
+            # Attendi il completamento delle ricerche nei contenuti
+            completed_futures = 0
+            for future, result_data in futures:
+                try:
+                    if future.done() or future.running():
+                        content_found = future.result(timeout=2)  # Piccolo timeout per evitare blocchi
+                        if content_found:
+                            self.search_results.append(result_data)
+                            # Verifica limitazione risultati
+                            if len(self.search_results) >= self.max_results.get():
+                                break
+                except concurrent.futures.TimeoutError:
+                    pass  # Ignora i task che impiegano troppo tempo
+                except Exception as e:
+                    self.log_debug(f"Errore nel future: {str(e)}")
+                    
+                completed_futures += 1
+                if completed_futures % 10 == 0:
+                    progress = min(95, 90 + int(completed_futures / max(1, len(futures)) * 5))
+                    self.progress_queue.put(("progress", progress))
+                    self.progress_queue.put(("status", f"Completata analisi di {completed_futures}/{len(futures)} contenuti"))
+                    
+                # Verifica interruzioni
+                if self.stop_search:
+                    break
+                    
+            # Chiudi l'executor
             if self.search_executor:
                 self.search_executor.shutdown(wait=False)
+                self.search_executor = None
                 
-            # Segnala completamento
-            self.progress_queue.put(("complete", None))
+            # Segnalazione completamento
+            self.progress_queue.put(("status", f"Ricerca completata! Trovati {len(self.search_results)} risultati"))
+            self.progress_queue.put(("progress", 100))
+            self.progress_queue.put(("complete", True))
             
         except Exception as e:
-            error_message = f"Errore durante la ricerca: {str(e)}"
-            self.log_debug(error_message)
-            traceback.print_exc()
-            self.progress_queue.put(("error", error_message))
-        finally:
-            # Assicurati che l'executor venga chiuso
+            self.log_debug(f"Errore nel thread di ricerca: {traceback.format_exc()}")
+            self.progress_queue.put(("error", f"Errore durante la ricerca: {str(e)}"))
             if self.search_executor:
                 self.search_executor.shutdown(wait=False)
-            
-            if self.stop_search:
-                self.progress_queue.put(("status", "Ricerca interrotta"))
-            elif time_limit and time.time() > time_limit:
-                self.progress_queue.put(("timeout", None))
-            else:
-                self.progress_queue.put(("complete", None))
+                self.search_executor = None
 
     def search_file_content(self, file_path, search_terms):
         """Cerca i termini nel contenuto del file e restituisce il risultato se trovato"""
@@ -1736,35 +1909,141 @@ class FileSearchApp:
             self.log_debug(f"Errore nei filtri avanzati per {os.path.basename(file_path)}: {str(e)}")
             return True  # In caso di errore generale, include il file (più conservativo)
 
+    def format_size(self, size_bytes):
+        """Formatta la dimensione del file in unità leggibili"""
+        if size_bytes == 0 or size_bytes == "-":
+            return "-"
+        
+        size_names = ["B", "KB", "MB", "GB", "TB"]
+        size = float(size_bytes)
+        i = 0
+        while size >= 1024 and i < len(size_names) - 1:
+            size /= 1024
+            i += 1
+        
+        return f"{size:.1f} {size_names[i]}"
+
     def update_results_list(self):
-        """Aggiorna la lista dei risultati"""
-        # Pulisci la lista esistente
+        """Aggiorna la lista dei risultati nella UI rispettando il tema"""
+        # Cancella gli elementi precedenti
         for item in self.results_list.get_children():
             self.results_list.delete(item)
         
-        # Ordina i risultati per tipo e nome
-        self.search_results.sort(key=lambda x: (x['type'], x['author']))
+        # Aggiunge i nuovi risultati
+        if not self.search_results:
+            return
         
-        # Inserisci i nuovi risultati
-        if self.search_results:
-            for result in self.search_results:
-                try:
-                    values = (
-                        result['type'],
-                        result['author'],
-                        result['size'],
-                        result['modified'],
-                        result['created'],
-                        result['path']
-                    )
-                    self.results_list.insert("", "end", values=values)
-                except Exception as e:
-                    self.log_debug(f"Errore nell'inserimento del risultato: {str(e)}")
-                    continue
-            
-            self.status_label["text"] = f"Trovati {len(self.search_results)} elementi"
+        # Ottieni lo stile e il tema corrente
+        style = ttk.Style()
+        
+        # Forza l'applicazione del colore di sfondo della treeview
+        treeview_bg = style.lookup('Treeview', 'background')
+        treeview_fg = style.lookup('Treeview', 'foreground')
+        select_bg = style.lookup('Treeview', 'selectbackground')
+        
+        # Usa colori leggermente diversi per l'alternanza delle righe
+        if self._is_dark_theme():
+            # Per temi scuri
+            odd_color = self._adjust_color(treeview_bg, 15)  # Leggermente più chiaro
+            even_color = treeview_bg  # Colore base
         else:
-            self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
+            # Per temi chiari
+            odd_color = self._adjust_color(treeview_bg, -10)  # Leggermente più scuro
+            even_color = treeview_bg  # Colore base
+        
+        # Configura i tag per i colori alternati
+        self.results_list.tag_configure("odd", background=odd_color)
+        self.results_list.tag_configure("even", background=even_color)
+        
+        # Imposta il colore di sfondo principale della Treeview
+        style.configure("Treeview", background=treeview_bg, foreground=treeview_fg)
+        
+        # Risolve un problema con il colore di sfondo nelle celle
+        style.map('Treeview', 
+                background=[('selected', select_bg)],
+                foreground=[('selected', 'white')])
+        
+        # Aggiungi risultati con i tag appropriati
+        for idx, result in enumerate(self.search_results):
+            # Limita i risultati visualizzati
+            if idx >= self.max_results.get():
+                break
+                
+            # Colore alternato per le righe
+            tags = ("even",) if idx % 2 == 0 else ("odd",)
+            
+            # Aggiunge l'elemento
+            self.results_list.insert("", "end", values=(
+                result['type'],
+                result['name'],
+                result['size'],
+                result['modified'],
+                result['created'],
+                result['path']
+            ), tags=tags)
+
+    def _is_dark_theme(self):
+        """Determina se il tema corrente è scuro"""
+        style = ttk.Style()
+        bg_color = style.lookup('TFrame', 'background')
+        
+        # Se non riesce a ottenere il colore
+        if not bg_color:
+            # Usa una lista di temi noti
+            dark_themes = ["darkly", "solar", "superhero", "cyborg", "vapor", "morph"]
+            return style.theme_use() in dark_themes
+        
+        # Verifica il colore di sfondo (se il formato è #RRGGBB)
+        if bg_color.startswith('#') and len(bg_color) == 7:
+            # Converti in RGB
+            r = int(bg_color[1:3], 16)
+            g = int(bg_color[3:5], 16)
+            b = int(bg_color[5:7], 16)
+            
+            # Calcola la luminosità (formula approssimativa)
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            
+            # Se la luminosità è inferiore a 128, è un tema scuro
+            return brightness < 128
+        
+        # Fallback per i temi conosciuti
+        return style.theme_use() in ["darkly", "solar", "superhero", "cyborg", "vapor", "morph"]
+
+    def _adjust_color(self, hex_color, amount):
+        """Schiarisce o scurisce un colore esadecimale"""
+        # Se il colore non è nel formato esadecimale standard
+        if not hex_color or not hex_color.startswith('#') or len(hex_color) != 7:
+            return hex_color  # Ritorna il colore originale
+        
+        # Converti in RGB
+        r = int(hex_color[1:3], 16)
+        g = int(hex_color[3:5], 16)
+        b = int(hex_color[5:7], 16)
+        
+        # Aggiusta i valori RGB
+        r = max(0, min(255, r + amount))
+        g = max(0, min(255, g + amount))
+        b = max(0, min(255, b + amount))
+        
+        # Ritorna il nuovo colore in formato hex
+        return f'#{r:02x}{g:02x}{b:02x}'
+
+    def update_theme_colors(self):
+        """Aggiorna i colori dell'interfaccia quando viene cambiato il tema"""
+        style = ttk.Style()
+        current_theme = style.theme_use()
+        
+        # Imposta i colori alternati in base al tema
+        if current_theme in ["darkly", "solar", "superhero", "cyborg", "vapor", "morph"]:
+            odd_color = "#2a2a2a"
+            even_color = "#363636"
+        else:
+            odd_color = "#f0f0f0"
+            even_color = "#ffffff"
+        
+        # Aggiorna i tag
+        self.results_list.tag_configure("odd", background=odd_color)
+        self.results_list.tag_configure("even", background=even_color)
 
 def main():
     root = ttk.Window(themename="darkly")
