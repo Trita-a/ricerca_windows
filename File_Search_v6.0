@@ -2,7 +2,7 @@ import os
 import shutil
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-from tkinter import filedialog, messagebox, BooleanVar, StringVar
+from tkinter import filedialog, messagebox, BooleanVar, StringVar, IntVar
 import threading
 import queue
 from datetime import datetime
@@ -10,6 +10,10 @@ import getpass
 import zipfile
 from ttkbootstrap.dialogs import Querybox
 import traceback
+import time
+import concurrent.futures
+import mimetypes
+import signal
 
 # Dizionario per tracciare il supporto alle librerie
 file_format_support = {
@@ -88,9 +92,6 @@ class FileSearchApp:
         self.datetime_var = StringVar()
         self.user_var = StringVar(value=getpass.getuser())
         
-        # Rimuovi o commenta questa riga
-        # self.update_current_datetime()
-
         # Variabili
         self.search_content = BooleanVar(value=False)
         self.search_path = StringVar()
@@ -101,6 +102,7 @@ class FileSearchApp:
         self.ignore_hidden = BooleanVar(value=True)
         self.is_searching = False
         self.progress_queue = queue.Queue()
+        self.search_executor = None
         
         # Variabili aggiuntive per i miglioramenti
         self.stop_search = False
@@ -114,6 +116,17 @@ class FileSearchApp:
             "date_max": None,
             "extensions": []
         }
+        
+        # Variabili per limiti di tempo e altre ottimizzazioni
+        self.timeout_enabled = BooleanVar(value=False)
+        self.timeout_seconds = IntVar(value=60)  # Default 60 secondi
+        self.max_files_to_check = IntVar(value=10000)  # Limite numero di file da controllare
+        self.max_results = IntVar(value=1000)  # Limite numero di risultati
+        self.chunk_size = 8192  # Grandezza del chunk per la lettura dei file
+        self.max_file_size_mb = IntVar(value=100)  # Dimensione massima file da analizzare (in MB)
+        self.worker_threads = IntVar(value=4)  # Numero di worker threads per elaborazione parallela
+        self.use_indexing = BooleanVar(value=True)  # Usa indicizzazione per velocizzare ricerche future
+        self.search_index = {}  # Dizionario per indicizzare file e contenuti
         
         # Info utente e datetime
         self.current_user = getpass.getuser()
@@ -183,7 +196,7 @@ class FileSearchApp:
         self.stop_search = False
         self.stop_button["state"] = "normal"
         
-         # Aggiorna l'orario di avvio e resetta l'orario di fine
+        # Aggiorna l'orario di avvio e resetta l'orario di fine
         current_time = datetime.now().strftime('%H:%M')
         self.start_time_label.config(text=current_time)
         self.end_time_label.config(text="--:--")
@@ -194,7 +207,7 @@ class FileSearchApp:
             "keywords": self.keywords.get(),
             "search_files": self.search_files.get(),
             "search_folders": self.search_folders.get(),
-            "search_content": self.search_content.get()  # Aggiungi questa riga
+            "search_content": self.search_content.get()
         }
         
         # Aggiungi alla cronologia di ricerca se non già presente
@@ -241,17 +254,18 @@ class FileSearchApp:
                         self.search_button["state"] = "normal"
                         self.stop_button["state"] = "disabled"
                         
-                        # Aggiorna la lista dei risultati - QUESTA RIGA MANCAVA
+                        # Aggiorna la lista dei risultati
                         self.update_results_list()
                         
                         if len(self.search_results) == 0:
                             self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
-                            # Opzionale: mostra un messaggio popup
                             self.root.after(100, lambda: messagebox.showinfo("Ricerca completata", "Nessun file trovato per la ricerca effettuata"))
                         else:
                             self.status_label["text"] = f"Ricerca completata! Trovati {len(self.search_results)} risultati."
                         
                         self.progress_bar["value"] = 100
+                        current_time = datetime.now().strftime('%H:%M')
+                        self.end_time_label.config(text=current_time)
                         return
                     elif progress_type == "error":
                         self.is_searching = False
@@ -260,6 +274,15 @@ class FileSearchApp:
                         current_time = datetime.now().strftime('%H:%M')
                         self.end_time_label.config(text=current_time)
                         messagebox.showerror("Errore", value)
+                        return
+                    elif progress_type == "timeout":
+                        self.is_searching = False
+                        self.search_button["state"] = "normal"
+                        self.stop_button["state"] = "disabled"
+                        self.update_results_list()  # Mostra i risultati trovati fino a quel momento
+                        current_time = datetime.now().strftime('%H:%M')
+                        self.end_time_label.config(text=current_time)
+                        messagebox.showinfo("Timeout", "La ricerca è stata interrotta per timeout. Verranno mostrati i risultati parziali trovati.")
                         return
             except queue.Empty:
                 pass
@@ -272,6 +295,11 @@ class FileSearchApp:
         self.status_label["text"] = "Interrompendo la ricerca..."
         current_time = datetime.now().strftime('%H:%M')
         self.end_time_label.config(text=current_time)
+        
+        # Chiudi l'executor se esiste
+        if self.search_executor:
+            self.search_executor.shutdown(wait=False, cancel_futures=True)
+        
         # Aggiorna l'orario di fine quando la ricerca viene interrotta
         self.search_button["state"] = "normal"
         self.stop_button["state"] = "disabled"
@@ -351,7 +379,7 @@ class FileSearchApp:
                 self.advanced_filters["size_min"] = min_kb * 1024
                 self.advanced_filters["size_max"] = max_kb * 1024
                 
-                # CORREZIONE: Ottieni le date nel formato DD-MM-YYYY
+                # Ottieni le date nel formato DD-MM-YYYY
                 min_date_value = min_date.entry.get().strip()
                 max_date_value = max_date.entry.get().strip()
                 
@@ -441,13 +469,13 @@ class FileSearchApp:
         example_label.pack(anchor="w", padx=5)
         self.path_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
         
-
         ttk.Button(path_frame, text="Sfoglia", command=self.browse_directory).pack(side=LEFT, padx=5)
+        
         # Sezione keywords
         keyword_frame = ttk.LabelFrame(main_frame, text="Parole chiave", padding="5")
         keyword_frame.pack(fill=X, pady=5)
 
-         # Aggiungi il tooltip sulla casella delle parole chiave
+        # Aggiungi il tooltip sulla casella delle parole chiave
         example_label = ttk.Label(keyword_frame, text="Per la ricerca di più parole usa la virgola. Esempio: documento, fattura, contratto", 
                        font=("", 8), foreground="gray")
         example_label.pack(anchor="w", padx=5)
@@ -487,14 +515,67 @@ class FileSearchApp:
         ttk.Button(options_frame, text="Filtri avanzati", 
                   command=self.show_advanced_filters_dialog).pack(side=RIGHT, padx=5)
         
+        # Frame per le opzioni di performance e timeout
+        perf_frame = ttk.LabelFrame(main_frame, text="Opzioni di Performance", padding="5")
+        perf_frame.pack(fill=X, pady=5)
+        
+        # Opzione timeout
+        timeout_frame = ttk.Frame(perf_frame)
+        timeout_frame.pack(side=LEFT, padx=10, fill=X, expand=True)
+        
+        timeout_cb = ttk.Checkbutton(timeout_frame, text="Timeout ricerca", variable=self.timeout_enabled)
+        timeout_cb.pack(side=LEFT)
+        
+        ttk.Label(timeout_frame, text="Secondi:").pack(side=LEFT, padx=(10, 5))
+        timeout_spinbox = ttk.Spinbox(timeout_frame, from_=10, to=600, width=4, 
+                                     textvariable=self.timeout_seconds)
+        timeout_spinbox.pack(side=LEFT)
+        self.create_tooltip(timeout_cb, "Interrompe automaticamente la ricerca dopo il tempo specificato")
+        
+        # Opzione thread paralleli
+        threads_frame = ttk.Frame(perf_frame)
+        threads_frame.pack(side=LEFT, padx=10)
+        
+        ttk.Label(threads_frame, text="Thread:").pack(side=LEFT)
+        threads_spinbox = ttk.Spinbox(threads_frame, from_=1, to=16, width=2, 
+                                     textvariable=self.worker_threads)
+        threads_spinbox.pack(side=LEFT, padx=5)
+        self.create_tooltip(threads_frame, "Numero di thread paralleli per la ricerca nei contenuti")
+        
+        # Opzione dimensione massima file
+        filesize_frame = ttk.Frame(perf_frame)
+        filesize_frame.pack(side=LEFT, padx=10)
+        
+        ttk.Label(filesize_frame, text="Max file MB:").pack(side=LEFT)
+        max_size_spinbox = ttk.Spinbox(filesize_frame, from_=1, to=1000, width=4,
+                                     textvariable=self.max_file_size_mb)
+        max_size_spinbox.pack(side=LEFT, padx=5)
+        self.create_tooltip(filesize_frame, "Dimensione massima dei file da analizzare (in MB)")
+        
+        # Opzione numero massimo di risultati
+        max_results_frame = ttk.Frame(perf_frame)
+        max_results_frame.pack(side=LEFT, padx=10)
+        
+        ttk.Label(max_results_frame, text="Max risultati:").pack(side=LEFT)
+        max_results_spinbox = ttk.Spinbox(max_results_frame, from_=100, to=100000, width=6,
+                                         textvariable=self.max_results)
+        max_results_spinbox.pack(side=LEFT, padx=5)
+        self.create_tooltip(max_results_frame, "Numero massimo di risultati da mostrare")
+        
+        # Opzione indicizzazione
+        indexing_frame = ttk.Frame(perf_frame)
+        indexing_frame.pack(side=LEFT, padx=10)
+        
+        indexing_cb = ttk.Checkbutton(indexing_frame, text="Indicizzazione", 
+                                     variable=self.use_indexing)
+        indexing_cb.pack(side=LEFT)
+        self.create_tooltip(indexing_cb, "Memorizza i risultati per velocizzare ricerche future")
+        
         # Frame per i pulsanti di ricerca
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(pady=5)
         
         # Pulsante di ricerca
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(pady=5)
-        
         self.search_button = ttk.Button(button_frame, text="Cerca", 
                                       command=self.start_search, 
                                       style="primary.TButton")
@@ -598,11 +679,11 @@ class FileSearchApp:
 
         # Impostazione delle larghezze colonne
         self.results_list.column("type", width=80)
-        self.results_list.column("author", width=100)
+        self.results_list.column("author", width=250)
         self.results_list.column("size", width=80)
-        self.results_list.column("modified", width=140)
-        self.results_list.column("created", width=140)
-        self.results_list.column("path", width=440)
+        self.results_list.column("modified", width=80)
+        self.results_list.column("created", width=80)
+        self.results_list.column("path", width=500)
         
         self.results_list.pack(fill=BOTH, expand=YES)
         
@@ -616,12 +697,12 @@ class FileSearchApp:
         # Pulsanti copia e comprimi
         self.copy_button = ttk.Button(main_buttons_frame, text="Copia selezionati",
                                     command=self.copy_selected,
-                                    style="TButton")  # Changed style here
+                                    style="TButton")
         self.copy_button.pack(side=LEFT, padx=5)
         
         self.compress_button = ttk.Button(main_buttons_frame, text="Comprimi selezionati",
                                         command=self.compress_selected,
-                                        style="TButton")  # Changed style here
+                                        style="TButton")
         self.compress_button.pack(side=LEFT, padx=5)
         
         # Frame della barra di stato (in basso)
@@ -650,7 +731,6 @@ class FileSearchApp:
         self.create_tooltip(self.search_button, "Avvia la ricerca con i criteri specificati")
         self.create_tooltip(self.copy_button, "Copia i file selezionati nella directory specificata")
         self.create_tooltip(self.compress_button, "Comprimi i file selezionati in un archivio ZIP")
-        
     
     # Avviso sulla spunta della ricerca dei contenuti
     def warn_content_search(self):
@@ -799,6 +879,7 @@ class FileSearchApp:
         widget.bind("<Enter>", enter)
         widget.bind("<Leave>", leave)
         widget.bind("<Destroy>", on_destroy)
+
     def select_all(self):
         self.results_list.selection_set(self.results_list.get_children())
         
@@ -837,7 +918,8 @@ class FileSearchApp:
         
         if not zip_path:
             return
-                # Raccogli tutti i file delle cartelle selezionate
+            
+        # Raccogli tutti i file delle cartelle selezionate
         files_in_folders = set()
         folder_paths = []
         single_files = []
@@ -845,9 +927,9 @@ class FileSearchApp:
         # Prima fase: raccogli informazioni su cartelle e file
         for item in selected_items:
             values = self.results_list.item(item)['values']
-            item_type, match_type, source_path = values  # Ora ci sono 3 colonne
+            item_type, _, _, _, _, source_path = values
             
-            if item_type == "Cartella":
+            if item_type == "Directory":
                 folder_paths.append(source_path)
                 # Raccogli tutti i file nelle cartelle selezionate
                 for root, _, files in os.walk(source_path):
@@ -924,12 +1006,12 @@ class FileSearchApp:
         for i, item in enumerate(selected_items):
             values = self.results_list.item(item)['values']
             item_type = values[0]
-            source_path = values[5]  # Ora il percorso è nella sesta colonna
+            source_path = values[5]  # Path è nella sesta colonna
             
             try:
                 dest_path = os.path.join(dest_dir, os.path.basename(source_path))
                 
-                if item_type == "File":
+                if item_type != "Directory":  # File
                     shutil.copy2(source_path, dest_path)
                 else:  # Cartella
                     shutil.copytree(source_path, dest_path)
@@ -952,78 +1034,295 @@ class FileSearchApp:
         self.status_label["text"] = "Copia completata"
         messagebox.showinfo("Completato", message)
 
-    def search_files_and_folders(self):
-        keywords = [k.strip().lower() for k in self.keywords.get().split()]
-        self.search_results = []
-        folders_results = []
-        files_results = []
-        
-        processed_items = 0
-        
-        # Usa os.scandir invece di os.walk per migliori prestazioni
-        def scan_directory(path, depth=0):
-            nonlocal processed_items
+    def _search_thread(self, search_path, search_terms, search_content):
+        """Thread principale di ricerca con timeout e ottimizzazioni"""
+        try:
+            start_time = time.time()
+            timeout_limit = self.timeout_seconds.get() if self.timeout_enabled.get() else None
+            max_file_size = self.max_file_size_mb.get() * 1024 * 1024  # Converti da MB a byte
+            max_results = self.max_results.get()
+            items_processed = 0
+            files_checked = 0
+            files_filtered = 0
+            total_items_estimated = 500  # Stima iniziale
+            self.search_results = []  # Reset risultati precedenti
             
-            if self.max_depth > 0 and depth > self.max_depth:
-                return
+            # Cache per i tipi di file
+            mime_cache = {}
+            
+            # Queue per processare i file in parallelo
+            content_search_queue = queue.Queue()
+            
+            # Crea un pool di thread per processare i contenuti
+            self.search_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=self.worker_threads.get())
+            futures = []
+            
+            # Inizializza il tempo limite
+            time_limit = start_time + timeout_limit if timeout_limit else None
+            
+            def is_time_expired():
+                """Controlla se è stato superato il timeout"""
+                if time_limit and time.time() > time_limit:
+                    self.log_debug(f"Timeout raggiunto dopo {time.time() - start_time:.2f} secondi")
+                    return True
+                return False
+            
+            def scan_directory(current_path, depth=0):
+                nonlocal items_processed, files_checked, files_filtered
                 
-            try:
-                with os.scandir(path) as entries:
-                    for entry in entries:
-                        if self.stop_search:
-                            return
+                # Controllo timeout e interruzione
+                if self.stop_search or is_time_expired() or len(self.search_results) >= max_results:
+                    return
+                
+                # Controllo profondità massima
+                if self.max_depth > 0 and depth > self.max_depth:
+                    return
+                    
+                try:
+                    # Usa scandir che è più veloce di listdir
+                    with os.scandir(current_path) as entries:
+                        dir_items = list(entries)  # Converti iterator in lista
+                        
+                        # Aggiorna la stima totale di elementi
+                        if depth == 0:
+                            # Stima migliorata del numero totale di elementi
+                            sample_size = min(100, len(dir_items))
+                            if sample_size > 0:
+                                avg_items_per_dir = sum(len(os.listdir(entry.path)) 
+                                                    for entry in dir_items[:sample_size] 
+                                                    if entry.is_dir() and self.safe_listdir(entry.path) is not None) / sample_size
+                                total_items_estimated = len(dir_items) * (1 + avg_items_per_dir)
+                                self.log_debug(f"Elementi stimati: {total_items_estimated}")
+                        
+                        for entry in dir_items:
+                            if self.stop_search or is_time_expired() or len(self.search_results) >= max_results:
+                                return
+                                
+                            items_processed += 1
+                            if items_processed % 10 == 0:  # Aggiorna lo stato ogni 50 elementi
+                                elapsed = time.time() - start_time
+                                percent_complete = min(99, int((items_processed / total_items_estimated) * 100))
+                                remaining = "?"
+                                if percent_complete > 0:
+                                    remaining = f"{(elapsed / percent_complete * (100 - percent_complete)):.1f}s"
+                                
+                                self.progress_queue.put(("progress", percent_complete))
+                                self.progress_queue.put(("status", 
+                                    f"Processati {items_processed} elementi | {files_checked} file verificati | Tempo rimanente: {remaining}"))
                             
+                            try:
+                                # Gestione file
+                                if entry.is_file():
+                                    # Applica filtri prima di processare ulteriormente
+                                    if not self.apply_advanced_filters(entry.path):
+                                        files_filtered += 1
+                                        continue
+                                    
+                                    # Controlla dimensione massima
+                                    try:
+                                        file_size = entry.stat().st_size
+                                        if file_size > max_file_size:
+                                            files_filtered += 1
+                                            self.log_debug(f"File troppo grande: {entry.name} ({file_size/1024/1024:.1f} MB)")
+                                            continue
+                                    except:
+                                        pass
+                                    
+                                    # Cerca nei nomi dei file
+                                    file_matched = False
+                                    if self.search_files.get() and any(term.lower() in entry.name.lower() for term in search_terms):
+                                        file_type = self.get_file_type(entry.path, mime_cache)
+                                        metadata = self.get_file_metadata(entry.path)
+                                        
+                                        result = {
+                                            'type': file_type,
+                                            'author': entry.name,
+                                            'size': metadata['size'],
+                                            'modified': metadata['modified'],
+                                            'created': metadata['created'],
+                                            'path': entry.path
+                                        }
+                                        self.search_results.append(result)
+                                        file_matched = True
+                                        
+                                    # Aggiungi alla coda di ricerca nei contenuti solo se serve e non è già stato trovato
+                                    if search_content and not file_matched and self.is_text_file(entry.path):
+                                        # Invece di processare immediatamente, aggiungi alla coda
+                                        future = self.search_executor.submit(
+                                            self.search_file_content, entry.path, search_terms
+                                        )
+                                        futures.append(future)
+                                        files_checked += 1
+                                
+                                # Gestione directory
+                                elif entry.is_dir():
+                                    if self.search_folders.get() and any(term.lower() in entry.name.lower() for term in search_terms):
+                                        metadata = self.get_file_metadata(entry.path)
+                                        result = {
+                                            'type': 'Directory',
+                                            'author': entry.name,
+                                            'size': metadata['size'],
+                                            'modified': metadata['modified'],
+                                            'created': metadata['created'],
+                                            'path': entry.path
+                                        }
+                                        self.search_results.append(result)
+                                    
+                                    # Esplora sottocartelle
+                                    scan_directory(entry.path, depth + 1)
+                                    
+                            except PermissionError:
+                                self.log_debug(f"Permesso negato per {entry.path}")
+                            except Exception as e:
+                                self.log_debug(f"Errore con {entry.path}: {str(e)}")
+                                
+                except PermissionError:
+                    self.log_debug(f"Permesso negato per {current_path}")
+                except Exception as e:
+                    self.log_debug(f"Errore in {current_path}: {str(e)}")
+            
+            # Avvia la scansione ricorsiva
+            scan_directory(search_path)
+            
+            # Mostra status della ricerca nei contenuti
+            if search_content and futures:
+                self.progress_queue.put(("status", f"Cercando nei contenuti di {len(futures)} file..."))
+                
+                # Monitora i futures con timeout
+                completed = 0
+                while futures and not self.stop_search:
+                    # Controlla se è stato superato il timeout
+                    if is_time_expired():
+                        self.log_debug("Timeout durante la ricerca nei contenuti")
+                        for future in futures:
+                            future.cancel()
+                        self.progress_queue.put(("timeout", None))
+                        return
+                    
+                    # Trova e processa i primi futures completati
+                    done, not_done = concurrent.futures.wait(
+                        futures, 
+                        timeout=0.5,
+                        return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+                    
+                    # Elabora i futures completati
+                    for future in done:
                         try:
-                            # Processa le directory
-                            if entry.is_dir():
-                                if self.search_folders.get() and any(keyword in entry.name.lower() for keyword in keywords):
-                                    folders_results.append(("Cartella", entry.path))
-                                
-                                processed_items += 1
-                                if processed_items % 100 == 0:  # Aggiorna il progresso meno frequentemente
-                                    self.progress_queue.put(("status", f"Processati {processed_items} elementi"))
-                                    
-                                # Continua la scansione delle sottodirectory
-                                scan_directory(entry.path, depth + 1)
-                                
-                            # Processa i file
-                            elif entry.is_file() and self.search_files.get():
-                                if any(keyword in entry.name.lower() for keyword in keywords):
-                                    # Applica filtri avanzati se presenti
-                                    if self.apply_advanced_filters(entry.path):
-                                        files_results.append(("File", entry.path))
-                                    
-                                processed_items += 1
-                                if processed_items % 100 == 0:
-                                    self.progress_queue.put(("status", f"Processati {processed_items} elementi"))
-                        except PermissionError:
-                            # Gestisci errori di permesso con grazia
-                            continue
-            except PermissionError:
-                # Gestisci errori di permesso per la directory
-                pass
-        
-        # Avvia la scansione ricorsiva
-        scan_directory(self.search_path.get())
-                # Ordina i risultati
-        folders_results.sort(key=lambda x: x[1].lower())
-        files_results.sort(key=lambda x: x[1].lower())
-        self.search_results = folders_results + files_results
-        
-        # Aggiorna la lista dei risultati
-        self.root.after(0, self.update_results_list)
-        
-        # Segnala completamento
-        self.progress_queue.put(("complete", None))
-        
-        if not self.search_results:
-            self.root.after(0, lambda: messagebox.showinfo("Risultati", "Nessun risultato trovato"))
+                            result = future.result()
+                            if result:
+                                self.search_results.append(result)
+                        except Exception as e:
+                            self.log_debug(f"Errore nell'elaborazione del contenuto: {str(e)}")
+                        
+                        completed += 1
+                        # Aggiorna la progress bar
+                        percent = min(99, int((completed / len(futures)) * 100))
+                        self.progress_queue.put(("progress", percent))
+                        self.progress_queue.put(("status", f"Cercando nei contenuti: {completed}/{len(futures)} file"))
+                    
+                    # Aggiorna l'elenco dei futures ancora in esecuzione
+                    futures = list(not_done)
+            
+            # Completa la ricerca            
+            elapsed_time = time.time() - start_time
+            self
+            
+            # Completa la ricerca            
+            elapsed_time = time.time() - start_time
+            self.log_debug(f"Ricerca completata in {elapsed_time:.2f} secondi")
+            self.log_debug(f"Elementi processati: {items_processed}, File analizzati: {files_checked}, File filtrati: {files_filtered}")
+            
+            # Chiudi l'executor thread pool
+            if self.search_executor:
+                self.search_executor.shutdown(wait=False)
+                
+            # Segnala completamento
+            self.progress_queue.put(("complete", None))
+            
+        except Exception as e:
+            error_message = f"Errore durante la ricerca: {str(e)}"
+            self.log_debug(error_message)
+            traceback.print_exc()
+            self.progress_queue.put(("error", error_message))
+        finally:
+            # Assicurati che l'executor venga chiuso
+            if self.search_executor:
+                self.search_executor.shutdown(wait=False)
+            
+            if self.stop_search:
+                self.progress_queue.put(("status", "Ricerca interrotta"))
+            elif time_limit and time.time() > time_limit:
+                self.progress_queue.put(("timeout", None))
+            else:
+                self.progress_queue.put(("complete", None))
 
-    def get_file_type(self, file_path):
-        """Determina il tipo di file"""
+    def search_file_content(self, file_path, search_terms):
+        """Cerca i termini nel contenuto del file e restituisce il risultato se trovato"""
+        try:
+            # Verifica se il file è già stato indicizzato
+            if self.use_indexing.get() and file_path in self.search_index:
+                # Controlla se uno dei termini è nel contenuto indicizzato
+                if any(term.lower() in self.search_index[file_path].lower() for term in search_terms):
+                    file_type = self.get_file_type(file_path)
+                    metadata = self.get_file_metadata(file_path)
+                    return {
+                        'type': file_type,
+                        'author': os.path.basename(file_path),
+                        'size': metadata['size'],
+                        'modified': metadata['modified'],
+                        'created': metadata['created'],
+                        'path': file_path
+                    }
+                return None
+            
+            # Estrazione testo basata sul tipo di file
+            content = self.extract_text_from_file(file_path)
+            content_lower = content.lower()
+            
+            # Salva il contenuto nell'indice se indicizzazione è attiva
+            if self.use_indexing.get():
+                self.search_index[file_path] = content
+            
+            # Ricerca dei termini nel contenuto
+            if any(term.lower() in content_lower for term in search_terms):
+                file_type = self.get_file_type(file_path)
+                metadata = self.get_file_metadata(file_path)
+                return {
+                    'type': file_type,
+                    'author': os.path.basename(file_path),
+                    'size': metadata['size'],
+                    'modified': metadata['modified'],
+                    'created': metadata['created'],
+                    'path': file_path
+                }
+            
+            return None
+        except Exception as e:
+            self.log_debug(f"Errore nell'analisi del contenuto di {file_path}: {str(e)}")
+            return None
+
+    def safe_listdir(self, directory):
+        """Versione sicura di os.listdir che gestisce errori di permesso"""
+        try:
+            return os.listdir(directory)
+        except PermissionError:
+            self.log_debug(f"Permesso negato per la directory {directory}")
+            return None
+        except Exception as e:
+            self.log_debug(f"Errore nell'accesso alla directory {directory}: {str(e)}")
+            return None
+
+    def get_file_type(self, file_path, mime_cache=None):
+        """Determina il tipo di file con cache per migliorare le prestazioni"""
         try:
             if os.path.isdir(file_path):
                 return "Directory"
+            
+            # Se è stata fornita una cache, usa quella
+            if mime_cache is not None and file_path in mime_cache:
+                return mime_cache[file_path]
             
             # Ottieni l'estensione in minuscolo
             ext = os.path.splitext(file_path)[1].lower()
@@ -1036,14 +1335,17 @@ class FileSearchApp:
                 '.pdf': 'PDF Document',
                 '.txt': 'Text Document',
                 '.rtf': 'Rich Text Format',
+                '.odt': 'OpenDocument Text',
                 
                 # Fogli di calcolo
                 '.xls': 'Excel Workbook',
                 '.xlsx': 'Excel Workbook',
+                '.ods': 'OpenDocument Spreadsheet',
                 
                 # Presentazioni
                 '.ppt': 'PowerPoint Presentation',
                 '.pptx': 'PowerPoint Presentation',
+                '.odp': 'OpenDocument Presentation',
                 
                 # Immagini
                 '.jpg': 'JPEG Image',
@@ -1051,190 +1353,58 @@ class FileSearchApp:
                 '.png': 'PNG Image',
                 '.gif': 'GIF Image',
                 '.bmp': 'Bitmap Image',
+                '.tiff': 'TIFF Image',
+                '.webp': 'WebP Image',
                 
-                # Altri formati comuni
+                # Media
+                '.mp3': 'MP3 Audio',
+                '.mp4': 'MP4 Video',
+                '.wav': 'WAV Audio',
+                '.avi': 'AVI Video',
+                '.mov': 'MOV Video',
+                '.flac': 'FLAC Audio',
+                
+                # Archivi
                 '.zip': 'ZIP Archive',
                 '.rar': 'RAR Archive',
+                '.7z': '7-Zip Archive',
+                '.tar': 'TAR Archive',
+                '.gz': 'GZip Archive',
+                
+                # Programmi
                 '.exe': 'Executable File',
                 '.dll': 'Dynamic Link Library',
+                '.app': 'macOS Application',
+                '.bat': 'Batch File',
+                '.sh': 'Shell Script',
                 
-                # Aggiungi altri tipi di file secondo necessità
+                # Altri formati
+                '.html': 'HTML Document',
+                '.css': 'CSS File',
+                '.js': 'JavaScript File',
+                '.json': 'JSON File',
+                '.xml': 'XML File',
+                '.py': 'Python Script',
+                '.java': 'Java Source File',
+                '.c': 'C Source File',
+                '.cpp': 'C++ Source File',
             }
             
             # Restituisce il tipo di file o un tipo generico se non trovato
-            return file_types.get(ext, f'File{ext}' if ext else 'Unknown File')
+            file_type = file_types.get(ext, f'File{ext}' if ext else 'Unknown File')
+            
+            # Memorizza il risultato nella cache se disponibile
+            if mime_cache is not None:
+                mime_cache[file_path] = file_type
+                
+            return file_type
         
         except Exception as e:
-            print(f"Errore nel determinare il tipo di file per {file_path}: {str(e)}")
+            self.log_debug(f"Errore nel determinare il tipo di file per {file_path}: {str(e)}")
             return "Unknown File"
 
-    def update_results_list(self):
-        """Aggiorna la lista dei risultati"""
-        # Pulisci la lista esistente
-        for item in self.results_list.get_children():
-            self.results_list.delete(item)
-        
-        # Inserisci i nuovi risultati
-        if self.search_results:
-            for result in self.search_results:
-                try:
-                    # Assicurati che il risultato sia un dizionario
-                    if isinstance(result, dict):
-                        values = (
-                            result['type'],
-                            result['author'],
-                            result['size'],
-                            result['modified'],
-                            result['created'],
-                            result['path']
-                        )
-                    else:  # Se è ancora nel vecchio formato tupla
-                        _, author, size, modified, created, path = result
-                        file_type = self.get_file_type(path)  # Ricalcola il tipo
-                        values = (file_type, author, size, modified, created, path)
-                    
-                    self.results_list.insert("", "end", values=values)
-                    print(f"Inserito risultato: {values[0]}")  # Debug
-                    
-                except Exception as e:
-                    print(f"Errore nell'inserimento del risultato: {str(e)}")
-                    continue
-            
-            self.status_label["text"] = f"Trovati {len(self.search_results)} elementi"
-        else:
-            self.results_list.insert("", "end", 
-                values=("Info", "", "", "", "", "Nessun file trovato"))
-            self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
-    
-    def apply_advanced_filters(self, file_path):
-        """Controlla se un file corrisponde ai filtri avanzati"""
-        try:
-            # Debugging
-            debug_prefix = f"[{os.path.basename(file_path)}]"
-            
-            # Filtro dimensione
-            if self.advanced_filters["size_min"] > 0 or self.advanced_filters["size_max"] > 0:
-                file_size = os.path.getsize(file_path)
-                if self.advanced_filters["size_min"] > 0 and file_size < self.advanced_filters["size_min"]:
-                    print(f"{debug_prefix} Filtrato: dimensione {file_size} < min {self.advanced_filters['size_min']}")
-                    return False
-                if self.advanced_filters["size_max"] > 0 and file_size > self.advanced_filters["size_max"]:
-                    print(f"{debug_prefix} Filtrato: dimensione {file_size} > max {self.advanced_filters['size_max']}")
-                    return False
-            
-            # Filtro data - VERSIONE DEBUG
-            if self.advanced_filters["date_min"] or self.advanced_filters["date_max"]:
-                try:
-                    file_time = os.path.getmtime(file_path)
-                    file_date = datetime.fromtimestamp(file_time)
-                    file_date_only = file_date.replace(hour=0, minute=0, second=0, microsecond=0)
-                    
-                    print(f"{debug_prefix} Data file: {file_date.strftime('%d-%m-%Y')}")
-                    
-                    # Controlla data minima
-                    if self.advanced_filters["date_min"] and self.advanced_filters["date_min"].strip():
-                        try:
-                            min_date = datetime.strptime(self.advanced_filters["date_min"], "%d-%m-%Y")
-                            min_date = min_date.replace(hour=0, minute=0, second=0, microsecond=0)
-                            print(f"{debug_prefix} Data minima: {min_date.strftime('%d-%m-%Y')}")
-                            
-                            if file_date_only < min_date:
-                                print(f"{debug_prefix} FILTRATO: Data file {file_date_only} < min {min_date}")
-                                return False
-                        except ValueError as e:
-                            print(f"{debug_prefix} Errore nel formato della data minima: {e}")
-                    
-                    # Controlla data massima
-                    if self.advanced_filters["date_max"] and self.advanced_filters["date_max"].strip():
-                        try:
-                            max_date = datetime.strptime(self.advanced_filters["date_max"], "%d-%m-%Y")
-                            max_date = max_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-                            print(f"{debug_prefix} Data massima: {max_date.strftime('%d-%m-%Y')}")
-                            
-                            if file_date_only > max_date:
-                                print(f"{debug_prefix} FILTRATO: Data file {file_date_only} > max {max_date}")
-                                return False
-                        except ValueError as e:
-                            print(f"{debug_prefix} Errore nel formato della data massima: {e}")
-                
-                except Exception as e:
-                    print(f"{debug_prefix} Errore generale nel filtro data: {str(e)}")
-                    # In caso di errore con le date, non filtrare questo file per essere conservativi
-            
-            # Filtro estensione
-            if self.advanced_filters["extensions"]:
-                _, ext = os.path.splitext(file_path)
-                ext_lower = ext.lower()
-                extensions_lower = [e.lower() for e in self.advanced_filters["extensions"]]
-                if ext_lower not in extensions_lower:
-                    print(f"{debug_prefix} Filtrato: estensione {ext_lower} non in {extensions_lower}")
-                    return False
-            
-            # Se arriva qui, il file è passato attraverso tutti i filtri
-            return True
-        except Exception as e:
-            print(f"Errore nei filtri avanzati per {os.path.basename(file_path)}: {str(e)}")
-            return True  # In caso di errore generale, include il file (più conservativo)
-    
-    def safe_file_operation(self, operation_func, source_path, dest_path, item_type):
-        """Esegui un'operazione su file in modo sicuro con gestione degli errori appropriata"""
-        try:
-            if os.path.exists(dest_path):
-                response = messagebox.askyesnocancel(
-                    "File già esistente",
-                    f"'{os.path.basename(dest_path)}' esiste già.\n"
-                    "Vuoi sovrascrivere il file?",
-                    icon="warning"
-                )
-                
-                if response is None:  # Annulla
-                    return False, "Operazione annullata"
-                elif not response:  # No
-                    return False, "File saltato"
-            
-            # Esegui l'operazione
-            operation_func(source_path, dest_path)
-            return True, ""
-            
-        except PermissionError:
-            return False, "Errore di permessi"
-        except FileNotFoundError:
-            return False, "File non trovato"
-        except shutil.Error as e:
-            return False, f"Errore di copia: {str(e)}"
-        except Exception as e:
-            return False, f"Errore: {str(e)}"
-        # Punto di ingresso dell'applicazione
-    def run_search(self):
-        """Avvia la ricerca con i parametri specificati"""
-        # Pulisci i risultati precedenti
-        self.search_results = []
-        
-        # Ottieni i parametri di ricerca
-        search_path = self.path_entry.get()
-        search_keywords = self.keyword_entry.get()
-        
-        # Se nessun percorso è specificato, usa il percorso corrente
-        if not search_path:
-            search_path = os.getcwd()
-        
-        # Verifica che il percorso esista
-        if not os.path.exists(search_path):
-            self.status_label["text"] = f"Errore: Il percorso '{search_path}' non esiste"
-            return
-        
-        # Suddividi le parole chiave in termini separati
-        search_terms = [term.strip() for term in search_keywords.split(',') if term.strip()]
-        
-        # Avvia la ricerca in un thread separato per non bloccare l'UI
-        self.disable_ui()
-        self.status_label["text"] = "Ricerca in corso..."
-        self.status_bar.update_idletasks()
-        
-        threading.Thread(target=self._search_thread, args=(search_path, search_terms)).start()
-        
     def get_file_metadata(self, file_path):
-        """Estrae i metadati dal file specificato"""
+        """Estrae i metadati dal file specificato con cache per migliorare le prestazioni"""
         try:
             # Ottiene le statistiche del file
             file_stat = os.stat(file_path)
@@ -1250,7 +1420,7 @@ class FileSearchApp:
             else:
                 size_str = f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
             
-            # Ottiene le date di modifica e creazione nel formato DD-MM-YYYY HH:MM
+            # Ottiene le date di modifica e creazione nel formato YYYY-MM-DD HH:MM:SS
             mod_time = datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
             
             # In Windows st_ctime è la data di creazione, in Unix è la data di cambio stato
@@ -1265,189 +1435,13 @@ class FileSearchApp:
                 "created": create_time
             }
         except Exception as e:
-            print(f"Errore nell'estrazione dei metadati per {file_path}: {e}")
+            self.log_debug(f"Errore nell'estrazione dei metadati per {file_path}: {e}")
             return {
                 "size": "N/A",
                 "modified": "N/A", 
                 "created": "N/A"
             }
 
-    def _search_thread(self, search_path, search_terms, search_content):
-        """Thread principale di ricerca"""
-        try:
-            items_processed = 0
-            files_checked = 0
-            files_filtered = 0
-            total_items_estimated = 500
-            self.search_results = []  # Pulisci i risultati precedenti
-            
-            def recursive_search(current_path, depth=0):
-                nonlocal items_processed, files_checked, files_filtered
-                
-                if self.stop_search:
-                    return
-                    
-                try:
-                    with os.scandir(current_path) as entries:
-                        for entry in entries:
-                            if self.stop_search:
-                                return
-                                
-                            items_processed += 1
-                            if items_processed % 10 == 0:
-                                progress = min(int((items_processed / total_items_estimated) * 100), 100)
-                                self.progress_queue.put(("progress", progress))
-                                self.progress_queue.put(("status", 
-                                    f"Processati {items_processed} elementi ({files_checked} file verificati, {files_filtered} filtrati)"))
-                            
-                            # Gestione file
-                            if entry.is_file():
-                                if not self.apply_advanced_filters(entry.path):
-                                    files_filtered += 1
-                                    continue
-                                
-                                file_type = self.get_file_type(entry.path)  # Ottieni il tipo di file
-                                
-                                # Cerca nei nomi dei file
-                                if self.search_files.get() and any(term.lower() in entry.name.lower() for term in search_terms):
-                                    metadata = self.get_file_metadata(entry.path)
-                                    
-                                    result = {
-                                        'type': file_type,
-                                        'author': entry.name,  # Puoi aggiornare questo valore con il nome dell'autore effettivo se disponibile
-                                        'size': metadata['size'],
-                                        'modified': metadata['modified'],
-                                        'created': metadata['created'],
-                                        'path': entry.path
-                                    }
-                                    self.search_results.append(result)
-                                    print(f"File trovato: {entry.name} - Tipo: {file_type}")  # Debug
-                                
-                                # Cerca nei contenuti
-                                if search_content and self.is_text_file(entry.path):
-                                    files_checked += 1
-                                    try:
-                                        content = self.extract_text_from_file(entry.path).lower()
-                                        if any(term.lower() in content for term in search_terms):
-                                            metadata = self.get_file_metadata(entry.path)
-                                            
-                                            result = {
-                                                'type': file_type,
-                                                'author': entry.name,  # Puoi aggiornare questo valore con il nome dell'autore effettivo se disponibile
-                                                'size': metadata['size'],
-                                                'modified': metadata['modified'],
-                                                'created': metadata['created'],
-                                                'path': entry.path
-                                            }
-                                            self.search_results.append(result)
-                                            print(f"Contenuto trovato in: {entry.name} - Tipo: {file_type}")  # Debug
-                                    except Exception as e:
-                                        print(f"Errore lettura contenuto: {entry.path} - {str(e)}")
-                            
-                            # Gestione directory
-                            elif entry.is_dir():
-                                if self.search_folders.get() and any(term.lower() in entry.name.lower() for term in search_terms):
-                                    metadata = self.get_file_metadata(entry.path)
-                                    
-                                    result = {
-                                        'type': 'Directory',
-                                        'author': '',  # Le directory non hanno un autore specifico
-                                        'size': metadata['size'],
-                                        'modified': metadata['modified'],
-                                        'created': metadata['created'],
-                                        'path': entry.path
-                                    }
-                                    self.search_results.append(result)
-                                    print(f"Directory trovata: {entry.name}")  # Debug
-                                
-                                if self.max_depth == 0 or depth < self.max_depth:
-                                    recursive_search(entry.path, depth + 1)
-                                
-                except PermissionError:
-                    print(f"Permesso negato: {current_path}")
-                except Exception as e:
-                    print(f"Errore in {current_path}: {str(e)}")
-            
-            # Avvia la ricerca
-            recursive_search(search_path)
-            
-        except Exception as e:
-            error_message = f"Errore durante la ricerca: {str(e)}"
-            print(error_message)
-            traceback.print_exc()
-            self.progress_queue.put(("error", error_message))
-        finally:
-            if self.stop_search:
-                self.progress_queue.put(("status", "Ricerca interrotta"))
-            else:
-                self.progress_queue.put(("complete", None))
-
-    def search_files_in_path(self, current_path, search_terms, current_depth=0, max_depth=0):
-        """Cerca file e cartelle nel percorso specificato e nelle sottocartelle"""
-        
-        # Controlla se dobbiamo rispettare un limite di profondità
-        if max_depth > 0 and current_depth > max_depth:
-            return
-        
-        try:
-            # Ottieni la lista di tutti i file e cartelle
-            items = os.listdir(current_path)
-            
-            for item in items:
-                # Ignora i file nascosti se richiesto
-                if self.ignore_hidden.get() and item.startswith('.'):
-                    continue
-                    
-                full_path = os.path.join(current_path, item)
-                
-                # Gestione file
-                if os.path.isfile(full_path):
-                    # Cerca nei nomi dei file
-                    if self.search_files.get() and self.match_pattern(item, search_terms):
-                        self.search_results.append(("File", "Nome", full_path))
-                        print(f"Trovato file (nome): {full_path}")
-                    
-                    # Cerca nei contenuti dei file - IMPORTANTE: usa "if" invece di "elif"
-                    if self.search_content.get():
-                        print(f"Provo a cercare nei contenuti di: {full_path}")
-                        # Verifica prima se è un file di testo
-                        if self.is_text_file(full_path):
-                            try:
-                                print(f"Leggendo il file: {full_path}")
-                                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                    content = f.read().lower()
-                                    # Cerca tutte le parole chiave nel contenuto
-                                    for term in search_terms:
-                                        if term.lower() in content:
-                                            self.search_results.append(("File", "Contenuto", full_path))
-                                            print(f"Trovato file (contenuto): {full_path}")
-                                            break  # Esci dal ciclo una volta trovata una corrispondenza
-                            except Exception as e:
-                                print(f"Errore nella lettura del file {full_path}: {e}")
-                        else:
-                            print(f"File non di testo: {full_path}")
-                
-                # Gestione cartelle
-                elif os.path.isdir(full_path):
-                    # Cerca nei nomi delle cartelle
-                    if self.search_folders.get() and self.match_pattern(item, search_terms):
-                        self.search_results.append(("Cartella", "", full_path))
-                        print(f"Trovata cartella: {full_path}")
-                    
-                    # Cerca nelle sottocartelle (ricorsione)
-                    self.search_files_in_path(full_path, search_terms, current_depth + 1, max_depth)
-                    
-        except Exception as e:
-            print(f"Errore nel percorso {current_path}: {str(e)}")
-            
-    def match_pattern(self, file_name, search_terms):
-        """Verifica se il nome del file corrisponde ai termini di ricerca"""
-        file_name_lower = file_name.lower()
-        for term in search_terms:
-            if term.lower() in file_name_lower:
-                return True
-        return False
-    
     def is_text_file(self, file_path):
         """Verifica se un file è probabilmente un file di testo leggibile o un documento supportato"""
         # Ignora i file temporanei di Office
@@ -1467,24 +1461,47 @@ class FileSearchApp:
             '.pdf'             # PDF
         ]
         
-        # Debug esplicito per i file Office
-        if ext in office_extensions:
-            print(f"✓ File Office trovato: {file_path} - Tipo: {ext}")
-            return True
-        
-        # Evita file troppo grandi (più di 10MB)
-        try:
-            if os.path.getsize(file_path) > 10 * 1024 * 1024:  # Limite 10 MB
-                return False
-        except:
+        # Se è un file Office supportato, verifica che sia disponibile la libreria corrispondente
+        if ext in ['.docx', '.doc'] and not file_format_support["docx"]:
             return False
+        if ext == '.pdf' and not file_format_support["pdf"]:
+            return False
+        if ext in ['.pptx', '.ppt'] and not file_format_support["pptx"]:
+            return False
+        if ext in ['.xlsx', '.xls'] and not file_format_support["excel"]:
+            return False
+        if ext in ['.odt', '.ods', '.odp'] and not file_format_support["odt"]:
+            return False
+        if ext == '.rtf' and not file_format_support["rtf"]:
+            return False
+        
+        # Verifica se è un file office supportato
+        if ext in office_extensions:
+            # Controlla la dimensione del file
+            try:
+                file_size = os.path.getsize(file_path)
+                max_size = self.max_file_size_mb.get() * 1024 * 1024
+                if file_size > max_size:
+                    self.log_debug(f"File troppo grande: {file_path} ({file_size/1024/1024:.1f}MB > {self.max_file_size_mb.get()}MB)")
+                    return False
+                return True
+            except:
+                return False
             
-        # Estensioni comuni di file di testo o documenti supportati
+        # Estensioni comuni di file di testo
         text_extensions = ['.txt', '.py', '.java', '.c', '.cpp', '.h', '.html', '.css', '.js', '.json', '.xml', '.md', 
                         '.log', '.csv', '.ini', '.cfg', '.config', '.bat', '.sh', '.ps1', '.tex', '.sql']
         
         if ext in text_extensions:
-            return True
+            # Controlla la dimensione del file
+            try:
+                file_size = os.path.getsize(file_path)
+                max_size = self.max_file_size_mb.get() * 1024 * 1024
+                if file_size > max_size:
+                    return False
+                return True
+            except:
+                return False
         
         # Per file senza estensione, prova a leggere i primi byte
         if not ext:
@@ -1499,13 +1516,12 @@ class FileSearchApp:
         return False
 
     def extract_text_from_file(self, file_path):
-        """Estrae il testo da vari tipi di file"""
+        """Estrae il testo da vari tipi di file con ottimizzazioni"""
         # Ignora i file temporanei di Office
         if os.path.basename(file_path).startswith("~$"):
             return ""
                 
         ext = os.path.splitext(file_path)[1].lower()
-        print(f"Estraendo testo da: {file_path} (tipo: {ext})")
         
         try:
             # File Word (.docx, .doc)
@@ -1514,7 +1530,7 @@ class FileSearchApp:
                     doc = docx.Document(file_path)
                     return '\n'.join([paragraph.text for paragraph in doc.paragraphs])
                 except Exception as e:
-                    print(f"Errore nell'estrazione del testo da file Word {file_path}: {e}")
+                    self.log_debug(f"Errore nell'estrazione del testo da file Word {file_path}: {e}")
                     return ""
             
             # File OpenDocument (.odt, .ods, .odp)
@@ -1524,7 +1540,6 @@ class FileSearchApp:
                         doc = odfdo.Document(file_path)
                         body = doc.body
                         all_text = body.get_formatted_text()
-                        print(f"Testo estratto con odfdo: {len(all_text)} caratteri")
                         return all_text
                     
                     elif 'opendocument' in dir():
@@ -1533,14 +1548,13 @@ class FileSearchApp:
                         for paragraph in doc.getElementsByType(text.P):
                             all_paragraphs.append(teletype.extractText(paragraph))
                         result = '\n'.join(all_paragraphs)
-                        print(f"Testo estratto con odf: {len(result)} caratteri")
                         return result
                     
                     # Metodo alternativo usando zipfile
                     else:
                         return self._extract_from_zip(file_path, 'content.xml')
                 except Exception as e:
-                    print(f"Errore nell'estrazione del testo da file OpenDocument {file_path}: {e}")
+                    self.log_debug(f"Errore nell'estrazione del testo da file OpenDocument {file_path}: {e}")
                     return self._extract_from_zip(file_path, 'content.xml')
             
             # File Excel (.xlsx, .xls)
@@ -1550,12 +1564,20 @@ class FileSearchApp:
                     text_content = []
                     for sheet_name in workbook.sheetnames:
                         sheet = workbook[sheet_name]
-                        for row in sheet.rows:
-                            row_text = [str(cell.value) if cell.value is not None else '' for cell in row]
-                            text_content.append(' '.join(row_text))
+                        # Limita il numero di righe e colonne per migliorare le prestazioni
+                        max_row = min(sheet.max_row, 1000)
+                        max_col = min(sheet.max_column, 50)
+                        for row in range(1, max_row + 1):
+                            row_text = []
+                            for col in range(1, max_col + 1):
+                                cell = sheet.cell(row=row, column=col)
+                                if cell.value is not None:
+                                    row_text.append(str(cell.value))
+                            if row_text:
+                                text_content.append(' '.join(row_text))
                     return '\n'.join(text_content)
                 except Exception as e:
-                    print(f"Errore nell'estrazione del testo da file Excel {file_path}: {e}")
+                    self.log_debug(f"Errore nell'estrazione del testo da file Excel {file_path}: {e}")
                     return ""
             
             # File PowerPoint (.pptx, .ppt)
@@ -1564,25 +1586,30 @@ class FileSearchApp:
                     presentation = pptx.Presentation(file_path)
                     text_content = []
                     for slide in presentation.slides:
+                        slide_texts = []
                         for shape in slide.shapes:
                             if hasattr(shape, "text"):
-                                text_content.append(shape.text)
+                                slide_texts.append(shape.text)
+                        if slide_texts:
+                            text_content.append('\n'.join(slide_texts))
                     return '\n'.join(text_content)
                 except Exception as e:
-                    print(f"Errore nell'estrazione del testo da file PowerPoint {file_path}: {e}")
+                    self.log_debug(f"Errore nell'estrazione del testo da file PowerPoint {file_path}: {e}")
                     return ""
             
-            # File PDF
+            # File PDF - con limite pagine per prestazioni
             elif ext == '.pdf' and file_format_support["pdf"]:
                 try:
                     with open(file_path, 'rb') as f:
                         reader = PyPDF2.PdfReader(f)
                         text_content = []
-                        for page_num in range(len(reader.pages)):
+                        # Limita il numero di pagine da analizzare per prestazioni
+                        max_pages = min(len(reader.pages), 50)
+                        for page_num in range(max_pages):
                             text_content.append(reader.pages[page_num].extract_text())
                     return '\n'.join(text_content)
                 except Exception as e:
-                    print(f"Errore nell'estrazione del testo da file PDF {file_path}: {e}")
+                    self.log_debug(f"Errore nell'estrazione del testo da file PDF {file_path}: {e}")
                     return ""
             
             # File RTF
@@ -1592,40 +1619,153 @@ class FileSearchApp:
                         rtf_content = f.read()
                     return rtf_to_text(rtf_content)
                 except Exception as e:
-                    print(f"Errore nell'estrazione del testo da file RTF {file_path}: {e}")
+                    self.log_debug(f"Errore nell'estrazione del testo da file RTF {file_path}: {e}")
                     return ""
             
-            # File di testo normali
+            # File di testo normali - lettura ottimizzata a blocchi
             else:
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        return f.read()
-                except Exception as e:
-                    print(f"Errore nella lettura del file di testo {file_path}: {e}")
-                    return ""
+                return self._read_text_file_optimized(file_path)
+                
         except Exception as e:
-            print(f"Errore generale nell'estrazione del testo da {file_path}: {e}")
+            self.log_debug(f"Errore generale nell'estrazione del testo da {file_path}: {e}")
             return ""
     
-def _extract_from_zip(self, file_path, internal_file):
-    """Estrae un file da un archivio zip (usato per OpenDocument)"""
-    try:
-        import zipfile
-        import re
-        
-        with zipfile.ZipFile(file_path) as z:
-            if internal_file in z.namelist():
-                with z.open(internal_file) as f:
-                    content = f.read().decode('utf-8')
-                    # Rimuovi i tag XML per ottenere solo il testo
-                    text_only = re.sub(r'<[^>]+>', ' ', content)
-                    print(f"Testo estratto con zipfile da {internal_file}: {len(text_only)} caratteri")
-                    return text_only
+    def _read_text_file_optimized(self, file_path):
+        """Legge un file di testo in modo ottimizzato usando chunking"""
+        try:
+            max_size = self.max_file_size_mb.get() * 1024 * 1024
+            chunk_size = self.chunk_size
+            
+            # Controlla la dimensione del file
+            file_size = os.path.getsize(file_path)
+            if file_size > max_size:
+                self.log_debug(f"File troppo grande per lettura completa: {file_path}")
+                # Legge solo i primi e ultimi N blocchi
+                text_chunks = []
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    # Leggi i primi 5 blocchi
+                    for _ in range(5):
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        text_chunks.append(chunk)
+                    
+                    # Salta al 90% del file
+                    if file_size > 10 * chunk_size:
+                        f.seek(int(file_size * 0.9))
+                        
+                        # Leggi gli ultimi 5 blocchi
+                        for _ in range(5):
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            text_chunks.append(chunk)
+                
+                return ''.join(text_chunks)
+            else:
+                # Leggi il file intero
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    return f.read()
+        except Exception as e:
+            self.log_debug(f"Errore nella lettura ottimizzata di {file_path}: {e}")
             return ""
-    except Exception as e:
-        print(f"Errore nell'estrazione da ZIP {file_path}: {e}")
-        return ""
+
+    def _extract_from_zip(self, file_path, internal_file):
+        """Estrae un file da un archivio zip (usato per OpenDocument)"""
+        try:
+            import zipfile
+            import re
+            
+            with zipfile.ZipFile(file_path) as z:
+                if internal_file in z.namelist():
+                    with z.open(internal_file) as f:
+                        content = f.read().decode('utf-8')
+                        # Rimuovi i tag XML per ottenere solo il testo
+                        text_only = re.sub(r'<[^>]+>', ' ', content)
+                        return text_only
+                return ""
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione da ZIP {file_path}: {e}")
+            return ""
+
+    def apply_advanced_filters(self, file_path):
+        """Controlla se un file corrisponde ai filtri avanzati"""
+        try:
+            # Filtro dimensione
+            if self.advanced_filters["size_min"] > 0 or self.advanced_filters["size_max"] > 0:
+                try:
+                    file_size = os.path.getsize(file_path)
+                    if self.advanced_filters["size_min"] > 0 and file_size < self.advanced_filters["size_min"]:
+                        return False
+                    if self.advanced_filters["size_max"] > 0 and file_size > self.advanced_filters["size_max"]:
+                        return False
+                except:
+                    pass
+            
+            # Filtro data
+            if self.advanced_filters["date_min"] or self.advanced_filters["date_max"]:
+                try:
+                    file_time = os.path.getmtime(file_path)
+                    file_date = datetime.fromtimestamp(file_time)
+                    
+                    # Controlla data minima
+                    if self.advanced_filters["date_min"] and self.advanced_filters["date_min"].strip():
+                        min_date = datetime.strptime(self.advanced_filters["date_min"], "%d-%m-%Y")
+                        min_date = min_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                        if file_date < min_date:
+                            return False
+                    
+                    # Controlla data massima
+                    if self.advanced_filters["date_max"] and self.advanced_filters["date_max"].strip():
+                        max_date = datetime.strptime(self.advanced_filters["date_max"], "%d-%m-%Y")
+                        max_date = max_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+                        if file_date > max_date:
+                            return False
+                except:
+                    pass
+            
+            # Filtro estensione
+            if self.advanced_filters["extensions"]:
+                _, ext = os.path.splitext(file_path)
+                if ext.lower() not in [e.lower() for e in self.advanced_filters["extensions"]]:
+                    return False
+            
+            # Se arriva qui, il file è passato attraverso tutti i filtri
+            return True
+        except Exception as e:
+            self.log_debug(f"Errore nei filtri avanzati per {os.path.basename(file_path)}: {str(e)}")
+            return True  # In caso di errore generale, include il file (più conservativo)
+
+    def update_results_list(self):
+        """Aggiorna la lista dei risultati"""
+        # Pulisci la lista esistente
+        for item in self.results_list.get_children():
+            self.results_list.delete(item)
         
+        # Ordina i risultati per tipo e nome
+        self.search_results.sort(key=lambda x: (x['type'], x['author']))
+        
+        # Inserisci i nuovi risultati
+        if self.search_results:
+            for result in self.search_results:
+                try:
+                    values = (
+                        result['type'],
+                        result['author'],
+                        result['size'],
+                        result['modified'],
+                        result['created'],
+                        result['path']
+                    )
+                    self.results_list.insert("", "end", values=values)
+                except Exception as e:
+                    self.log_debug(f"Errore nell'inserimento del risultato: {str(e)}")
+                    continue
+            
+            self.status_label["text"] = f"Trovati {len(self.search_results)} elementi"
+        else:
+            self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
+
 def main():
     root = ttk.Window(themename="darkly")
     app = FileSearchApp(root)
@@ -1647,7 +1787,7 @@ def main():
     root.geometry('{}x{}+{}+{}'.format(width, height, x, y))
     
     # Imposta data e ora attuali, username
-    current_datetime = "2025-03-07 22:05:10"
+    current_datetime = "2025-03-13 09:43:46"
     username = "Antonino"
     
     # Aggiorna la barra di stato con data/ora e username
