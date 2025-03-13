@@ -88,8 +88,8 @@ class FileSearchApp:
         self.datetime_var = StringVar()
         self.user_var = StringVar(value=getpass.getuser())
         
-        # Avvia l'aggiornamento automatico della data/ora
-        self.update_current_datetime()
+        # Rimuovi o commenta questa riga
+        # self.update_current_datetime()
 
         # Variabili
         self.search_content = BooleanVar(value=False)
@@ -98,7 +98,7 @@ class FileSearchApp:
         self.search_results = []
         self.search_files = BooleanVar(value=True)
         self.search_folders = BooleanVar(value=True)
-        self.ignore_hidden = BooleanVar(value=True)  # Aggiungi questa riga
+        self.ignore_hidden = BooleanVar(value=True)
         self.is_searching = False
         self.progress_queue = queue.Queue()
         
@@ -257,6 +257,8 @@ class FileSearchApp:
                         self.is_searching = False
                         self.search_button["state"] = "normal"
                         self.stop_button["state"] = "disabled"
+                        current_time = datetime.now().strftime('%H:%M')
+                        self.end_time_label.config(text=current_time)
                         messagebox.showerror("Errore", value)
                         return
             except queue.Empty:
@@ -268,15 +270,17 @@ class FileSearchApp:
         """Ferma il processo di ricerca in corso"""
         self.stop_search = True
         self.status_label["text"] = "Interrompendo la ricerca..."
-        # Aggiorna l'orario di fine quando la ricerca viene interrotta
         current_time = datetime.now().strftime('%H:%M')
         self.end_time_label.config(text=current_time)
+        # Aggiorna l'orario di fine quando la ricerca viene interrotta
+        self.search_button["state"] = "normal"
+        self.stop_button["state"] = "disabled"
 
     def show_advanced_filters_dialog(self):
         """Mostra la finestra di dialogo per i filtri di ricerca avanzati"""
         dialog = ttk.Toplevel(self.root)
         dialog.title("Filtri avanzati")
-        dialog.geometry("530x350")
+        dialog.geometry("500x350")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -406,18 +410,6 @@ class FileSearchApp:
         
         # Imposta una dimensione minima per la finestra
         dialog.minsize(500, 400)
-
-    def update_current_datetime(self):
-        """Aggiorna le informazioni di data/ora correnti nel formato UTC"""
-        current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        self.datetime_var.set(f"Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): {current_time}\nCurrent User's Login: {self.user_var.get()}")
-        
-        # Aggiorna il label se esiste
-        if hasattr(self, 'datetime_label'):
-            self.datetime_label.configure(text=self.datetime_var.get())
-        
-        # Programma il prossimo aggiornamento tra 1 secondo
-        self.root.after(1000, self.update_current_datetime)
 
     def create_widgets(self):
         # Frame principale che conterrà tutto tranne la barra di stato
@@ -585,20 +577,20 @@ class FileSearchApp:
         
         # Configura la Treeview
         self.results_list = ttk.Treeview(results_frame, selectmode="extended",
-                            columns=("type", "match", "size", "modified", "created", "path"),
+                            columns=("type", "author", "size", "modified", "created", "path"),
                             show="headings")
-        
-        # Imposta le colonne con larghezze appropriate
-        self.results_list.column("type", width=150, anchor="w")
-        self.results_list.column("match", width=100)
-        self.results_list.column("size", width=100)
-        self.results_list.column("modified", width=140)
-        self.results_list.column("created", width=140)
-        self.results_list.column("path", width=400)
+
+        # Imposta le colonne con larghezze appropriate e centraggio
+        self.results_list.column("type", width=150, anchor="center")
+        self.results_list.column("author", width=100, anchor="w")
+        self.results_list.column("size", width=100, anchor="center")
+        self.results_list.column("modified", width=140, anchor="center")
+        self.results_list.column("created", width=140, anchor="center")
+        self.results_list.column("path", width=400, anchor="w")
         
         # Imposta le intestazioni
         self.results_list.heading("type", text="Tipo File")
-        self.results_list.heading("match", text="Trovato in")
+        self.results_list.heading("author", text="Nome File")
         self.results_list.heading("size", text="Dimensione")
         self.results_list.heading("modified", text="Modificato")
         self.results_list.heading("created", text="Creato")
@@ -606,8 +598,8 @@ class FileSearchApp:
 
         # Impostazione delle larghezze colonne
         self.results_list.column("type", width=80)
-        self.results_list.column("match", width=100)
-        self.results_list.column("size", width=100)
+        self.results_list.column("author", width=100)
+        self.results_list.column("size", width=80)
         self.results_list.column("modified", width=140)
         self.results_list.column("created", width=140)
         self.results_list.column("path", width=440)
@@ -659,7 +651,7 @@ class FileSearchApp:
         self.create_tooltip(self.copy_button, "Copia i file selezionati nella directory specificata")
         self.create_tooltip(self.compress_button, "Comprimi i file selezionati in un archivio ZIP")
         
-
+    
     # Avviso sulla spunta della ricerca dei contenuti
     def warn_content_search(self):
         """Mostra un avviso se l'utente attiva la ricerca nei contenuti"""
@@ -669,6 +661,7 @@ class FileSearchApp:
                 "Attivando questa opzione rallenterà la ricerca e l'attesa sarà maggiore.",
                 parent=self.root
             )
+
     def create_tooltip(self, widget, text, delay=500, fade=True):
         """Crea tooltip con ritardo, effetti di dissolvenza e larghezza automatica"""
         
@@ -1089,16 +1082,16 @@ class FileSearchApp:
                     if isinstance(result, dict):
                         values = (
                             result['type'],
-                            result['match'],
+                            result['author'],
                             result['size'],
                             result['modified'],
                             result['created'],
                             result['path']
                         )
                     else:  # Se è ancora nel vecchio formato tupla
-                        _, match_type, size, modified, created, path = result
+                        _, author, size, modified, created, path = result
                         file_type = self.get_file_type(path)  # Ricalcola il tipo
-                        values = (file_type, match_type, size, modified, created, path)
+                        values = (file_type, author, size, modified, created, path)
                     
                     self.results_list.insert("", "end", values=values)
                     print(f"Inserito risultato: {values[0]}")  # Debug
@@ -1112,7 +1105,6 @@ class FileSearchApp:
             self.results_list.insert("", "end", 
                 values=("Info", "", "", "", "", "Nessun file trovato"))
             self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
-
     
     def apply_advanced_filters(self, file_path):
         """Controlla se un file corrisponde ai filtri avanzati"""
@@ -1280,18 +1272,6 @@ class FileSearchApp:
                 "created": "N/A"
             }
 
-    def update_current_datetime(self):
-        """Aggiorna le informazioni di data/ora correnti"""
-        current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        formatted_text = (
-            f"Current Date and Time (UTC): {current_time}\n"
-            f"Current User: {self.user_var.get()}"
-        )
-        self.datetime_var.set(formatted_text)
-        
-        # Aggiorna ogni secondo
-        self.root.after(1000, self.update_current_datetime)
-
     def _search_thread(self, search_path, search_terms, search_content):
         """Thread principale di ricerca"""
         try:
@@ -1334,7 +1314,7 @@ class FileSearchApp:
                                     
                                     result = {
                                         'type': file_type,
-                                        'match': 'Nome',
+                                        'author': entry.name,  # Puoi aggiornare questo valore con il nome dell'autore effettivo se disponibile
                                         'size': metadata['size'],
                                         'modified': metadata['modified'],
                                         'created': metadata['created'],
@@ -1353,7 +1333,7 @@ class FileSearchApp:
                                             
                                             result = {
                                                 'type': file_type,
-                                                'match': 'Contenuto',
+                                                'author': entry.name,  # Puoi aggiornare questo valore con il nome dell'autore effettivo se disponibile
                                                 'size': metadata['size'],
                                                 'modified': metadata['modified'],
                                                 'created': metadata['created'],
@@ -1371,7 +1351,7 @@ class FileSearchApp:
                                     
                                     result = {
                                         'type': 'Directory',
-                                        'match': '',
+                                        'author': '',  # Le directory non hanno un autore specifico
                                         'size': metadata['size'],
                                         'modified': metadata['modified'],
                                         'created': metadata['created'],
@@ -1397,7 +1377,9 @@ class FileSearchApp:
             traceback.print_exc()
             self.progress_queue.put(("error", error_message))
         finally:
-            if not self.stop_search:
+            if self.stop_search:
+                self.progress_queue.put(("status", "Ricerca interrotta"))
+            else:
                 self.progress_queue.put(("complete", None))
 
     def search_files_in_path(self, current_path, search_terms, current_depth=0, max_depth=0):
