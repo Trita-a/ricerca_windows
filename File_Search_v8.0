@@ -196,7 +196,30 @@ class FileSearchApp:
         directory = filedialog.askdirectory()
         if directory:
             self.search_path.set(directory)
+    def optimize_system_search(self, path):
+        """Ottimizza la ricerca per percorsi di sistema come C:/ impostando parametri appropriati"""
+        if path.lower() in ["c:/", "c:\\", "d:/", "d:\\"]:
+            # Salva i parametri attuali
+            original_params = {
+                "max_files": self.max_files_to_check.get(),
+                "worker_threads": self.worker_threads.get()
+            }
             
+            # Applica parametri ottimizzati
+            self.max_files_to_check.set(1000000)  # Aumenta il limite di file
+            self.worker_threads.set(min(8, os.cpu_count() or 4))  # Aumenta i thread di lavoro
+            
+            # Notifica l'utente
+            messagebox.showinfo(
+                "Ricerca di sistema",
+                "Stai avviando una ricerca su un intero disco di sistema.\n\n"
+                "Per ottimizzare la ricerca, sono stati temporaneamente modificati alcuni parametri "
+                "per consentire una scansione più approfondita.\n\n"
+                "La ricerca potrebbe richiedere tempo e risorse significative."
+            )
+            
+            return original_params
+        return None
     def start_search(self):
         # Pulisci risultati precedenti
         for item in self.results_list.get_children():
@@ -209,7 +232,8 @@ class FileSearchApp:
         # Reset per la nuova ricerca
         self.stop_search = False
         self.stop_button["state"] = "normal"
-        
+        original_params = self.optimize_system_search(self.search_path.get())
+
         # Aggiorna l'orario di avvio e resetta l'orario di fine
         current_time = datetime.now().strftime('%H:%M')
         self.start_time_label.config(text=current_time)
@@ -253,6 +277,9 @@ class FileSearchApp:
         
         # Avvia l'aggiornamento della progress bar
         self.update_progress()
+        # Salva original_params come attributo per ripristinarli dopo la ricerca
+        if original_params:
+            self.original_system_search_params = original_params
 
     def _search_thread(self, path, keywords, search_content):
         """Thread per la ricerca file"""
@@ -365,11 +392,17 @@ class FileSearchApp:
                     return
                     
                 # Evita di visitare directory già visitate (gestisce symlinks circolari)
-                real_path = os.path.realpath(directory)
-                if real_path in visited_dirs:
-                    return
-                visited_dirs.add(real_path)
-                
+                try:
+                    real_path = os.path.realpath(directory)
+                    if real_path in visited_dirs:
+                        return
+                    visited_dirs.add(real_path)
+                except Exception:
+                    # Se non è possibile ottenere il percorso reale, usa quello originale
+                    if directory in visited_dirs:
+                        return
+                    visited_dirs.add(directory)
+            
                 try:
                     # Incrementa il contatore delle cartelle analizzate
                     dirs_checked += 1
@@ -385,6 +418,47 @@ class FileSearchApp:
                         items = os.listdir(directory)
                     except PermissionError:
                         self.log_debug(f"Permesso negato per la directory {directory}")
+                        
+                        # NUOVO: Per percorsi critici, specialmente su C:/, tenta di esplorare sottodirectory note
+                        if directory.lower() in ["c:/", "c:\\", "d:/", "d:\\"]:
+                            # Aggiungi manualmente i percorsi utente e altri percorsi importanti
+                            system_paths_to_try = [
+                                os.path.join(directory, "Users"),
+                                os.path.join(directory, "Documents and Settings"),  # Per compatibilità con sistemi più vecchi
+                                os.path.join(directory, "Program Files"),
+                                os.path.join(directory, "Program Files (x86)"),
+                                os.path.join(directory, "ProgramData"),
+                                os.path.join(directory, "Windows")
+                            ]
+                            
+                            # Notifica l'utente che stiamo tentando di accedere a percorsi speciali
+                            self.progress_queue.put(("status", "Tentativo di accesso a cartelle speciali..."))
+                            
+                            for special_path in system_paths_to_try:
+                                if os.path.exists(special_path) and os.path.isdir(special_path):
+                                    # Tenta di esplorare queste directory importanti
+                                    visit_directory(special_path, current_depth + 1)
+                                    
+                            # Se siamo in C:/Users, tenta di accedere a ciascuna cartella utente
+                            if directory.lower() in ["c:/users", "c:\\users"]:
+                                try:
+                                    user_folders = os.listdir(directory)
+                                    for user_folder in user_folders:
+                                        user_path = os.path.join(directory, user_folder)
+                                        if os.path.isdir(user_path):
+                                            # Per ciascun utente, esplora le sottocartelle comuni
+                                            important_user_folders = [
+                                                "Desktop", "Documents", "Downloads", "Pictures", 
+                                                "Videos", "Music", "OneDrive"
+                                            ]
+                                            
+                                            for folder in important_user_folders:
+                                                folder_path = os.path.join(user_path, folder)
+                                                if os.path.exists(folder_path) and os.path.isdir(folder_path):
+                                                    visit_directory(folder_path, current_depth + 1)
+                                except:
+                                    self.log_debug(f"Impossibile elencare le cartelle degli utenti in {directory}")
+                        
                         return
                     except Exception as e:
                         self.log_debug(f"Errore nell'accesso alla directory {directory}: {str(e)}")
@@ -504,6 +578,12 @@ class FileSearchApp:
             self.search_executor.shutdown()
             self.search_executor = None
             
+            # Ripristina i parametri originali se erano stati modificati per la ricerca di sistema
+            if hasattr(self, 'original_system_search_params'):
+                self.max_files_to_check.set(self.original_system_search_params["max_files"])
+                self.worker_threads.set(self.original_system_search_params["worker_threads"])
+                delattr(self, 'original_system_search_params')
+
             # Riporta il risultato finale
             elapsed_time = time.time() - start_time
             self.progress_queue.put(("status", 
