@@ -196,7 +196,30 @@ class FileSearchApp:
         directory = filedialog.askdirectory()
         if directory:
             self.search_path.set(directory)
+    def optimize_system_search(self, path):
+        """Ottimizza la ricerca per percorsi di sistema come C:/ impostando parametri appropriati"""
+        if path.lower() in ["c:/", "c:\\", "d:/", "d:\\"]:
+            # Salva i parametri attuali
+            original_params = {
+                "max_files": self.max_files_to_check.get(),
+                "worker_threads": self.worker_threads.get()
+            }
             
+            # Applica parametri ottimizzati
+            self.max_files_to_check.set(1000000)  # Aumenta il limite di file
+            self.worker_threads.set(min(8, os.cpu_count() or 4))  # Aumenta i thread di lavoro
+            
+            # Notifica l'utente
+            messagebox.showinfo(
+                "Ricerca di sistema",
+                "Stai avviando una ricerca su un intero disco di sistema.\n\n"
+                "Per ottimizzare la ricerca, sono stati temporaneamente modificati alcuni parametri "
+                "per consentire una scansione più approfondita.\n\n"
+                "La ricerca potrebbe richiedere tempo e risorse significative."
+            )
+            
+            return original_params
+        return None
     def start_search(self):
         # Pulisci risultati precedenti
         for item in self.results_list.get_children():
@@ -209,7 +232,8 @@ class FileSearchApp:
         # Reset per la nuova ricerca
         self.stop_search = False
         self.stop_button["state"] = "normal"
-        
+        original_params = self.optimize_system_search(self.search_path.get())
+
         # Aggiorna l'orario di avvio e resetta l'orario di fine
         current_time = datetime.now().strftime('%H:%M')
         self.start_time_label.config(text=current_time)
@@ -253,6 +277,9 @@ class FileSearchApp:
         
         # Avvia l'aggiornamento della progress bar
         self.update_progress()
+        # Salva original_params come attributo per ripristinarli dopo la ricerca
+        if original_params:
+            self.original_system_search_params = original_params
 
     def _search_thread(self, path, keywords, search_content):
         """Thread per la ricerca file"""
@@ -365,11 +392,17 @@ class FileSearchApp:
                     return
                     
                 # Evita di visitare directory già visitate (gestisce symlinks circolari)
-                real_path = os.path.realpath(directory)
-                if real_path in visited_dirs:
-                    return
-                visited_dirs.add(real_path)
-                
+                try:
+                    real_path = os.path.realpath(directory)
+                    if real_path in visited_dirs:
+                        return
+                    visited_dirs.add(real_path)
+                except Exception:
+                    # Se non è possibile ottenere il percorso reale, usa quello originale
+                    if directory in visited_dirs:
+                        return
+                    visited_dirs.add(directory)
+            
                 try:
                     # Incrementa il contatore delle cartelle analizzate
                     dirs_checked += 1
@@ -385,6 +418,47 @@ class FileSearchApp:
                         items = os.listdir(directory)
                     except PermissionError:
                         self.log_debug(f"Permesso negato per la directory {directory}")
+                        
+                        # NUOVO: Per percorsi critici, specialmente su C:/, tenta di esplorare sottodirectory note
+                        if directory.lower() in ["c:/", "c:\\", "d:/", "d:\\"]:
+                            # Aggiungi manualmente i percorsi utente e altri percorsi importanti
+                            system_paths_to_try = [
+                                os.path.join(directory, "Users"),
+                                os.path.join(directory, "Documents and Settings"),  # Per compatibilità con sistemi più vecchi
+                                os.path.join(directory, "Program Files"),
+                                os.path.join(directory, "Program Files (x86)"),
+                                os.path.join(directory, "ProgramData"),
+                                os.path.join(directory, "Windows")
+                            ]
+                            
+                            # Notifica l'utente che stiamo tentando di accedere a percorsi speciali
+                            self.progress_queue.put(("status", "Tentativo di accesso a cartelle speciali..."))
+                            
+                            for special_path in system_paths_to_try:
+                                if os.path.exists(special_path) and os.path.isdir(special_path):
+                                    # Tenta di esplorare queste directory importanti
+                                    visit_directory(special_path, current_depth + 1)
+                                    
+                            # Se siamo in C:/Users, tenta di accedere a ciascuna cartella utente
+                            if directory.lower() in ["c:/users", "c:\\users"]:
+                                try:
+                                    user_folders = os.listdir(directory)
+                                    for user_folder in user_folders:
+                                        user_path = os.path.join(directory, user_folder)
+                                        if os.path.isdir(user_path):
+                                            # Per ciascun utente, esplora le sottocartelle comuni
+                                            important_user_folders = [
+                                                "Desktop", "Documents", "Downloads", "Pictures", 
+                                                "Videos", "Music", "OneDrive"
+                                            ]
+                                            
+                                            for folder in important_user_folders:
+                                                folder_path = os.path.join(user_path, folder)
+                                                if os.path.exists(folder_path) and os.path.isdir(folder_path):
+                                                    visit_directory(folder_path, current_depth + 1)
+                                except:
+                                    self.log_debug(f"Impossibile elencare le cartelle degli utenti in {directory}")
+                        
                         return
                     except Exception as e:
                         self.log_debug(f"Errore nell'accesso alla directory {directory}: {str(e)}")
@@ -504,6 +578,12 @@ class FileSearchApp:
             self.search_executor.shutdown()
             self.search_executor = None
             
+            # Ripristina i parametri originali se erano stati modificati per la ricerca di sistema
+            if hasattr(self, 'original_system_search_params'):
+                self.max_files_to_check.set(self.original_system_search_params["max_files"])
+                self.worker_threads.set(self.original_system_search_params["worker_threads"])
+                delattr(self, 'original_system_search_params')
+
             # Riporta il risultato finale
             elapsed_time = time.time() - start_time
             self.progress_queue.put(("status", 
@@ -743,7 +823,23 @@ class FileSearchApp:
                     if progress_type == "progress":
                         self.progress_bar["value"] = value
                     elif progress_type == "status":
-                        self.status_label["text"] = value
+                        # Se il messaggio contiene informazioni sui file, separiamo le informazioni
+                        if "analizzati" in value.lower() or "cartelle:" in value.lower() or "file:" in value.lower():
+                            # Estrai il percorso se presente
+                            if "analisi:" in value.lower():
+                                parts = value.split("(", 1)
+                                if len(parts) > 1:
+                                    path_part = parts[0].strip()
+                                    counts_part = "(" + parts[1]
+                                    self.status_label["text"] = path_part
+                                    self.analyzed_files_label["text"] = counts_part
+                                else:
+                                    self.analyzed_files_label["text"] = value
+                            else:
+                                self.analyzed_files_label["text"] = value
+                        else:
+                            # È solo un messaggio di stato semplice
+                            self.status_label["text"] = value
                     elif progress_type == "complete":
                         self.is_searching = False
                         self.search_button["state"] = "normal"
@@ -788,6 +884,7 @@ class FileSearchApp:
         """Ferma il processo di ricerca in corso"""
         self.stop_search = True
         self.status_label["text"] = "Interrompendo la ricerca..."
+        self.analyzed_files_label["text"] = "Ricerca interrotta dall'utente"
         current_time = datetime.now().strftime('%H:%M')
         self.end_time_label.config(text=current_time)
         
@@ -1154,6 +1251,18 @@ class FileSearchApp:
         main_frame = ttk.Frame(main_container, padding="10")
         main_frame.pack(fill=BOTH, expand=YES)
         
+        # Frame superiore per il titolo e informazioni data/utente
+        top_frame = ttk.Frame(main_frame)
+        top_frame.pack(fill=X, expand=False, pady=(0, 10))
+
+        # Label per la data e l'utente in alto a destra
+        datetime_label = ttk.Label(top_frame, textvariable=self.datetime_var, font=("Helvetica", 9))
+        datetime_label.pack(side=RIGHT, anchor=NE, padx=(0, 5))
+
+        # Se hai un titolo o altri elementi che devono stare in alto a sinistra, li puoi aggiungere così:
+        title_label = ttk.Label(top_frame, text="File Search Tool.. Nucleo Perugia", font=("Helvetica", 14, "bold"))
+        title_label.pack(side=LEFT, anchor=NW)
+
         # Aggiungi selezione tema
         theme_frame = ttk.Frame(main_frame)
         theme_frame.pack(fill=X, pady=5)
@@ -1168,10 +1277,10 @@ class FileSearchApp:
         # Sezione selezione directory
         path_frame = ttk.LabelFrame(main_frame, text="Directory di ricerca", padding="5")
         path_frame.pack(fill=X, pady=5)
-       
+    
         self.path_entry = ttk.Entry(path_frame, textvariable=self.search_path)
         example_label = ttk.Label(path_frame, text="Seleziona la directory per effettuare la ricerca dei file", 
-                       font=("", 8), foreground="gray")
+                    font=("", 8), foreground="gray")
         example_label.pack(anchor="w", padx=5)
         self.path_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
         
@@ -1183,26 +1292,26 @@ class FileSearchApp:
 
         # Aggiungi il tooltip sulla casella delle parole chiave
         example_label = ttk.Label(keyword_frame, text="Per la ricerca di più parole usa la virgola. Esempio: documento, fattura, contratto", 
-                       font=("", 8), foreground="gray")
+                    font=("", 8), foreground="gray")
         example_label.pack(anchor="w", padx=5)
 
         # Crea l'entry delle parole chiave e salvala come attributo dell'istanza
         self.keyword_entry = ttk.Entry(keyword_frame, textvariable=self.keywords)
         self.keyword_entry.pack(fill=X, padx=5)
-           
+        
         # Opzioni di ricerca
         options_frame = ttk.LabelFrame(main_frame, text="Opzioni di ricerca", padding="5")
         options_frame.pack(fill=X, pady=5)
         example_label = ttk.Label(options_frame, text="Seleziona una o più opzioni per la ricerca", 
-                       font=("", 8), foreground="gray")
+                    font=("", 8), foreground="gray")
         example_label.pack(anchor="w", padx=5)
         ttk.Checkbutton(options_frame, text="Cerca file", variable=self.search_files).pack(side=LEFT, padx=5)
         ttk.Checkbutton(options_frame, text="Cerca cartelle", variable=self.search_folders).pack(side=LEFT, padx=5)
         
         # Checkbox "Cerca nei contenuti" 
         content_checkbox = ttk.Checkbutton(options_frame, text="Cerca nei contenuti", 
-                                  variable=self.search_content, 
-                                  command=self.warn_content_search)
+                                    variable=self.search_content, 
+                                    command=self.warn_content_search)
         content_checkbox.pack(side=LEFT, padx=5)
         self.create_tooltip(content_checkbox, "Cerca le parole chiave anche all'interno dei file di testo")
 
@@ -1219,7 +1328,7 @@ class FileSearchApp:
         
         # Aggiungi pulsante per filtri avanzati
         ttk.Button(options_frame, text="Filtri avanzati", 
-                  command=self.show_advanced_filters_dialog).pack(side=RIGHT, padx=5)
+                command=self.show_advanced_filters_dialog).pack(side=RIGHT, padx=5)
         
         # Frame per le opzioni di performance e timeout
         perf_frame = ttk.LabelFrame(main_frame, text="Opzioni di Performance", padding="5")
@@ -1234,7 +1343,7 @@ class FileSearchApp:
         
         ttk.Label(timeout_frame, text="Secondi:").pack(side=LEFT, padx=(10, 5))
         timeout_spinbox = ttk.Spinbox(timeout_frame, from_=10, to=600, width=4, 
-                                     textvariable=self.timeout_seconds)
+                                    textvariable=self.timeout_seconds)
         timeout_spinbox.pack(side=LEFT)
         self.create_tooltip(timeout_cb, "Interrompe automaticamente la ricerca dopo il tempo specificato")
         
@@ -1244,7 +1353,7 @@ class FileSearchApp:
         
         ttk.Label(threads_frame, text="Thread:").pack(side=LEFT)
         threads_spinbox = ttk.Spinbox(threads_frame, from_=1, to=16, width=2, 
-                                     textvariable=self.worker_threads)
+                                    textvariable=self.worker_threads)
         threads_spinbox.pack(side=LEFT, padx=5)
         self.create_tooltip(threads_frame, "Numero di thread paralleli per la ricerca nei contenuti")
         
@@ -1254,7 +1363,7 @@ class FileSearchApp:
         
         ttk.Label(filesize_frame, text="Max file MB:").pack(side=LEFT)
         max_size_spinbox = ttk.Spinbox(filesize_frame, from_=1, to=1000, width=4,
-                                     textvariable=self.max_file_size_mb)
+                                    textvariable=self.max_file_size_mb)
         max_size_spinbox.pack(side=LEFT, padx=5)
         self.create_tooltip(filesize_frame, "Dimensione massima dei file da analizzare (in MB)")
         
@@ -1264,7 +1373,7 @@ class FileSearchApp:
         
         ttk.Label(max_results_frame, text="Max risultati:").pack(side=LEFT)
         max_results_spinbox = ttk.Spinbox(max_results_frame, from_=100, to=100000, width=6,
-                                         textvariable=self.max_results)
+                                        textvariable=self.max_results)
         max_results_spinbox.pack(side=LEFT, padx=5)
         self.create_tooltip(max_results_frame, "Numero massimo di risultati da mostrare")
         
@@ -1273,7 +1382,7 @@ class FileSearchApp:
         indexing_frame.pack(side=LEFT, padx=10)
         
         indexing_cb = ttk.Checkbutton(indexing_frame, text="Indicizzazione", 
-                                     variable=self.use_indexing)
+                                    variable=self.use_indexing)
         indexing_cb.pack(side=LEFT)
         self.create_tooltip(indexing_cb, "Memorizza i risultati per velocizzare ricerche future")
         
@@ -1283,25 +1392,25 @@ class FileSearchApp:
         
         # Pulsante di ricerca
         self.search_button = ttk.Button(button_frame, text="Cerca", 
-                                      command=self.start_search, 
-                                      style="primary.TButton")
+                                    command=self.start_search, 
+                                    style="primary.TButton")
         self.search_button.pack(side=LEFT, padx=5)
         
         # Pulsante per interrompere la ricerca
         self.stop_button = ttk.Button(button_frame, 
-                                     text="Interrompi ricerca",
-                                     command=self.stop_search_process,
-                                     style="danger.TButton",
-                                     state="disabled")
+                                    text="Interrompi ricerca",
+                                    command=self.stop_search_process,
+                                    style="danger.TButton",
+                                    state="disabled")
         self.stop_button.pack(side=LEFT, padx=5)
         
         # Pulsante per pulire i campi di ricerca
         ttk.Button(button_frame, 
-                  text="Pulisci campi", 
-                  command=lambda: [self.search_path.set(""), self.keywords.set("")],
-                  style="secondary.Outline.TButton").pack(side=LEFT, padx=5)
+                text="Pulisci campi", 
+                command=lambda: [self.search_path.set(""), self.keywords.set("")],
+                style="secondary.Outline.TButton").pack(side=LEFT, padx=5)
         
-# Frame separatore per migliorare la visualizzazione
+        # Frame separatore per migliorare la visualizzazione
         separator = ttk.Separator(main_frame, orient='horizontal')
         separator.pack(fill=X, pady=10)
         
@@ -1341,7 +1450,27 @@ class FileSearchApp:
                                     text="--:--", 
                                     font=("", 9, "bold"))
         self.end_time_label.pack(side=LEFT, padx=(5, 0))
-               
+        
+        # IMPORTANTE: Frame dedicato per lo stato dell'analisi con informazioni separate
+        analysis_frame = ttk.LabelFrame(main_frame, text="Stato analisi", padding="5")
+        analysis_frame.pack(fill=X, pady=(0, 10))
+
+        # Creiamo un layout a griglia per una separazione più chiara
+        analysis_frame.columnconfigure(0, weight=1)  # Colonna espandibile
+
+        # Label per il percorso corrente dell'analisi
+        ttk.Label(analysis_frame, text="Analisi:", font=("", 9, "bold")).grid(row=0, column=0, sticky="w", padx=5, pady=(5, 0))
+        self.status_label = ttk.Label(analysis_frame, text="In attesa...", justify=LEFT, wraplength=600)
+        self.status_label.grid(row=1, column=0, sticky="w", padx=5, pady=2)
+
+        # Separatore orizzontale tra le due sezioni
+        ttk.Separator(analysis_frame, orient='horizontal').grid(row=2, column=0, sticky="ew", pady=5, padx=5)
+
+        # Label per il contatore dei file analizzati
+        ttk.Label(analysis_frame, text="File analizzati:", font=("", 9, "bold")).grid(row=3, column=0, sticky="w", padx=5, pady=(0, 0))
+        self.analyzed_files_label = ttk.Label(analysis_frame, text="Nessuna ricerca avviata", justify=LEFT)
+        self.analyzed_files_label.grid(row=4, column=0, sticky="w", padx=5, pady=(0, 5))
+                
         # Area risultati
         results_frame = ttk.LabelFrame(main_frame, text="Risultati", padding="5")
         results_frame.pack(fill=BOTH, expand=YES, pady=5)
@@ -1352,11 +1481,11 @@ class FileSearchApp:
         
         # Pulsanti per la selezione
         ttk.Button(action_buttons_frame, text="Seleziona tutto", 
-                  command=self.select_all).pack(side=LEFT, padx=2)
+                command=self.select_all).pack(side=LEFT, padx=2)
         ttk.Button(action_buttons_frame, text="Deseleziona tutto", 
-                  command=self.deselect_all).pack(side=LEFT, padx=2)
+                command=self.deselect_all).pack(side=LEFT, padx=2)
         ttk.Button(action_buttons_frame, text="Inverti selezione", 
-                  command=self.invert_selection).pack(side=LEFT, padx=2)
+                command=self.invert_selection).pack(side=LEFT, padx=2)
         
         # Scrollbar per la lista risultati
         scrollbar = ttk.Scrollbar(results_frame)
@@ -1364,8 +1493,8 @@ class FileSearchApp:
         
         # Configura la Treeview
         self.results_list = ttk.Treeview(results_frame, selectmode="extended",
-                            columns=("type", "author", "size", "modified", "created", "path"),
-                            show="headings")
+                                columns=("type", "author", "size", "modified", "created", "path"),
+                                show="headings")
 
         # Imposta le colonne con larghezze appropriate e centraggio
         self.results_list.column("type", width=150, anchor="center")
@@ -1411,27 +1540,12 @@ class FileSearchApp:
                                         style="TButton")
         self.compress_button.pack(side=LEFT, padx=5)
         
-        # Frame della barra di stato (in basso)
-        status_frame = ttk.Frame(self.root)
-        status_frame.pack(fill=X, side=BOTTOM, pady=2)
+        # Progress bar (in fondo al frame principale)
+        progress_frame = ttk.Frame(main_frame)
+        progress_frame.pack(fill=X, pady=(10, 0))
         
-        # Frame info (sinistra)
-        info_frame = ttk.Frame(status_frame)
-        info_frame.pack(side=LEFT, fill=X, expand=YES, padx=5)
-        
-        # Status label (in basso a sinistra)
-        self.status_label = ttk.Label(info_frame, text="In attesa...", justify=LEFT)
-        self.status_label.pack(side=LEFT, padx=5)
-        
-        # DateTime e User label (in basso a destra)
-        ttk.Label(status_frame, textvariable=self.datetime_var).pack(side=RIGHT, padx=5)
-        
-        # Progress bar (sopra la barra di stato)
-        progress_frame = ttk.Frame(self.root)
-        progress_frame.pack(fill=X, side=BOTTOM, pady=(0, 2))
-        
-        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=200)
-        self.progress_bar.pack(fill=X, padx=5)
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
+        self.progress_bar.pack(fill=X)
         
         # Aggiungi tooltip ai pulsanti principali
         self.create_tooltip(self.search_button, "Avvia la ricerca con i criteri specificati")
