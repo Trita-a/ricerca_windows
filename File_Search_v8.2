@@ -1243,315 +1243,304 @@ class FileSearchApp:
         dialog.minsize(500, 400)
 
     def create_widgets(self):
-        # Frame principale che conterrà tutto tranne la barra di stato
+        """Crea e posiziona tutti i widget dell'interfaccia utente"""
+        # Configurazione principale
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        
+        # Frame principale che conterrà tutto
         main_container = ttk.Frame(self.root)
-        main_container.pack(fill=BOTH, expand=YES)
+        main_container.grid(row=0, column=0, sticky="nsew")
+        main_container.columnconfigure(0, weight=1)
+        main_container.rowconfigure(1, weight=1)  # La riga del notebook espandibile
         
-        # Frame principale per il contenuto
-        main_frame = ttk.Frame(main_container, padding="10")
-        main_frame.pack(fill=BOTH, expand=YES)
+        # ===== HEADER SECTION =====
+        header_frame = ttk.Frame(main_container)
+        header_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
+        header_frame.columnconfigure(1, weight=1)  # Colonna centrale espandibile
         
-        # Frame superiore per il titolo e informazioni data/utente
-        top_frame = ttk.Frame(main_frame)
-        top_frame.pack(fill=X, expand=False, pady=(0, 10))
-
-        # Label per la data e l'utente in alto a destra
-        datetime_label = ttk.Label(top_frame, textvariable=self.datetime_var, font=("Helvetica", 9))
-        datetime_label.pack(side=RIGHT, anchor=NE, padx=(0, 5))
-
-        # Se hai un titolo o altri elementi che devono stare in alto a sinistra, li puoi aggiungere così:
-        title_label = ttk.Label(top_frame, text="File Search Tool.. Nucleo Perugia", font=("Helvetica", 14, "bold"))
-        title_label.pack(side=LEFT, anchor=NW)
-
-        # Aggiungi selezione tema
-        theme_frame = ttk.Frame(main_frame)
-        theme_frame.pack(fill=X, pady=5)
+        # Logo e titolo a sinistra
+        title_label = ttk.Label(header_frame, text="File Search Tool.. Nucleo Perugia", font=("Helvetica", 14, "bold"))
+        title_label.grid(row=0, column=0, sticky="w")
         
-        ttk.Label(theme_frame, text="Tema:").pack(side=LEFT, padx=5)
-        themes = ttk.Style().theme_names()
-        theme_combobox = ttk.Combobox(theme_frame, values=themes, width=15)
-        theme_combobox.pack(side=LEFT, padx=5)
-        theme_combobox.current(themes.index("darkly"))
-        theme_combobox.bind("<<ComboboxSelected>>", lambda e: [ttk.Style().theme_use(theme_combobox.get()),self.update_theme_colors()])
+        # Data e ora a destra
+        datetime_label = ttk.Label(header_frame, textvariable=self.datetime_var, font=("Helvetica", 9))
+        datetime_label.grid(row=0, column=2, sticky="e", rowspan=2)
+        
+        # ===== NOTEBOOK (TABS) =====
+        # Importante: salviamo il riferimento al notebook come attributo della classe
+        self.notebook = ttk.Notebook(main_container)
+        self.notebook.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        
+        # ==== TAB 1: RICERCA ====
+        search_tab = ttk.Frame(self.notebook, padding=5)
+        self.notebook.add(search_tab, text="Ricerca")
+        search_tab.columnconfigure(0, weight=1)
         
         # Sezione selezione directory
-        path_frame = ttk.LabelFrame(main_frame, text="Directory di ricerca", padding="5")
-        path_frame.pack(fill=X, pady=5)
-    
+        path_frame = ttk.LabelFrame(search_tab, text="Directory di ricerca", padding=5)
+        path_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        path_frame.columnconfigure(0, weight=1)
+        
+        ttk.Label(path_frame, text="Seleziona la directory per effettuare la ricerca dei file", 
+                font=("", 8), foreground="gray").grid(row=0, column=0, columnspan=2, sticky="w")
+                
         self.path_entry = ttk.Entry(path_frame, textvariable=self.search_path)
-        example_label = ttk.Label(path_frame, text="Seleziona la directory per effettuare la ricerca dei file", 
-                    font=("", 8), foreground="gray")
-        example_label.pack(anchor="w", padx=5)
-        self.path_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
+        self.path_entry.grid(row=1, column=0, sticky="ew", padx=(0, 5))
         
-        ttk.Button(path_frame, text="Sfoglia", command=self.browse_directory).pack(side=LEFT, padx=5)
+        browse_btn = ttk.Button(path_frame, text="Sfoglia", command=self.browse_directory)
+        browse_btn.grid(row=1, column=1, sticky="e")
         
-        # Sezione keywords
-        keyword_frame = ttk.LabelFrame(main_frame, text="Parole chiave", padding="5")
-        keyword_frame.pack(fill=X, pady=5)
-
-        # Aggiungi il tooltip sulla casella delle parole chiave
-        example_label = ttk.Label(keyword_frame, text="Per la ricerca di più parole usa la virgola. Esempio: documento, fattura, contratto", 
-                    font=("", 8), foreground="gray")
-        example_label.pack(anchor="w", padx=5)
-
-        # Crea l'entry delle parole chiave e salvala come attributo dell'istanza
+        # Sezione parole chiave e opzioni in un frame unico
+        search_options_frame = ttk.Frame(search_tab)
+        search_options_frame.grid(row=1, column=0, sticky="ew", pady=5)
+        search_options_frame.columnconfigure(0, weight=1)
+        search_options_frame.columnconfigure(1, weight=1)
+        
+        # Parole chiave (prima colonna)
+        keyword_frame = ttk.LabelFrame(search_options_frame, text="Parole chiave", padding=5)
+        keyword_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 2.5))
+        keyword_frame.columnconfigure(0, weight=1)
+        
+        ttk.Label(keyword_frame, text="Separa le parole con virgole (es: documento, fattura)", 
+                font=("", 8), foreground="gray").grid(row=0, column=0, sticky="w")
+        
         self.keyword_entry = ttk.Entry(keyword_frame, textvariable=self.keywords)
-        self.keyword_entry.pack(fill=X, padx=5)
+        self.keyword_entry.grid(row=1, column=0, sticky="ew", pady=(0, 5))
         
-        # Opzioni di ricerca
-        options_frame = ttk.LabelFrame(main_frame, text="Opzioni di ricerca", padding="5")
-        options_frame.pack(fill=X, pady=5)
-        example_label = ttk.Label(options_frame, text="Seleziona una o più opzioni per la ricerca", 
-                    font=("", 8), foreground="gray")
-        example_label.pack(anchor="w", padx=5)
-        ttk.Checkbutton(options_frame, text="Cerca file", variable=self.search_files).pack(side=LEFT, padx=5)
-        ttk.Checkbutton(options_frame, text="Cerca cartelle", variable=self.search_folders).pack(side=LEFT, padx=5)
+        # Opzioni di ricerca (seconda colonna) - MODIFICATO PER UNA LINEA UNICA
+        options_frame = ttk.LabelFrame(search_options_frame, text="Opzioni di ricerca", padding=5)
+        options_frame.grid(row=0, column=1, sticky="nsew", padx=(2.5, 0))
         
-        # Checkbox "Cerca nei contenuti" 
-        content_checkbox = ttk.Checkbutton(options_frame, text="Cerca nei contenuti", 
-                                    variable=self.search_content, 
-                                    command=self.warn_content_search)
-        content_checkbox.pack(side=LEFT, padx=5)
+        # MODIFICATO: Tutti i componenti su una singola linea usando pack
+        options_inner_frame = ttk.Frame(options_frame)
+        options_inner_frame.pack(fill="x", expand=True)
+        
+        # Checkbox "Cerca file"
+        ttk.Checkbutton(options_inner_frame, text="Cerca file", variable=self.search_files).pack(side="left", padx=(0, 10))
+        
+        # Checkbox "Cerca cartelle"
+        ttk.Checkbutton(options_inner_frame, text="Cerca cartelle", variable=self.search_folders).pack(side="left", padx=(0, 10))
+        
+        # Checkbox "Cerca nei contenuti"
+        content_checkbox = ttk.Checkbutton(options_inner_frame, text="Cerca nei contenuti", 
+                                        variable=self.search_content, command=self.warn_content_search)
+        content_checkbox.pack(side="left", padx=(0, 10))
         self.create_tooltip(content_checkbox, "Cerca le parole chiave anche all'interno dei file di testo")
-
-        # Aggiungi un'opzione per limitare la profondità di ricerca
-        depth_frame = ttk.Frame(options_frame)
-        depth_frame.pack(side=RIGHT, padx=5)
         
-        ttk.Label(depth_frame, text="Profondità max:").pack(side=LEFT)
+        # Frame per profondità
+        depth_frame = ttk.Frame(options_inner_frame)
+        depth_frame.pack(side="left", padx=(0, 10))
         
-        self.depth_spinbox = ttk.Spinbox(depth_frame, from_=0, to=10, width=3)
-        self.depth_spinbox.pack(side=LEFT)
-        self.depth_spinbox.set("0")  # 0 significa illimitato
-        self.create_tooltip(self.depth_spinbox, "Limita la profondità di ricerca nelle sottocartelle.\n0 = Illimitato.\n1 = Cerca solo nella cartella selezionata e nelle sue sottocartelle immediate.")
+        ttk.Label(depth_frame, text="Profondità:").pack(side="left")
+        self.depth_spinbox = ttk.Spinbox(depth_frame, from_=0, to=10, width=2)
+        self.depth_spinbox.pack(side="left", padx=3)
+        self.depth_spinbox.set("0")
         
-        # Aggiungi pulsante per filtri avanzati
-        ttk.Button(options_frame, text="Filtri avanzati", 
-                command=self.show_advanced_filters_dialog).pack(side=RIGHT, padx=5)
+        # Pulsante filtri avanzati (ora sulla stessa riga)
+        advanced_btn = ttk.Button(options_inner_frame, text="Filtri avanzati", command=self.show_advanced_filters_dialog)
+        advanced_btn.pack(side="right")
         
-        # Frame per le opzioni di performance e timeout
-        perf_frame = ttk.LabelFrame(main_frame, text="Opzioni di Performance", padding="5")
-        perf_frame.pack(fill=X, pady=5)
+        # Pulsanti di ricerca
+        button_frame = ttk.Frame(search_tab)
+        button_frame.grid(row=2, column=0, sticky="ew", pady=5)
+        button_frame.columnconfigure(1, weight=1)  # Colonna centrale espandibile
         
-        # Opzione timeout
-        timeout_frame = ttk.Frame(perf_frame)
-        timeout_frame.pack(side=LEFT, padx=10, fill=X, expand=True)
+        # Pulsante primario di ricerca
+        self.search_button = ttk.Button(button_frame, text="Cerca", command=self.start_search, style="primary.TButton")
+        self.search_button.grid(row=0, column=0, padx=(0, 5))
+        
+        # Pulsante di stop
+        self.stop_button = ttk.Button(button_frame, text="Interrompi ricerca", command=self.stop_search_process, 
+                                    style="danger.TButton", state="disabled")
+        self.stop_button.grid(row=0, column=1, padx=5, sticky="w")
+        
+        # Pulsante per pulire i campi
+        ttk.Button(button_frame, text="Pulisci campi", command=lambda: [self.search_path.set(""), self.keywords.set("")],
+                style="secondary.Outline.TButton").grid(row=0, column=2, padx=5, sticky="e")
+        
+        # Barra di stato e progresso
+        status_frame = ttk.Frame(search_tab)
+        status_frame.grid(row=3, column=0, sticky="ew", pady=(5, 0))
+        status_frame.columnconfigure(0, weight=1)
+        
+        # Stato analisi attuale (compatto)
+        status_box = ttk.LabelFrame(status_frame, text="Stato ricerca")
+        status_box.grid(row=0, column=0, sticky="ew")
+        status_box.columnconfigure(1, weight=1)
+        
+        ttk.Label(status_box, text="Percorso:").grid(row=0, column=0, sticky="w", padx=(5, 2), pady=2)
+        self.status_label = ttk.Label(status_box, text="In attesa...", justify="left", wraplength=1000)
+        self.status_label.grid(row=0, column=1, sticky="w", padx=2, pady=2)
+        
+        ttk.Label(status_box, text="Analizzati:").grid(row=1, column=0, sticky="w", padx=(5, 2), pady=2)
+        self.analyzed_files_label = ttk.Label(status_box, text="Nessuna ricerca avviata", justify="left")
+        self.analyzed_files_label.grid(row=1, column=1, sticky="w", padx=2, pady=2)
+        
+        ttk.Label(status_box, text="Inizio:").grid(row=0, column=2, sticky="w", padx=(15, 2), pady=2)
+        self.start_time_label = ttk.Label(status_box, text="--:--", font=("", 9, "bold"))
+        self.start_time_label.grid(row=0, column=3, sticky="w", padx=2, pady=2)
+        
+        ttk.Label(status_box, text="Fine:").grid(row=1, column=2, sticky="w", padx=(15, 2), pady=2)
+        self.end_time_label = ttk.Label(status_box, text="--:--", font=("", 9, "bold"))
+        self.end_time_label.grid(row=1, column=3, sticky="w", padx=2, pady=2)
+        
+        # Progress bar
+        self.progress_bar = ttk.Progressbar(status_frame, mode='determinate')
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+        
+        # ==== TAB 2: RISULTATI ====
+        results_tab = ttk.Frame(self.notebook, padding=5)
+        self.notebook.add(results_tab, text="Risultati")
+        results_tab.columnconfigure(0, weight=1)
+        results_tab.rowconfigure(1, weight=1)
+        
+        # Salviamo il riferimento al tab dei risultati per poterlo selezionare in seguito
+        self.results_tab = results_tab
+        
+        # Pulsanti di gestione selezione
+        selection_frame = ttk.Frame(results_tab)
+        selection_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        
+        ttk.Button(selection_frame, text="Seleziona tutto", command=self.select_all).pack(side="left", padx=2)
+        ttk.Button(selection_frame, text="Deseleziona tutto", command=self.deselect_all).pack(side="left", padx=2)
+        ttk.Button(selection_frame, text="Inverti selezione", command=self.invert_selection).pack(side="left", padx=2)
+        
+        # Lista risultati con scrollbar
+        results_container = ttk.Frame(results_tab)
+        results_container.grid(row=1, column=0, sticky="nsew")
+        results_container.columnconfigure(0, weight=1)
+        results_container.rowconfigure(0, weight=1)
+        
+        # Scrollbar per la Treeview
+        scrollbar_y = ttk.Scrollbar(results_container, orient="vertical")
+        scrollbar_y.grid(row=0, column=1, sticky="ns")
+        
+        scrollbar_x = ttk.Scrollbar(results_container, orient="horizontal")
+        scrollbar_x.grid(row=1, column=0, sticky="ew")
+        
+        # Treeview per i risultati
+        self.results_list = ttk.Treeview(results_container, selectmode="extended", 
+                                        columns=("type", "author", "size", "modified", "created", "path"),
+                                        show="headings",
+                                        yscrollcommand=scrollbar_y.set,
+                                        xscrollcommand=scrollbar_x.set)
+        
+        # Configurazione colonne
+        column_configs = [
+            ("type", "Tipo File", 80, "center"),
+            ("author", "Nome File", 250, "w"),
+            ("size", "Dimensione", 80, "center"),
+            ("modified", "Modificato", 120, "center"),
+            ("created", "Creato", 120, "center"),
+            ("path", "Percorso", 500, "w")
+        ]
+        
+        for col_id, heading, width, anchor in column_configs:
+            self.results_list.column(col_id, width=width, anchor=anchor)
+            self.results_list.heading(col_id, text=heading)
+        
+        self.results_list.grid(row=0, column=0, sticky="nsew")
+        
+        # Configurazione scrollbar
+        scrollbar_y.config(command=self.results_list.yview)
+        scrollbar_x.config(command=self.results_list.xview)
+        
+        # Pulsanti di azione sui risultati
+        action_buttons_frame = ttk.Frame(results_tab)
+        action_buttons_frame.grid(row=2, column=0, sticky="ew", pady=(5, 0))
+        
+        self.copy_button = ttk.Button(action_buttons_frame, text="Copia selezionati",
+                                    command=self.copy_selected, style="TButton")
+        self.copy_button.pack(side="left", padx=5)
+        
+        self.compress_button = ttk.Button(action_buttons_frame, text="Comprimi selezionati",
+                                        command=self.compress_selected, style="TButton")
+        self.compress_button.pack(side="left", padx=5)
+        
+        # ==== TAB 3: IMPOSTAZIONI ====
+        settings_tab = ttk.Frame(self.notebook, padding=5)
+        self.notebook.add(settings_tab, text="Impostazioni")
+        settings_tab.columnconfigure(0, weight=1)
+        
+        # Tema
+        theme_frame = ttk.LabelFrame(settings_tab, text="Aspetto", padding=5)
+        theme_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        
+        ttk.Label(theme_frame, text="Tema:").pack(side="left", padx=5)
+        themes = ttk.Style().theme_names()
+        theme_combobox = ttk.Combobox(theme_frame, values=themes, width=15)
+        theme_combobox.pack(side="left", padx=5)
+        theme_combobox.current(themes.index("darkly") if "darkly" in themes else 0)
+        theme_combobox.bind("<<ComboboxSelected>>", lambda e: [ttk.Style().theme_use(theme_combobox.get()), self.update_theme_colors()])
+        
+        # Opzioni di Performance
+        perf_frame = ttk.LabelFrame(settings_tab, text="Performance", padding=5)
+        perf_frame.grid(row=1, column=0, sticky="ew", pady=5)
+        perf_frame.columnconfigure(0, weight=1)
+        perf_frame.columnconfigure(1, weight=1)
+        
+        # Colonna sinistra
+        perf_left = ttk.Frame(perf_frame)
+        perf_left.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        
+        # Timeout
+        timeout_frame = ttk.Frame(perf_left)
+        timeout_frame.pack(fill="x", pady=2)
         
         timeout_cb = ttk.Checkbutton(timeout_frame, text="Timeout ricerca", variable=self.timeout_enabled)
-        timeout_cb.pack(side=LEFT)
+        timeout_cb.pack(side="left")
         
-        ttk.Label(timeout_frame, text="Secondi:").pack(side=LEFT, padx=(10, 5))
-        timeout_spinbox = ttk.Spinbox(timeout_frame, from_=10, to=600, width=4, 
-                                    textvariable=self.timeout_seconds)
-        timeout_spinbox.pack(side=LEFT)
+        ttk.Label(timeout_frame, text="Secondi:").pack(side="left", padx=(10, 5))
+        timeout_spinbox = ttk.Spinbox(timeout_frame, from_=10, to=600, width=4, textvariable=self.timeout_seconds)
+        timeout_spinbox.pack(side="left")
         self.create_tooltip(timeout_cb, "Interrompe automaticamente la ricerca dopo il tempo specificato")
         
-        # Opzione thread paralleli
-        threads_frame = ttk.Frame(perf_frame)
-        threads_frame.pack(side=LEFT, padx=10)
+        # Thread
+        threads_frame = ttk.Frame(perf_left)
+        threads_frame.pack(fill="x", pady=2)
         
-        ttk.Label(threads_frame, text="Thread:").pack(side=LEFT)
-        threads_spinbox = ttk.Spinbox(threads_frame, from_=1, to=16, width=2, 
-                                    textvariable=self.worker_threads)
-        threads_spinbox.pack(side=LEFT, padx=5)
+        ttk.Label(threads_frame, text="Thread paralleli:").pack(side="left")
+        threads_spinbox = ttk.Spinbox(threads_frame, from_=1, to=16, width=2, textvariable=self.worker_threads)
+        threads_spinbox.pack(side="left", padx=5)
         self.create_tooltip(threads_frame, "Numero di thread paralleli per la ricerca nei contenuti")
         
-        # Opzione dimensione massima file
-        filesize_frame = ttk.Frame(perf_frame)
-        filesize_frame.pack(side=LEFT, padx=10)
+        # Colonna destra
+        perf_right = ttk.Frame(perf_frame)
+        perf_right.grid(row=0, column=1, sticky="ew", padx=(5, 0))
         
-        ttk.Label(filesize_frame, text="Max file MB:").pack(side=LEFT)
-        max_size_spinbox = ttk.Spinbox(filesize_frame, from_=1, to=1000, width=4,
-                                    textvariable=self.max_file_size_mb)
-        max_size_spinbox.pack(side=LEFT, padx=5)
+        # Dimensione massima file
+        filesize_frame = ttk.Frame(perf_right)
+        filesize_frame.pack(fill="x", pady=2)
+        
+        ttk.Label(filesize_frame, text="Dimensione max file:").pack(side="left")
+        max_size_spinbox = ttk.Spinbox(filesize_frame, from_=1, to=1000, width=4, textvariable=self.max_file_size_mb)
+        max_size_spinbox.pack(side="left", padx=5)
+        ttk.Label(filesize_frame, text="MB").pack(side="left")
         self.create_tooltip(filesize_frame, "Dimensione massima dei file da analizzare (in MB)")
         
-        # Opzione numero massimo di risultati
-        max_results_frame = ttk.Frame(perf_frame)
-        max_results_frame.pack(side=LEFT, padx=10)
+        # Numero massimo di risultati
+        max_results_frame = ttk.Frame(perf_right)
+        max_results_frame.pack(fill="x", pady=2)
         
-        ttk.Label(max_results_frame, text="Max risultati:").pack(side=LEFT)
-        max_results_spinbox = ttk.Spinbox(max_results_frame, from_=100, to=100000, width=6,
-                                        textvariable=self.max_results)
-        max_results_spinbox.pack(side=LEFT, padx=5)
+        ttk.Label(max_results_frame, text="Massimo risultati:").pack(side="left")
+        max_results_spinbox = ttk.Spinbox(max_results_frame, from_=100, to=100000, width=6, textvariable=self.max_results)
+        max_results_spinbox.pack(side="left", padx=5)
         self.create_tooltip(max_results_frame, "Numero massimo di risultati da mostrare")
         
         # Opzione indicizzazione
-        indexing_frame = ttk.Frame(perf_frame)
-        indexing_frame.pack(side=LEFT, padx=10)
+        indexing_frame = ttk.Frame(perf_right)
+        indexing_frame.pack(fill="x", pady=2)
         
-        indexing_cb = ttk.Checkbutton(indexing_frame, text="Indicizzazione", 
-                                    variable=self.use_indexing)
-        indexing_cb.pack(side=LEFT)
+        indexing_cb = ttk.Checkbutton(indexing_frame, text="Usa indicizzazione", variable=self.use_indexing)
+        indexing_cb.pack(side="left")
         self.create_tooltip(indexing_cb, "Memorizza i risultati per velocizzare ricerche future")
         
-        # Frame per i pulsanti di ricerca
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(pady=5)
-        
-        # Pulsante di ricerca
-        self.search_button = ttk.Button(button_frame, text="Cerca", 
-                                    command=self.start_search, 
-                                    style="primary.TButton")
-        self.search_button.pack(side=LEFT, padx=5)
-        
-        # Pulsante per interrompere la ricerca
-        self.stop_button = ttk.Button(button_frame, 
-                                    text="Interrompi ricerca",
-                                    command=self.stop_search_process,
-                                    style="danger.TButton",
-                                    state="disabled")
-        self.stop_button.pack(side=LEFT, padx=5)
-        
-        # Pulsante per pulire i campi di ricerca
-        ttk.Button(button_frame, 
-                text="Pulisci campi", 
-                command=lambda: [self.search_path.set(""), self.keywords.set("")],
-                style="secondary.Outline.TButton").pack(side=LEFT, padx=5)
-        
-        # Frame separatore per migliorare la visualizzazione
-        separator = ttk.Separator(main_frame, orient='horizontal')
-        separator.pack(fill=X, pady=10)
-        
-        # Nuovo frame per le etichette di tempo con stile migliorato
-        time_frame = ttk.LabelFrame(main_frame, text="Informazioni temporali", padding="5")
-        time_frame.pack(fill=X, pady=(0, 10))
-        
-        # Container interno per le etichette
-        time_labels_container = ttk.Frame(time_frame)
-        time_labels_container.pack(expand=True)
-        
-        # Frame per l'orario di avvio
-        start_time_frame = ttk.Frame(time_labels_container)
-        start_time_frame.pack(side=LEFT, padx=20)
-        
-        ttk.Label(start_time_frame, 
-                text="Avvio ricerca:", 
-                font=("", 9)).pack(side=LEFT)
-        
-        self.start_time_label = ttk.Label(start_time_frame, 
-                                        text="--:--", 
-                                        font=("", 9, "bold"))
-        self.start_time_label.pack(side=LEFT, padx=(5, 0))
-        
-        # Separatore verticale tra le etichette
-        ttk.Separator(time_labels_container, orient='vertical').pack(side=LEFT, fill=Y, padx=15)
-        
-        # Frame per l'orario di fine
-        end_time_frame = ttk.Frame(time_labels_container)
-        end_time_frame.pack(side=LEFT, padx=20)
-        
-        ttk.Label(end_time_frame, 
-                text="Fine ricerca:", 
-                font=("", 9)).pack(side=LEFT)
-        
-        self.end_time_label = ttk.Label(end_time_frame, 
-                                    text="--:--", 
-                                    font=("", 9, "bold"))
-        self.end_time_label.pack(side=LEFT, padx=(5, 0))
-        
-        # IMPORTANTE: Frame dedicato per lo stato dell'analisi con informazioni separate
-        analysis_frame = ttk.LabelFrame(main_frame, text="Stato analisi", padding="5")
-        analysis_frame.pack(fill=X, pady=(0, 10))
-
-        # Creiamo un layout a griglia per una separazione più chiara
-        analysis_frame.columnconfigure(0, weight=1)  # Colonna espandibile
-
-        # Label per il percorso corrente dell'analisi
-        ttk.Label(analysis_frame, text="Analisi:", font=("", 9, "bold")).grid(row=0, column=0, sticky="w", padx=5, pady=(5, 0))
-        self.status_label = ttk.Label(analysis_frame, text="In attesa...", justify=LEFT, wraplength=600)
-        self.status_label.grid(row=1, column=0, sticky="w", padx=5, pady=2)
-
-        # Separatore orizzontale tra le due sezioni
-        ttk.Separator(analysis_frame, orient='horizontal').grid(row=2, column=0, sticky="ew", pady=5, padx=5)
-
-        # Label per il contatore dei file analizzati
-        ttk.Label(analysis_frame, text="File analizzati:", font=("", 9, "bold")).grid(row=3, column=0, sticky="w", padx=5, pady=(0, 0))
-        self.analyzed_files_label = ttk.Label(analysis_frame, text="Nessuna ricerca avviata", justify=LEFT)
-        self.analyzed_files_label.grid(row=4, column=0, sticky="w", padx=5, pady=(0, 5))
-                
-        # Area risultati
-        results_frame = ttk.LabelFrame(main_frame, text="Risultati", padding="5")
-        results_frame.pack(fill=BOTH, expand=YES, pady=5)
-
-        # Frame per i pulsanti di azione
-        action_buttons_frame = ttk.Frame(results_frame)
-        action_buttons_frame.pack(fill=X, pady=(0, 5))
-        
-        # Pulsanti per la selezione
-        ttk.Button(action_buttons_frame, text="Seleziona tutto", 
-                command=self.select_all).pack(side=LEFT, padx=2)
-        ttk.Button(action_buttons_frame, text="Deseleziona tutto", 
-                command=self.deselect_all).pack(side=LEFT, padx=2)
-        ttk.Button(action_buttons_frame, text="Inverti selezione", 
-                command=self.invert_selection).pack(side=LEFT, padx=2)
-        
-        # Scrollbar per la lista risultati
-        scrollbar = ttk.Scrollbar(results_frame)
-        scrollbar.pack(side=RIGHT, fill=Y)
-        
-        # Configura la Treeview
-        self.results_list = ttk.Treeview(results_frame, selectmode="extended",
-                                columns=("type", "author", "size", "modified", "created", "path"),
-                                show="headings")
-
-        # Imposta le colonne con larghezze appropriate e centraggio
-        self.results_list.column("type", width=150, anchor="center")
-        self.results_list.column("author", width=100, anchor="w")
-        self.results_list.column("size", width=100, anchor="center")
-        self.results_list.column("modified", width=140, anchor="center")
-        self.results_list.column("created", width=140, anchor="center")
-        self.results_list.column("path", width=400, anchor="w")
-        
-        # Imposta le intestazioni
-        self.results_list.heading("type", text="Tipo File")
-        self.results_list.heading("author", text="Nome File")
-        self.results_list.heading("size", text="Dimensione")
-        self.results_list.heading("modified", text="Modificato")
-        self.results_list.heading("created", text="Creato")
-        self.results_list.heading("path", text="Percorso")
-
-        # Impostazione delle larghezze colonne
-        self.results_list.column("type", width=80)
-        self.results_list.column("author", width=250)
-        self.results_list.column("size", width=80)
-        self.results_list.column("modified", width=80)
-        self.results_list.column("created", width=80)
-        self.results_list.column("path", width=500)
-        
-        self.results_list.pack(fill=BOTH, expand=YES)
-        
-        scrollbar.config(command=self.results_list.yview)
-        self.results_list.config(yscrollcommand=scrollbar.set)
-        
-        # Frame per i pulsanti di azione principali
-        main_buttons_frame = ttk.Frame(main_frame)
-        main_buttons_frame.pack(fill=X, pady=5)
-        
-        # Pulsanti copia e comprimi
-        self.copy_button = ttk.Button(main_buttons_frame, text="Copia selezionati",
-                                    command=self.copy_selected,
-                                    style="TButton")
-        self.copy_button.pack(side=LEFT, padx=5)
-        
-        self.compress_button = ttk.Button(main_buttons_frame, text="Comprimi selezionati",
-                                        command=self.compress_selected,
-                                        style="TButton")
-        self.compress_button.pack(side=LEFT, padx=5)
-        
-        # Progress bar (in fondo al frame principale)
-        progress_frame = ttk.Frame(main_frame)
-        progress_frame.pack(fill=X, pady=(10, 0))
-        
-        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
-        self.progress_bar.pack(fill=X)
-        
-        # Aggiungi tooltip ai pulsanti principali
+        # Imposta i tooltip sui pulsanti principali
         self.create_tooltip(self.search_button, "Avvia la ricerca con i criteri specificati")
         self.create_tooltip(self.copy_button, "Copia i file selezionati nella directory specificata")
         self.create_tooltip(self.compress_button, "Comprimi i file selezionati in un archivio ZIP")
-    
+   
     # Avviso sulla spunta della ricerca dei contenuti
     def warn_content_search(self):
         """Mostra un avviso se l'utente attiva la ricerca nei contenuti"""
