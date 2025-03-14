@@ -1,4 +1,5 @@
 import os
+import sys  # Aggiungo l'import di sys
 import shutil
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -137,15 +138,19 @@ class FileSearchApp:
         # Verifica le librerie e mostra notifica se necessario
         self.check_and_notify_missing_libraries()
         self.debug_mode = True
-
-    # Gestione CTRL+C e chiusura
-    def handle_interrupt(sig, frame):
-        if self.is_searching:
-            self.stop_search_process()
-        else:
-            self.root.quit()
-
-    signal.signal(signal.SIGINT, handle_interrupt)
+        
+        # Registra handler per CTRL+C
+        self.register_interrupt_handler()
+    
+    def register_interrupt_handler(self):
+        """Registra il gestore degli interrupt (CTRL+C)"""
+        def handle_interrupt(sig, frame):
+            if self.is_searching:
+                self.stop_search_process()
+            else:
+                self.root.quit()
+        
+        signal.signal(signal.SIGINT, handle_interrupt)
 
     def log_debug(self, message):
         """Funzione per logging, stampa solo quando debug_mode è True"""
@@ -249,6 +254,487 @@ class FileSearchApp:
         # Avvia l'aggiornamento della progress bar
         self.update_progress()
 
+    def _search_thread(self, path, keywords, search_content):
+        """Thread per la ricerca file"""
+        try:
+            # Inizializza i contatori di file e directory esaminati e il tempo di inizio
+            files_checked = 0
+            dirs_checked = 0
+            start_time = time.time()
+            timeout = self.timeout_seconds.get() if self.timeout_enabled.get() else None
+            
+            # Determina se si tratta di una ricerca completa del sistema (C:/ o simile)
+            is_system_search = path.lower() in ["c:/", "c:\\", "d:/", "d:\\"] or path in [os.path.abspath("/")]
+            
+            # Per ricerche di sistema, adatta automaticamente i parametri se necessario
+            if is_system_search and self.max_depth == 0:
+                # Informa l'utente che la ricerca potrebbe richiedere molto tempo
+                self.progress_queue.put(("status", "Ricerca completa del sistema - potrebbe richiedere molto tempo"))
+                
+                # Temporaneamente aumenta i limiti per la ricerca di sistema
+                original_max_files = self.max_files_to_check.get()
+                self.max_files_to_check.set(1000000)  # Un milione di file
+                
+                # Disabilita temporaneamente il timeout se era breve
+                original_timeout = timeout
+                if timeout and timeout < 3600:  # Se il timeout è meno di un'ora
+                    timeout = 3600  # Imposta a un'ora
+                    
+                # Avviso all'utente
+                self.progress_queue.put(("status", "Ricerca completa avviata - parametri adattati per ricerca approfondita"))
+            
+            # Crea un executor per processare i file in parallelo
+            max_workers = self.worker_threads.get()
+            self.search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            futures = []
+            
+            # Insieme per tenere traccia delle cartelle visitate (evita loop infiniti con symlink)
+            visited_dirs = set()
+            
+            # Funzione per elaborare un file
+            def process_file(file_path, keywords):
+                if self.stop_search:
+                    return None
+                
+                try:
+                    # Verifica filtri di dimensione
+                    file_size = os.path.getsize(file_path)
+                    if (self.advanced_filters["size_min"] > 0 and file_size < self.advanced_filters["size_min"]) or \
+                    (self.advanced_filters["size_max"] > 0 and file_size > self.advanced_filters["size_max"]):
+                        return None
+                    
+                    # Verifica filtri di data
+                    if self.advanced_filters["date_min"] or self.advanced_filters["date_max"]:
+                        mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+                        mod_date_str = mod_time.strftime("%d-%m-%Y")
+                        
+                        if self.advanced_filters["date_min"]:
+                            min_date = datetime.strptime(self.advanced_filters["date_min"], "%d-%m-%Y")
+                            if mod_time < min_date:
+                                return None
+                                
+                        if self.advanced_filters["date_max"]:
+                            max_date = datetime.strptime(self.advanced_filters["date_max"], "%d-%m-%Y")
+                            if mod_time > max_date:
+                                return None
+                    
+                    # Verifica filtri estensione
+                    if self.advanced_filters["extensions"] and not any(file_path.lower().endswith(ext.lower()) 
+                                                                for ext in self.advanced_filters["extensions"]):
+                        return None
+                    
+                    # Verifica corrispondenza nel nome file
+                    filename = os.path.basename(file_path)
+                    if any(keyword.lower() in filename.lower() for keyword in keywords):
+                        return self.create_file_info(file_path)
+                    
+                    # Verifica contenuto se richiesto
+                    if search_content and self.should_search_content(file_path):
+                        max_size_bytes = self.max_file_size_mb.get() * 1024 * 1024
+                        
+                        # Salta file troppo grandi
+                        if file_size > max_size_bytes:
+                            self.log_debug(f"File {file_path} troppo grande per l'analisi del contenuto")
+                            return None
+                            
+                        content = self.get_file_content(file_path)
+                        if content and any(keyword.lower() in content.lower() for keyword in keywords):
+                            return self.create_file_info(file_path)
+                    
+                    return None
+                    
+                except Exception as e:
+                    self.log_debug(f"Errore durante l'elaborazione del file {file_path}: {str(e)}")
+                    return None
+            
+            # Funzione per visitare una directory
+            def visit_directory(directory, current_depth=0):
+                # CORREZIONE: Dichiarazioni nonlocal all'inizio della funzione
+                nonlocal dirs_checked, files_checked, visited_dirs
+                
+                if self.stop_search:
+                    return
+                    
+                # Verifica timeout
+                if timeout and time.time() - start_time > timeout:
+                    self.progress_queue.put(("timeout", "Timeout raggiunto"))
+                    return
+                
+                # Verifica limite di profondità (0 = illimitato)
+                if self.max_depth > 0 and current_depth > self.max_depth:
+                    return
+                    
+                # Evita di visitare directory già visitate (gestisce symlinks circolari)
+                real_path = os.path.realpath(directory)
+                if real_path in visited_dirs:
+                    return
+                visited_dirs.add(real_path)
+                
+                try:
+                    # Incrementa il contatore delle cartelle analizzate
+                    dirs_checked += 1
+                    
+                    # Aggiorna lo stato con il percorso corrente ogni 10 directory
+                    if dirs_checked % 10 == 0:
+                        elapsed_time = time.time() - start_time
+                        self.progress_queue.put(("status", 
+                            f"Analisi: {directory} (Cartelle: {dirs_checked}, File: {files_checked}, Tempo: {int(elapsed_time)}s)"))
+                    
+                    # Ottieni la lista delle cartelle e file
+                    try:
+                        items = os.listdir(directory)
+                    except PermissionError:
+                        self.log_debug(f"Permesso negato per la directory {directory}")
+                        return
+                    except Exception as e:
+                        self.log_debug(f"Errore nell'accesso alla directory {directory}: {str(e)}")
+                        return
+                    
+                    # Prima processa tutte le directory, poi i file (priorità alla profondità)
+                    directories = []
+                    for item in items:
+                        if self.stop_search:
+                            return
+                            
+                        item_path = os.path.join(directory, item)
+                        
+                        # Salta file/cartelle nascosti se richiesto
+                        try:
+                            if self.ignore_hidden.get() and (item.startswith('.') or 
+                                                    (os.name == 'nt' and os.path.exists(item_path) and 
+                                                        os.stat(item_path).st_file_attributes & 2)):
+                                continue
+                        except:
+                            continue  # Se non riesce a verificare, salta
+                        
+                        # Processa le cartelle separatamente per dare priorità alla profondità
+                        try:
+                            if os.path.isdir(item_path):
+                                directories.append(item_path)
+                                
+                                # Verifica corrispondenza nome cartella
+                                if self.search_folders.get():
+                                    if any(keyword.lower() in item.lower() for keyword in keywords):
+                                        folder_info = self.create_folder_info(item_path)
+                                        self.search_results.append(folder_info)
+                        except:
+                            continue
+                                
+                    # Processa i file
+                    for item in items:
+                        if self.stop_search:
+                            return
+                            
+                        item_path = os.path.join(directory, item)
+                        
+                        # Salta le directory (già processate)
+                        try:
+                            if os.path.isdir(item_path):
+                                continue
+                        except:
+                            continue
+                            
+                        # Processa i file
+                        if self.search_files.get():
+                            try:
+                                # Verifica limite file
+                                files_checked += 1
+                                if files_checked > self.max_files_to_check.get():
+                                    self.stop_search = True
+                                    self.progress_queue.put(("status", 
+                                        f"Limite di {self.max_files_to_check.get()} file controllati raggiunto. "
+                                        f"Aumenta il limite nelle opzioni per cercare più file."))
+                                    return
+                                    
+                                # Invia il file all'executor per elaborazione parallela
+                                future = self.search_executor.submit(process_file, item_path, keywords)
+                                futures.append(future)
+                                
+                                # Aggiorna progresso periodicamente
+                                if files_checked % 50 == 0:
+                                    elapsed_time = time.time() - start_time
+                                    self.progress_queue.put(("status", 
+                                        f"Analizzati {files_checked} file in {dirs_checked} cartelle (tempo: {int(elapsed_time)}s)"))
+                                    self.progress_queue.put(("progress", 
+                                        min(90, int(files_checked / self.max_files_to_check.get() * 100))))
+                            except:
+                                continue
+                    
+                    # Esplorazione ricorsiva delle directory trovate
+                    for dir_path in directories:
+                        if self.stop_search:
+                            return
+                        visit_directory(dir_path, current_depth + 1)
+                        
+                except PermissionError:
+                    self.log_debug(f"Permesso negato per la directory {directory}")
+                except Exception as e:
+                    self.log_debug(f"Errore durante l'analisi della directory {directory}: {str(e)}")
+            
+            # Aggiorna lo stato iniziale
+            self.progress_queue.put(("status", f"Inizio ricerca in: {path} (Profondità: {'illimitata' if self.max_depth == 0 else self.max_depth})"))
+            
+            # Avvia la ricerca
+            visit_directory(path)
+            
+            # Ripristina i parametri originali se erano stati modificati
+            if is_system_search and self.max_depth == 0:
+                self.max_files_to_check.set(original_max_files)
+            
+            # Aggiorna lo stato finale di analisi
+            self.progress_queue.put(("status", f"Elaborazione risultati... (analizzati {files_checked} file in {dirs_checked} cartelle)"))
+            
+            # Raccoglie i risultati dalle future
+            completed = 0
+            for future in concurrent.futures.as_completed(futures):
+                if self.stop_search:
+                    break
+                    
+                result = future.result()
+                if result:
+                    self.search_results.append(result)
+                
+                completed += 1
+                if completed % 100 == 0:
+                    progress = 90 + min(10, int((completed / max(1, len(futures))) * 10))
+                    self.progress_queue.put(("progress", progress))
+                    self.progress_queue.put(("status", f"Elaborati {completed}/{len(futures)} file..."))
+            
+            # Completa la ricerca
+            self.search_executor.shutdown()
+            self.search_executor = None
+            
+            # Riporta il risultato finale
+            elapsed_time = time.time() - start_time
+            self.progress_queue.put(("status", 
+                f"Ricerca completata! Analizzati {files_checked} file in {dirs_checked} cartelle in {int(elapsed_time)} secondi."))
+            
+            # Ordina i risultati per tipo e nome
+            self.search_results.sort(key=lambda x: (x[0], x[1]))
+            
+            self.log_debug(f"Ricerca completata. Trovati {len(self.search_results)} risultati")
+            self.progress_queue.put(("complete", "Ricerca completata"))
+            
+        except Exception as e:
+            error_msg = f"Si è verificato un errore durante la ricerca: {str(e)}\n{traceback.format_exc()}"
+            self.log_debug(error_msg)
+            self.progress_queue.put(("error", error_msg))
+
+    def create_file_info(self, file_path):
+        """Crea le informazioni del file per la visualizzazione"""
+        try:
+            file_size = os.path.getsize(file_path)
+            modified_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+            created_time = datetime.fromtimestamp(os.path.getctime(file_path))
+            file_name = os.path.basename(file_path)
+            file_extension = os.path.splitext(file_name)[1].lower()
+            
+            # Determina il tipo di file
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if mime_type:
+                file_type = mime_type.split('/')[0].capitalize()
+                if file_type == "Application":
+                    if "pdf" in mime_type:
+                        file_type = "PDF"
+                    elif "word" in mime_type or file_extension == ".docx" or file_extension == ".doc":
+                        file_type = "Word"
+                    elif "excel" in mime_type or file_extension in [".xlsx", ".xls"]:
+                        file_type = "Excel"
+                    elif "powerpoint" in mime_type or file_extension in [".pptx", ".ppt"]:
+                        file_type = "PowerPoint"
+                    else:
+                        file_type = "Documento"
+            else:
+                # Fallback basato sull'estensione
+                if file_extension in ['.txt', '.md', '.rtf']:
+                    file_type = "Testo"
+                elif file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+                    file_type = "Immagine"
+                elif file_extension in ['.mp3', '.wav', '.ogg', '.flac']:
+                    file_type = "Audio"
+                elif file_extension in ['.mp4', '.avi', '.mkv', '.mov']:
+                    file_type = "Video"
+                elif file_extension in ['.exe', '.dll', '.bat']:
+                    file_type = "Eseguibile"
+                else:
+                    file_type = "File"
+            
+            # Formatta dimensione file
+            if file_size < 1024:
+                size_str = f"{file_size} B"
+            elif file_size < 1024 * 1024:
+                size_str = f"{file_size / 1024:.1f} KB"
+            else:
+                size_str = f"{file_size / (1024 * 1024):.1f} MB"
+            
+            return (
+                file_type,
+                file_name,
+                size_str,
+                modified_time.strftime('%d/%m/%Y %H:%M'),
+                created_time.strftime('%d/%m/%Y %H:%M'),
+                file_path
+            )
+        except Exception as e:
+            self.log_debug(f"Errore nel creare le informazioni del file {file_path}: {str(e)}")
+            return (
+                "File",
+                os.path.basename(file_path),
+                "N/A",
+                "N/A",
+                "N/A",
+                file_path
+            )
+
+    def create_folder_info(self, folder_path):
+        """Crea le informazioni della cartella per la visualizzazione"""
+        try:
+            modified_time = datetime.fromtimestamp(os.path.getmtime(folder_path))
+            created_time = datetime.fromtimestamp(os.path.getctime(folder_path))
+            folder_name = os.path.basename(folder_path)
+            
+            return (
+                "Directory",
+                folder_name,
+                "",  # Le cartelle non hanno dimensione
+                modified_time.strftime('%d/%m/%Y %H:%M'),
+                created_time.strftime('%d/%m/%Y %H:%M'),
+                folder_path
+            )
+        except Exception as e:
+            self.log_debug(f"Errore nel creare le informazioni della cartella {folder_path}: {str(e)}")
+            return (
+                "Directory",
+                os.path.basename(folder_path),
+                "",
+                "N/A",
+                "N/A",
+                folder_path
+            )
+            
+    def should_search_content(self, file_path):
+        """Determina se il contenuto del file dovrebbe essere analizzato"""
+        ext = os.path.splitext(file_path)[1].lower()
+        
+        # Verifica direttamente i tipi di file supportati per la ricerca nei contenuti
+        return (
+            (ext == '.txt') or
+            (ext == '.md') or
+            (ext == '.csv') or
+            (ext == '.html') or
+            (ext == '.htm') or
+            (ext == '.xml') or
+            (ext == '.json') or
+            (ext == '.log') or
+            (ext in ['.doc', '.docx'] and file_format_support["docx"]) or
+            (ext == '.pdf' and file_format_support["pdf"]) or
+            (ext in ['.ppt', '.pptx'] and file_format_support["pptx"]) or
+            (ext in ['.xls', '.xlsx'] and file_format_support["excel"]) or
+            (ext == '.rtf' and file_format_support["rtf"]) or
+            (ext == '.odt' and file_format_support["odt"])
+        )
+
+    def get_file_content(self, file_path):
+        """Ottiene il contenuto del file in base all'estensione"""
+        try:
+            ext = os.path.splitext(file_path)[1].lower()
+            
+            # File di testo semplice
+            if ext in ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log']:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        return f.read()
+                except UnicodeDecodeError:
+                    # Fallback su altre codifiche
+                    try:
+                        with open(file_path, 'r', encoding='latin-1') as f:
+                            return f.read()
+                    except:
+                        self.log_debug(f"Impossibile leggere il file {file_path} con le codifiche standard")
+                        return ""
+            
+            # Word document
+            elif ext in ['.docx', '.doc'] and file_format_support["docx"]:
+                try:
+                    doc = docx.Document(file_path)
+                    return "\n".join([para.text for para in doc.paragraphs])
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura del documento Word {file_path}: {str(e)}")
+                    return ""
+            
+            # PDF
+            elif ext == '.pdf' and file_format_support["pdf"]:
+                try:
+                    content = []
+                    with open(file_path, 'rb') as f:
+                        reader = PyPDF2.PdfReader(f)
+                        for page_num in range(min(10, len(reader.pages))):  # Limite di 10 pagine per prestazioni
+                            page = reader.pages[page_num]
+                            content.append(page.extract_text())
+                    return "\n".join(content)
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura del PDF {file_path}: {str(e)}")
+                    return ""
+            
+            # PowerPoint
+            elif ext in ['.pptx', '.ppt'] and file_format_support["pptx"]:
+                try:
+                    prs = pptx.Presentation(file_path)
+                    text = []
+                    for slide in prs.slides:
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text"):
+                                text.append(shape.text)
+                    return "\n".join(text)
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura della presentazione {file_path}: {str(e)}")
+                    return ""
+            
+            # Excel
+            elif ext in ['.xlsx', '.xls'] and file_format_support["excel"]:
+                try:
+                    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+                    texts = []
+                    for sheet_name in wb.sheetnames[:5]:  # Limita a 5 fogli per prestazioni
+                        sheet = wb[sheet_name]
+                        for row in sheet.iter_rows(max_row=100):  # Limita a 100 righe per prestazioni
+                            row_texts = [str(cell.value) for cell in row if cell.value is not None]
+                            texts.append(" ".join(row_texts))
+                    return "\n".join(texts)
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura del foglio Excel {file_path}: {str(e)}")
+                    return ""
+            
+            # RTF
+            elif ext == '.rtf' and file_format_support["rtf"]:
+                try:
+                    with open(file_path, 'r', encoding='latin-1') as f:
+                        rtf_text = f.read()
+                    return rtf_to_text(rtf_text)
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura del file RTF {file_path}: {str(e)}")
+                    return ""
+                    
+            # ODT (OpenDocument Text)
+            elif ext == '.odt' and file_format_support["odt"]:
+                try:
+                    # Prova prima con odfdo
+                    if 'odfdo' in sys.modules:
+                        doc = odfdo.Document(file_path)
+                        return doc.get_formatted_text()
+                    # Fallback su odf
+                    else:
+                        textdoc = opendocument.load(file_path)
+                        allparas = textdoc.getElementsByType(text.P)
+                        return "\n".join([teletype.extractText(para) for para in allparas])
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura del file ODT {file_path}: {str(e)}")
+                    return ""
+            return ""  # Tipo di file non supportato
+        except Exception as e:
+            self.log_debug(f"Errore generale nella lettura del file {file_path}: {str(e)}")
+            return ""
+        
     def update_progress(self):
         if self.is_searching:
             try:
@@ -312,6 +798,217 @@ class FileSearchApp:
         # Aggiorna l'orario di fine quando la ricerca viene interrotta
         self.search_button["state"] = "normal"
         self.stop_button["state"] = "disabled"
+
+    def update_results_list(self):
+        """Aggiorna la lista dei risultati con i risultati trovati"""
+        # Pulisci la lista attuale
+        for item in self.results_list.get_children():
+            self.results_list.delete(item)
+            
+        # Aggiungi i risultati alla lista
+        for result in self.search_results:
+            item_type, name, size, modified, created, path = result
+            
+            # Applica stile in base al tipo di elemento
+            if item_type == "Directory":
+                tags = ("directory",)
+            else:
+                tags = ("file",)
+                
+            self.results_list.insert("", "end", values=result, tags=tags)
+            
+        # Aggiorna lo stato
+        self.status_label["text"] = f"Trovati {len(self.search_results)} risultati"
+        
+    def update_theme_colors(self):
+        """Aggiorna i colori del tema per evidenziare cartelle e file"""
+        style = ttk.Style()
+        
+        # Colori per cartelle
+        style.configure("Treeview", rowheight=25)
+        
+        # Configurazione tag per directory
+        self.results_list.tag_configure("directory", background="#e6f2ff")
+        
+        # Configurazione tag per file
+        self.results_list.tag_configure("file", background="#ffffff")
+
+    def copy_selected(self):
+        """Copia i file selezionati in una directory di destinazione"""
+        selected_items = self.results_list.selection()
+        if not selected_items:
+            messagebox.showwarning("Attenzione", "Seleziona almeno un elemento da copiare")
+            return
+            
+        # Chiedi la directory di destinazione
+        dest_dir = filedialog.askdirectory(title="Seleziona la cartella di destinazione")
+        if not dest_dir:
+            return
+            
+        # Prepara variabili per tracciare l'avanzamento
+        total = len(selected_items)
+        copied = 0
+        failed = 0
+        skipped = 0
+        
+        try:
+            for item in selected_items:
+                values = self.results_list.item(item)['values']
+                item_type, _, _, _, _, source_path = values
+                
+                # Ottieni il nome dell'elemento senza il percorso completo
+                basename = os.path.basename(source_path)
+                dest_path = os.path.join(dest_dir, basename)
+                
+                try:
+                    if item_type == "Directory":
+                        # Se la cartella esiste già nella destinazione
+                        if os.path.exists(dest_path):
+                            if messagebox.askyesno("Cartella esistente", 
+                                                f"La cartella {basename} esiste già. Vuoi sovrascriverla?"):
+                                # Elimina la cartella esistente
+                                shutil.rmtree(dest_path)
+                            else:
+                                skipped += 1
+                                continue
+                                
+                        # Copia ricorsiva della cartella
+                        shutil.copytree(source_path, dest_path)
+                        copied += 1
+                    else:
+                        # Se il file esiste già nella destinazione
+                        if os.path.exists(dest_path):
+                            if messagebox.askyesno("File esistente", 
+                                                f"Il file {basename} esiste già. Vuoi sovrascriverlo?"):
+                                # Continua con la sovrascrittura
+                                pass
+                            else:
+                                skipped += 1
+                                continue
+                                
+                        # Copia il file
+                        shutil.copy2(source_path, dest_path)
+                        copied += 1
+                        
+                except Exception as e:
+                    failed += 1
+                    self.log_debug(f"Errore durante la copia di {source_path}: {str(e)}")
+                    
+                # Aggiorna la barra di avanzamento
+                progress = ((copied + failed + skipped) / total) * 100
+                self.progress_bar["value"] = progress
+                self.status_label["text"] = f"Copiati {copied}/{total} elementi..."
+                self.root.update()
+                
+            # Messaggio di completamento
+            if failed > 0:
+                messagebox.showwarning("Copia completata con errori", 
+                                    f"Copiati: {copied}\nSaltati: {skipped}\nFalliti: {failed}")
+            else:
+                messagebox.showinfo("Copia completata", 
+                                 f"Copiati con successo: {copied}\nSaltati: {skipped}")
+                
+        except Exception as e:
+            messagebox.showerror("Errore", f"Si è verificato un errore durante l'operazione: {str(e)}")
+            
+        finally:
+            self.progress_bar["value"] = 0
+            self.status_label["text"] = "In attesa..."
+
+    def compress_selected(self):
+        selected_items = self.results_list.selection()
+        if not selected_items:
+            messagebox.showwarning("Attenzione", "Seleziona almeno un elemento da comprimere")
+            return
+            
+        zip_name = Querybox.get_string(
+            prompt="Inserisci il nome del file ZIP (senza estensione):",
+            title="Nome file ZIP",
+            initialvalue="archivio"
+        )
+        
+        if not zip_name:
+            return
+            
+        zip_path = filedialog.asksaveasfilename(
+            defaultextension=".zip",
+            initialfile=f"{zip_name}.zip",
+            filetypes=[("ZIP files", "*.zip")],
+            title="Salva file ZIP"
+        )
+        
+        if not zip_path:
+            return
+            
+        # Raccogli tutti i file delle cartelle selezionate
+        files_in_folders = set()
+        folder_paths = []
+        single_files = []
+        
+        # Prima fase: raccogli informazioni su cartelle e file
+        for item in selected_items:
+            values = self.results_list.item(item)['values']
+            item_type, _, _, _, _, source_path = values
+            
+            if item_type == "Directory":
+                folder_paths.append(source_path)
+                # Raccogli tutti i file nelle cartelle selezionate
+                for root, _, files in os.walk(source_path):
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        files_in_folders.add(os.path.abspath(full_path))
+            else:
+                single_files.append(source_path)
+        
+        # Filtra i file singoli che sono già presenti nelle cartelle
+        filtered_single_files = [f for f in single_files if os.path.abspath(f) not in files_in_folders]
+        
+        total_items = len(folder_paths) + len(filtered_single_files)
+        processed = 0
+        
+        try:
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Prima comprimi le cartelle
+                for folder_path in folder_paths:
+                    base_folder = os.path.basename(folder_path)
+                    for root, _, files in os.walk(folder_path):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            # Mantieni la struttura delle cartelle nel zip
+                            rel_path = os.path.relpath(file_path, os.path.dirname(folder_path))
+                            zipf.write(file_path, rel_path)
+                    
+                    processed += 1
+                    progress = (processed / total_items) * 100
+                    self.progress_bar["value"] = progress
+                    self.status_label["text"] = f"Compressi {processed} di {total_items} elementi"
+                    self.root.update()
+                
+                # Poi comprimi i file singoli (solo quelli non già presenti nelle cartelle)
+                for file_path in filtered_single_files:
+                    if os.path.exists(file_path):  # Verifica che il file esista ancora
+                        zipf.write(file_path, os.path.basename(file_path))
+                        
+                    processed += 1
+                    progress = (processed / total_items) * 100
+                    self.progress_bar["value"] = progress
+                    self.status_label["text"] = f"Compressi {processed} di {total_items} elementi"
+                    self.root.update()
+            
+            # Prepara il messaggio di completamento
+            skipped_files = len(single_files) - len(filtered_single_files)
+            message = f"Compressione completata!\nFile salvato in: {zip_path}"
+            if skipped_files > 0:
+                message += f"\n{skipped_files} file saltati perché già presenti nelle cartelle"
+                
+            messagebox.showinfo("Completato", message)
+            
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore durante la compressione: {str(e)}")
+            
+        finally:
+            self.progress_bar["value"] = 0
+            self.status_label["text"] = "In attesa..."
 
     def show_advanced_filters_dialog(self):
         """Mostra la finestra di dialogo per i filtri di ricerca avanzati"""
@@ -518,7 +1215,7 @@ class FileSearchApp:
         self.depth_spinbox = ttk.Spinbox(depth_frame, from_=0, to=10, width=3)
         self.depth_spinbox.pack(side=LEFT)
         self.depth_spinbox.set("0")  # 0 significa illimitato
-        self.create_tooltip(self.depth_spinbox, "Limita la profondità di ricerca nelle sottocartelle.\n0 = Illimitato.\n1 = Cerca solo nella cartella selezionata e nelle sue sottocartelle immediate.\n10 = Cerca fino a 10 livelli di sottocartelle.")
+        self.create_tooltip(self.depth_spinbox, "Limita la profondità di ricerca nelle sottocartelle.\n0 = Illimitato.\n1 = Cerca solo nella cartella selezionata e nelle sue sottocartelle immediate.")
         
         # Aggiungi pulsante per filtri avanzati
         ttk.Button(options_frame, text="Filtri avanzati", 
@@ -604,7 +1301,7 @@ class FileSearchApp:
                   command=lambda: [self.search_path.set(""), self.keywords.set("")],
                   style="secondary.Outline.TButton").pack(side=LEFT, padx=5)
         
-        # Frame separatore per migliorare la visualizzazione
+# Frame separatore per migliorare la visualizzazione
         separator = ttk.Separator(main_frame, orient='horizontal')
         separator.pack(fill=X, pady=10)
         
@@ -903,1174 +1600,16 @@ class FileSearchApp:
         for item in to_select:
             self.results_list.selection_add(item)
 
-    def compress_selected(self):
-        selected_items = self.results_list.selection()
-        if not selected_items:
-            messagebox.showwarning("Attenzione", "Seleziona almeno un elemento da comprimere")
-            return
-            
-        zip_name = Querybox.get_string(
-            prompt="Inserisci il nome del file ZIP (senza estensione):",
-            title="Nome file ZIP",
-            initialvalue="archivio"
-        )
-        
-        if not zip_name:
-            return
-            
-        zip_path = filedialog.asksaveasfilename(
-            defaultextension=".zip",
-            initialfile=f"{zip_name}.zip",
-            filetypes=[("ZIP files", "*.zip")],
-            title="Salva file ZIP"
-        )
-        
-        if not zip_path:
-            return
-            
-        # Raccogli tutti i file delle cartelle selezionate
-        files_in_folders = set()
-        folder_paths = []
-        single_files = []
-        
-        # Prima fase: raccogli informazioni su cartelle e file
-        for item in selected_items:
-            values = self.results_list.item(item)['values']
-            item_type, _, _, _, _, source_path = values
-            
-            if item_type == "Directory":
-                folder_paths.append(source_path)
-                # Raccogli tutti i file nelle cartelle selezionate
-                for root, _, files in os.walk(source_path):
-                    for file in files:
-                        full_path = os.path.join(root, file)
-                        files_in_folders.add(os.path.abspath(full_path))
-            else:
-                single_files.append(source_path)
-        
-        # Filtra i file singoli che sono già presenti nelle cartelle
-        filtered_single_files = [f for f in single_files if os.path.abspath(f) not in files_in_folders]
-        
-        total_items = len(folder_paths) + len(filtered_single_files)
-        processed = 0
-        
-        try:
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Prima comprimi le cartelle
-                for folder_path in folder_paths:
-                    base_folder = os.path.basename(folder_path)
-                    for root, _, files in os.walk(folder_path):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            # Mantieni la struttura delle cartelle nel zip
-                            rel_path = os.path.relpath(file_path, os.path.dirname(folder_path))
-                            zipf.write(file_path, rel_path)
-                    
-                    processed += 1
-                    progress = (processed / total_items) * 100
-                    self.progress_bar["value"] = progress
-                    self.status_label["text"] = f"Compressi {processed} di {total_items} elementi"
-                    self.root.update()
-                
-                # Poi comprimi i file singoli (solo quelli non già presenti nelle cartelle)
-                for file_path in filtered_single_files:
-                    if os.path.exists(file_path):  # Verifica che il file esista ancora
-                        zipf.write(file_path, os.path.basename(file_path))
-                        
-                    processed += 1
-                    progress = (processed / total_items) * 100
-                    self.progress_bar["value"] = progress
-                    self.status_label["text"] = f"Compressi {processed} di {total_items} elementi"
-                    self.root.update()
-            
-            # Prepara il messaggio di completamento
-            skipped_files = len(single_files) - len(filtered_single_files)
-            message = f"Compressione completata!\nFile salvato in: {zip_path}"
-            if skipped_files > 0:
-                message += f"\n{skipped_files} file saltati perché già presenti nelle cartelle"
-                
-            messagebox.showinfo("Completato", message)
-            
-        except Exception as e:
-            messagebox.showerror("Errore", f"Errore durante la compressione: {str(e)}")
-            
-        finally:
-            self.progress_bar["value"] = 0
-            self.status_label["text"] = "In attesa..."
-
-    def copy_selected(self):
-        selected_items = self.results_list.selection()
-        if not selected_items:
-            messagebox.showwarning("Attenzione", "Seleziona almeno un elemento da copiare")
-            return
-                
-        dest_dir = filedialog.askdirectory(title="Seleziona directory di destinazione")
-        if not dest_dir:
-            return
-            
-        # Conteggio elementi
-        total = len(selected_items)
-        processed = 0
-        errors = []
-        
-        self.progress_bar["value"] = 0
-        self.status_label["text"] = "Avvio copia..."
-        self.root.update()
-        
-        try:
-            for item in selected_items:
-                values = self.results_list.item(item)['values']
-                item_type, _, _, _, _, source_path = values
-                
-                # Assicurati che il percorso esista ancora
-                if not os.path.exists(source_path):
-                    errors.append(f"Percorso non trovato: {source_path}")
-                    continue
-                    
-                # Nome del file o cartella
-                basename = os.path.basename(source_path)
-                destination = os.path.join(dest_dir, basename)
-                
-                # Gestione dei percorsi duplicati
-                if os.path.exists(destination):
-                    counter = 1
-                    name, ext = os.path.splitext(basename)
-                    while os.path.exists(os.path.join(dest_dir, f"{name}_{counter}{ext}")):
-                        counter += 1
-                    destination = os.path.join(dest_dir, f"{name}_{counter}{ext}")
-                
-                try:
-                    if item_type == "Directory":
-                        shutil.copytree(source_path, destination)
-                    else:
-                        shutil.copy2(source_path, destination)
-                except Exception as e:
-                    errors.append(f"Errore durante la copia di {source_path}: {str(e)}")
-                    
-                processed += 1
-                progress = (processed / total) * 100
-                self.progress_bar["value"] = progress
-                self.status_label["text"] = f"Copiati {processed} di {total} elementi"
-                self.root.update()
-                
-            if errors:
-                error_message = "Completato con errori:\n\n" + "\n".join(errors[:10])
-                if len(errors) > 10:
-                    error_message += f"\n\n... e altri {len(errors) - 10} errori."
-                messagebox.showwarning("Attenzione", error_message)
-            else:
-                messagebox.showinfo("Completato", f"Copia completata con successo!\n{processed} elementi copiati in:\n{dest_dir}")
-                
-        except Exception as e:
-            messagebox.showerror("Errore", f"Errore durante il processo di copia: {str(e)}")
-            
-        finally:
-            self.progress_bar["value"] = 0
-            self.status_label["text"] = "In attesa..."
-
-    def _search_thread(self, search_path, search_terms, search_content=False):
-        """Thread principale di ricerca"""
-        try:
-            # Inizializza l'executor per la ricerca parallela nei contenuti
-            max_workers = self.worker_threads.get()
-            self.search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-            futures = []
-            
-            # Contatori per statistiche
-            files_checked = 0
-            dirs_checked = 0
-            start_time = time.time()
-            timeout = self.timeout_seconds.get() if self.timeout_enabled.get() else 0
-            
-            # Segnala avvio ricerca
-            self.progress_queue.put(("status", "Ricerca avviata..."))
-            
-            # Filtri avanzati
-            min_size = self.advanced_filters["size_min"]
-            max_size = self.advanced_filters["size_max"]
-            min_date_str = self.advanced_filters["date_min"]
-            max_date_str = self.advanced_filters["date_max"]
-            extensions = self.advanced_filters["extensions"]
-            
-            # Converti stringhe di date in oggetti datetime
-            min_date = None
-            max_date = None
-            
-            if min_date_str:
-                try:
-                    min_date = datetime.strptime(min_date_str, "%d-%m-%Y")
-                except ValueError:
-                    self.log_debug(f"Data minima non valida: {min_date_str}")
-            
-            if max_date_str:
-                try:
-                    max_date = datetime.strptime(max_date_str, "%d-%m-%Y")
-                    # Imposta l'ora alla fine della giornata
-                    max_date = datetime.combine(max_date.date(), datetime.max.time())
-                except ValueError:
-                    self.log_debug(f"Data massima non valida: {max_date_str}")
-            
-            # Funzioni helper per la ricerca
-            def check_file_match(file_path, file_name, size, modified_time):
-                """Verifica se un file corrisponde ai criteri di ricerca base senza analizzare il contenuto"""
-                # Verifica estensione
-                if extensions and not any(file_name.lower().endswith(ext.lower()) for ext in extensions):
-                    return False
-                
-                # Verifica dimensione
-                if min_size > 0 and size < min_size:
-                    return False
-                if max_size > 0 and size > max_size:
-                    return False
-                
-                # Verifica data
-                if min_date and modified_time < min_date:
-                    return False
-                if max_date and modified_time > max_date:
-                    return False
-                
-                # Verifica parole chiave nel nome
-                if not any(term.lower() in file_name.lower() for term in search_terms):
-                    # Se le parole chiave non sono nel nome, verifica se dobbiamo cercare nei contenuti
-                    if not search_content:
-                        return False
-                    # Se dobbiamo cercare nei contenuti, restituisci True per continuare la verifica
-                    return True
-                
-                # Se arriviamo qui, il file corrisponde ai criteri di base
-                return True
-            
-            def search_in_file_content(file_path, file_ext):
-                """Cerca nei contenuti del file basandosi sull'estensione"""
-                try:
-                    # Controlla la dimensione del file
-                    file_size = os.path.getsize(file_path)
-                    max_size_bytes = self.max_file_size_mb.get() * 1024 * 1024
-                    
-                    if file_size > max_size_bytes:
-                        return False
-                    
-                    # Cerca nei vari tipi di file supportati
-                    ext_lower = file_ext.lower()
-                    
-                    # File di testo semplice
-                    if ext_lower in ['.txt', '.log', '.md', '.csv', '.json', '.xml', '.html', '.htm']:
-                        try:
-                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                content = f.read()
-                                return any(term.lower() in content.lower() for term in search_terms)
-                        except Exception as e:
-                            self.log_debug(f"Errore lettura file {file_path}: {str(e)}")
-                            return False
-                    
-                    # File Word (.docx)
-                    elif ext_lower == '.docx' and file_format_support["docx"]:
-                        try:
-                            doc = docx.Document(file_path)
-                            text = " ".join([paragraph.text for paragraph in doc.paragraphs])
-                            return any(term.lower() in text.lower() for term in search_terms)
-                        except Exception as e:
-                            self.log_debug(f"Errore lettura DOCX {file_path}: {str(e)}")
-                            return False
-                    
-                    # File PDF
-                    elif ext_lower == '.pdf' and file_format_support["pdf"]:
-                        try:
-                            with open(file_path, 'rb') as f:
-                                reader = PyPDF2.PdfFileReader(f)
-                                text = ""
-                                for page_num in range(reader.numPages):
-                                    try:
-                                        text += reader.getPage(page_num).extractText()
-                                    except:
-                                        pass
-                                return any(term.lower() in text.lower() for term in search_terms)
-                        except Exception as e:
-                            self.log_debug(f"Errore lettura PDF {file_path}: {str(e)}")
-                            return False
-                    
-                    # File PowerPoint
-                    elif ext_lower == '.pptx' and file_format_support["pptx"]:
-                        try:
-                            presentation = pptx.Presentation(file_path)
-                            text = ""
-                            for slide in presentation.slides:
-                                for shape in slide.shapes:
-                                    if hasattr(shape, "text"):
-                                        text += shape.text
-                            return any(term.lower() in text.lower() for term in search_terms)
-                        except Exception as e:
-                            self.log_debug(f"Errore lettura PPTX {file_path}: {str(e)}")
-                            return False
-                    
-                    # File Excel
-                    elif ext_lower in ['.xlsx', '.xls'] and file_format_support["excel"]:
-                        try:
-                            workbook = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-                            text = ""
-                            for sheet_name in workbook.sheetnames:
-                                sheet = workbook[sheet_name]
-                                for row in sheet.iter_rows(values_only=True):
-                                    for cell in row:
-                                        if cell is not None:
-                                            text += str(cell) + " "
-                            return any(term.lower() in text.lower() for term in search_terms)
-                        except Exception as e:
-                            self.log_debug(f"Errore lettura Excel {file_path}: {str(e)}")
-                            return False
-                    
-                    # File RTF
-                    elif ext_lower == '.rtf' and file_format_support["rtf"]:
-                        try:
-                            with open(file_path, 'r', errors='ignore') as f:
-                                rtf_content = f.read()
-                                text = rtf_to_text(rtf_content)
-                                return any(term.lower() in text.lower() for term in search_terms)
-                        except Exception as e:
-                            self.log_debug(f"Errore lettura RTF {file_path}: {str(e)}")
-                            return False
-                    
-                    # File OpenDocument (.odt)
-                    elif ext_lower == '.odt' and file_format_support["odt"]:
-                        try:
-                            doc = odfdo.Document(file_path)
-                            text = doc.get_formatted_text()
-                            return any(term.lower() in text.lower() for term in search_terms)
-                        except NameError:
-                            # Prova con l'altra libreria ODT
-                            try:
-                                odt_doc = opendocument.load(file_path)
-                                text = ""
-                                for element in odt_doc.getElementsByType(text.P):
-                                    text += teletype.extractText(element) + " "
-                                return any(term.lower() in text.lower() for term in search_terms)
-                            except Exception as e:
-                                self.log_debug(f"Errore lettura ODT {file_path}: {str(e)}")
-                                return False
-                        except Exception as e:
-                            self.log_debug(f"Errore lettura ODT {file_path}: {str(e)}")
-                            return False
-                    
-                    # Per altri tipi di file, non cerchiamo nel contenuto
-                    return False
-                    
-                except Exception as e:
-                    self.log_debug(f"Errore analisi contenuto {file_path}: {str(e)}")
-                    return False
-            
-            # Inizia la ricerca ricorsiva
-            for root, dirs, files in os.walk(search_path):
-                # Controlla se la ricerca è stata interrotta
-                if self.stop_search:
-                    self.progress_queue.put(("status", "Ricerca interrotta dall'utente"))
-                    self.progress_queue.put(("complete", True))
-                    if self.search_executor:
-                        self.search_executor.shutdown(wait=False)
-                    return
-                    
-                # Verifica se è scaduto il timeout
-                if timeout > 0 and time.time() - start_time > timeout:
-                    self.progress_queue.put(("status", "Timeout ricerca"))
-                    self.progress_queue.put(("timeout", True))
-                    if self.search_executor:
-                        self.search_executor.shutdown(wait=False)
-                    return
-                    
-                # Controlla la profondità 
-                current_depth = root[len(search_path):].count(os.path.sep)
-                if self.max_depth > 0 and current_depth >= self.max_depth:
-                    dirs[:] = []  # Non scendere ulteriormente nelle directory
-                
-                # Salta cartelle nascoste se richiesto
-                if self.ignore_hidden.get():
-                    dirs[:] = [d for d in dirs if not d.startswith('.')]
-                    files = [f for f in files if not f.startswith('.')]
-                    
-                # Cerca nelle directory se richiesto
-                if self.search_folders.get():
-                    for dir_name in dirs:
-                        dirs_checked += 1
-                        
-                        # Segnala progresso
-                        if dirs_checked % 10 == 0:
-                            self.progress_queue.put(("status", f"Analizzando: {dirs_checked} cartelle, {files_checked} file"))
-                        
-                        # Verifica se il nome della directory corrisponde
-                        if any(term.lower() in dir_name.lower() for term in search_terms):
-                            dir_path = os.path.join(root, dir_name)
-                            modified_time = datetime.fromtimestamp(os.path.getmtime(dir_path))
-                            created_time = datetime.fromtimestamp(os.path.getctime(dir_path))
-                            
-                            # Verifica filtri data
-                            if min_date and modified_time < min_date:
-                                continue
-                            if max_date and modified_time > max_date:
-                                continue
-                                
-                            # Aggiunge risultato
-                            self.search_results.append({
-                                'type': "Directory",
-                                'name': dir_name,
-                                'size': "-",
-                                'modified': modified_time.strftime('%d-%m-%Y %H:%M'),
-                                'created': created_time.strftime('%d-%m-%Y %H:%M'),
-                                'path': dir_path
-                            })
-                
-                # Cerca nei file se richiesto
-                if self.search_files.get():
-                    for file_name in files:
-                        files_checked += 1
-                        
-                        # Verifica limitazione numero file
-                        if files_checked >= self.max_files_to_check.get():
-                            self.progress_queue.put(("status", f"Raggiunto limite di {self.max_files_to_check.get()} file"))
-                            break
-                            
-                        # Aggiorna progresso periodicamente
-                        if files_checked % 50 == 0:
-                            self.progress_queue.put(("status", f"Analizzati {files_checked} file in {dirs_checked} cartelle"))
-                            self.progress_queue.put(("progress", min(90, int(files_checked / self.max_files_to_check.get() * 100))))
-                        
-                        # Processa il file
-                        file_path = os.path.join(root, file_name)
-                        try:
-                            # Ottieni metadati del file
-                            file_size = os.path.getsize(file_path)
-                            modified_time = datetime.fromtimestamp(os.path.getmtime(file_path))
-                            created_time = datetime.fromtimestamp(os.path.getctime(file_path))
-                            
-                            # Estensione file
-                            _, file_ext = os.path.splitext(file_name)
-                            
-                            # Tipo di file (basato su MIME type)
-                            mime_type, _ = mimetypes.guess_type(file_path)
-                            file_type = mime_type if mime_type else f"File {file_ext}"
-                            
-                            # Verifica preliminare (senza analizzare il contenuto)
-                            if check_file_match(file_path, file_name, file_size, modified_time):
-                                # Se dobbiamo cercare nel contenuto
-                                content_match = True  # Default a True se non è necessario cercare nel contenuto
-                                
-                                if search_content and not any(term.lower() in file_name.lower() for term in search_terms):
-                                    # Aggiungi il task alla coda
-                                    future = self.search_executor.submit(search_in_file_content, file_path, file_ext)
-                                    futures.append((future, {
-                                        'type': file_type,
-                                        'name': file_name,
-                                        'size': self.format_size(file_size),
-                                        'modified': modified_time.strftime('%d-%m-%Y %H:%M'),
-                                        'created': created_time.strftime('%d-%m-%Y %H:%M'),
-                                        'path': file_path
-                                    }))
-                                    content_match = False  # Da determinare in base al risultato future
-                                
-                                # Se corrisponde al nome o non dobbiamo cercare nel contenuto
-                                if any(term.lower() in file_name.lower() for term in search_terms):
-                                    self.search_results.append({
-                                        'type': file_type,
-                                        'name': file_name,
-                                        'size': self.format_size(file_size),
-                                        'modified': modified_time.strftime('%d-%m-%Y %H:%M'),
-                                        'created': created_time.strftime('%d-%m-%Y %H:%M'),
-                                        'path': file_path
-                                    })
-                                    
-                                    # Verifica limitazione risultati
-                                    if len(self.search_results) >= self.max_results.get():
-                                        self.progress_queue.put(("status", f"Raggiunto limite di {self.max_results.get()} risultati"))
-                                        break
-                        
-                        except Exception as e:
-                            self.log_debug(f"Errore processando {file_path}: {str(e)}")
-                    
-                    # Verifica se è necessario arrestare la ricerca
-                    if len(self.search_results) >= self.max_results.get():
-                        break
-            
-            # Attendi il completamento delle ricerche nei contenuti
-            completed_futures = 0
-            for future, result_data in futures:
-                try:
-                    if future.done() or future.running():
-                        content_found = future.result(timeout=2)  # Piccolo timeout per evitare blocchi
-                        if content_found:
-                            self.search_results.append(result_data)
-                            # Verifica limitazione risultati
-                            if len(self.search_results) >= self.max_results.get():
-                                break
-                except concurrent.futures.TimeoutError:
-                    pass  # Ignora i task che impiegano troppo tempo
-                except Exception as e:
-                    self.log_debug(f"Errore nel future: {str(e)}")
-                    
-                completed_futures += 1
-                if completed_futures % 10 == 0:
-                    progress = min(95, 90 + int(completed_futures / max(1, len(futures)) * 5))
-                    self.progress_queue.put(("progress", progress))
-                    self.progress_queue.put(("status", f"Completata analisi di {completed_futures}/{len(futures)} contenuti"))
-                    
-                # Verifica interruzioni
-                if self.stop_search:
-                    break
-                    
-            # Chiudi l'executor
-            if self.search_executor:
-                self.search_executor.shutdown(wait=False)
-                self.search_executor = None
-                
-            # Segnalazione completamento
-            self.progress_queue.put(("status", f"Ricerca completata! Trovati {len(self.search_results)} risultati"))
-            self.progress_queue.put(("progress", 100))
-            self.progress_queue.put(("complete", True))
-            
-        except Exception as e:
-            self.log_debug(f"Errore nel thread di ricerca: {traceback.format_exc()}")
-            self.progress_queue.put(("error", f"Errore durante la ricerca: {str(e)}"))
-            if self.search_executor:
-                self.search_executor.shutdown(wait=False)
-                self.search_executor = None
-
-    def search_file_content(self, file_path, search_terms):
-        """Cerca i termini nel contenuto del file e restituisce il risultato se trovato"""
-        try:
-            # Verifica se il file è già stato indicizzato
-            if self.use_indexing.get() and file_path in self.search_index:
-                # Controlla se uno dei termini è nel contenuto indicizzato
-                if any(term.lower() in self.search_index[file_path].lower() for term in search_terms):
-                    file_type = self.get_file_type(file_path)
-                    metadata = self.get_file_metadata(file_path)
-                    return {
-                        'type': file_type,
-                        'author': os.path.basename(file_path),
-                        'size': metadata['size'],
-                        'modified': metadata['modified'],
-                        'created': metadata['created'],
-                        'path': file_path
-                    }
-                return None
-            
-            # Estrazione testo basata sul tipo di file
-            content = self.extract_text_from_file(file_path)
-            content_lower = content.lower()
-            
-            # Salva il contenuto nell'indice se indicizzazione è attiva
-            if self.use_indexing.get():
-                self.search_index[file_path] = content
-            
-            # Ricerca dei termini nel contenuto
-            if any(term.lower() in content_lower for term in search_terms):
-                file_type = self.get_file_type(file_path)
-                metadata = self.get_file_metadata(file_path)
-                return {
-                    'type': file_type,
-                    'author': os.path.basename(file_path),
-                    'size': metadata['size'],
-                    'modified': metadata['modified'],
-                    'created': metadata['created'],
-                    'path': file_path
-                }
-            
-            return None
-        except Exception as e:
-            self.log_debug(f"Errore nell'analisi del contenuto di {file_path}: {str(e)}")
-            return None
-
-    def safe_listdir(self, directory):
-        """Versione sicura di os.listdir che gestisce errori di permesso"""
-        try:
-            return os.listdir(directory)
-        except PermissionError:
-            self.log_debug(f"Permesso negato per la directory {directory}")
-            return None
-        except Exception as e:
-            self.log_debug(f"Errore nell'accesso alla directory {directory}: {str(e)}")
-            return None
-
-    def get_file_type(self, file_path, mime_cache=None):
-        """Determina il tipo di file con cache per migliorare le prestazioni"""
-        try:
-            if os.path.isdir(file_path):
-                return "Directory"
-            
-            # Se è stata fornita una cache, usa quella
-            if mime_cache is not None and file_path in mime_cache:
-                return mime_cache[file_path]
-            
-            # Ottieni l'estensione in minuscolo
-            ext = os.path.splitext(file_path)[1].lower()
-            
-            # Mappa delle estensioni
-            file_types = {
-                # Documenti
-                '.doc': 'Word Document',
-                '.docx': 'Word Document',
-                '.pdf': 'PDF Document',
-                '.txt': 'Text Document',
-                '.rtf': 'Rich Text Format',
-                '.odt': 'OpenDocument Text',
-                
-                # Fogli di calcolo
-                '.xls': 'Excel Workbook',
-                '.xlsx': 'Excel Workbook',
-                '.ods': 'OpenDocument Spreadsheet',
-                
-                # Presentazioni
-                '.ppt': 'PowerPoint Presentation',
-                '.pptx': 'PowerPoint Presentation',
-                '.odp': 'OpenDocument Presentation',
-                
-                # Immagini
-                '.jpg': 'JPEG Image',
-                '.jpeg': 'JPEG Image',
-                '.png': 'PNG Image',
-                '.gif': 'GIF Image',
-                '.bmp': 'Bitmap Image',
-                '.tiff': 'TIFF Image',
-                '.webp': 'WebP Image',
-                
-                # Media
-                '.mp3': 'MP3 Audio',
-                '.mp4': 'MP4 Video',
-                '.wav': 'WAV Audio',
-                '.avi': 'AVI Video',
-                '.mov': 'MOV Video',
-                '.flac': 'FLAC Audio',
-                
-                # Archivi
-                '.zip': 'ZIP Archive',
-                '.rar': 'RAR Archive',
-                '.7z': '7-Zip Archive',
-                '.tar': 'TAR Archive',
-                '.gz': 'GZip Archive',
-                
-                # Programmi
-                '.exe': 'Executable File',
-                '.dll': 'Dynamic Link Library',
-                '.app': 'macOS Application',
-                '.bat': 'Batch File',
-                '.sh': 'Shell Script',
-                
-                # Altri formati
-                '.html': 'HTML Document',
-                '.css': 'CSS File',
-                '.js': 'JavaScript File',
-                '.json': 'JSON File',
-                '.xml': 'XML File',
-                '.py': 'Python Script',
-                '.java': 'Java Source File',
-                '.c': 'C Source File',
-                '.cpp': 'C++ Source File',
-            }
-            
-            # Restituisce il tipo di file o un tipo generico se non trovato
-            file_type = file_types.get(ext, f'File{ext}' if ext else 'Unknown File')
-            
-            # Memorizza il risultato nella cache se disponibile
-            if mime_cache is not None:
-                mime_cache[file_path] = file_type
-                
-            return file_type
-        
-        except Exception as e:
-            self.log_debug(f"Errore nel determinare il tipo di file per {file_path}: {str(e)}")
-            return "Unknown File"
-
-    def get_file_metadata(self, file_path):
-        """Estrae i metadati dal file specificato con cache per migliorare le prestazioni"""
-        try:
-            # Ottiene le statistiche del file
-            file_stat = os.stat(file_path)
-            
-            # Calcola la dimensione del file in formato leggibile
-            size_bytes = file_stat.st_size
-            if size_bytes < 1024:
-                size_str = f"{size_bytes} B"
-            elif size_bytes < 1024 * 1024:
-                size_str = f"{size_bytes / 1024:.1f} KB"
-            elif size_bytes < 1024 * 1024 * 1024:
-                size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
-            else:
-                size_str = f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
-            
-            # Ottiene le date di modifica e creazione nel formato YYYY-MM-DD HH:MM:SS
-            mod_time = datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-            
-            # In Windows st_ctime è la data di creazione, in Unix è la data di cambio stato
-            if os.name == 'nt':  # Windows
-                create_time = datetime.fromtimestamp(file_stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
-            else:  # Unix/Linux/Mac
-                create_time = datetime.fromtimestamp(file_stat.st_atime).strftime('%Y-%m-%d %H:%M:%S')
-            
-            return {
-                "size": size_str,
-                "modified": mod_time,
-                "created": create_time
-            }
-        except Exception as e:
-            self.log_debug(f"Errore nell'estrazione dei metadati per {file_path}: {e}")
-            return {
-                "size": "N/A",
-                "modified": "N/A", 
-                "created": "N/A"
-            }
-
-    def is_text_file(self, file_path):
-        """Verifica se un file è probabilmente un file di testo leggibile o un documento supportato"""
-        # Ignora i file temporanei di Office
-        if os.path.basename(file_path).startswith("~$"):
-            return False
-            
-        # Verifica l'estensione del file
-        ext = os.path.splitext(file_path)[1].lower()
-        
-        # File di Office comuni
-        office_extensions = [
-            '.docx', '.doc',   # Word
-            '.xlsx', '.xls',   # Excel
-            '.pptx', '.ppt',   # PowerPoint
-            '.odt', '.ods', '.odp',  # OpenDocument
-            '.rtf',            # Rich Text Format
-            '.pdf'             # PDF
-        ]
-        
-        # Se è un file Office supportato, verifica che sia disponibile la libreria corrispondente
-        if ext in ['.docx', '.doc'] and not file_format_support["docx"]:
-            return False
-        if ext == '.pdf' and not file_format_support["pdf"]:
-            return False
-        if ext in ['.pptx', '.ppt'] and not file_format_support["pptx"]:
-            return False
-        if ext in ['.xlsx', '.xls'] and not file_format_support["excel"]:
-            return False
-        if ext in ['.odt', '.ods', '.odp'] and not file_format_support["odt"]:
-            return False
-        if ext == '.rtf' and not file_format_support["rtf"]:
-            return False
-        
-        # Verifica se è un file office supportato
-        if ext in office_extensions:
-            # Controlla la dimensione del file
-            try:
-                file_size = os.path.getsize(file_path)
-                max_size = self.max_file_size_mb.get() * 1024 * 1024
-                if file_size > max_size:
-                    self.log_debug(f"File troppo grande: {file_path} ({file_size/1024/1024:.1f}MB > {self.max_file_size_mb.get()}MB)")
-                    return False
-                return True
-            except:
-                return False
-            
-        # Estensioni comuni di file di testo
-        text_extensions = ['.txt', '.py', '.java', '.c', '.cpp', '.h', '.html', '.css', '.js', '.json', '.xml', '.md', 
-                        '.log', '.csv', '.ini', '.cfg', '.config', '.bat', '.sh', '.ps1', '.tex', '.sql']
-        
-        if ext in text_extensions:
-            # Controlla la dimensione del file
-            try:
-                file_size = os.path.getsize(file_path)
-                max_size = self.max_file_size_mb.get() * 1024 * 1024
-                if file_size > max_size:
-                    return False
-                return True
-            except:
-                return False
-        
-        # Per file senza estensione, prova a leggere i primi byte
-        if not ext:
-            try:
-                with open(file_path, 'rb') as f:
-                    sample = f.read(1024)
-                    # Verifica che sia un file di testo (ASCII o UTF-8)
-                    return all(c < 127 for c in sample if c != 0)
-            except:
-                return False
-        
-        return False
-
-    def extract_text_from_file(self, file_path):
-        """Estrae il testo da vari tipi di file con ottimizzazioni"""
-        # Ignora i file temporanei di Office
-        if os.path.basename(file_path).startswith("~$"):
-            return ""
-                
-        ext = os.path.splitext(file_path)[1].lower()
-        
-        try:
-            # File Word (.docx, .doc)
-            if ext == '.docx' and file_format_support["docx"]:
-                try:
-                    doc = docx.Document(file_path)
-                    return '\n'.join([paragraph.text for paragraph in doc.paragraphs])
-                except Exception as e:
-                    self.log_debug(f"Errore nell'estrazione del testo da file Word {file_path}: {e}")
-                    return ""
-            
-            # File OpenDocument (.odt, .ods, .odp)
-            elif ext in ['.odt', '.ods', '.odp'] and file_format_support["odt"]:
-                try:
-                    if 'odfdo' in globals():
-                        doc = odfdo.Document(file_path)
-                        body = doc.body
-                        all_text = body.get_formatted_text()
-                        return all_text
-                    
-                    elif 'opendocument' in dir():
-                        doc = opendocument.load(file_path)
-                        all_paragraphs = []
-                        for paragraph in doc.getElementsByType(text.P):
-                            all_paragraphs.append(teletype.extractText(paragraph))
-                        result = '\n'.join(all_paragraphs)
-                        return result
-                    
-                    # Metodo alternativo usando zipfile
-                    else:
-                        return self._extract_from_zip(file_path, 'content.xml')
-                except Exception as e:
-                    self.log_debug(f"Errore nell'estrazione del testo da file OpenDocument {file_path}: {e}")
-                    return self._extract_from_zip(file_path, 'content.xml')
-            
-            # File Excel (.xlsx, .xls)
-            elif ext in ['.xlsx', '.xls'] and file_format_support["excel"]:
-                try:
-                    workbook = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-                    text_content = []
-                    for sheet_name in workbook.sheetnames:
-                        sheet = workbook[sheet_name]
-                        # Limita il numero di righe e colonne per migliorare le prestazioni
-                        max_row = min(sheet.max_row, 1000)
-                        max_col = min(sheet.max_column, 50)
-                        for row in range(1, max_row + 1):
-                            row_text = []
-                            for col in range(1, max_col + 1):
-                                cell = sheet.cell(row=row, column=col)
-                                if cell.value is not None:
-                                    row_text.append(str(cell.value))
-                            if row_text:
-                                text_content.append(' '.join(row_text))
-                    return '\n'.join(text_content)
-                except Exception as e:
-                    self.log_debug(f"Errore nell'estrazione del testo da file Excel {file_path}: {e}")
-                    return ""
-            
-            # File PowerPoint (.pptx, .ppt)
-            elif ext in ['.pptx', '.ppt'] and file_format_support["pptx"]:
-                try:
-                    presentation = pptx.Presentation(file_path)
-                    text_content = []
-                    for slide in presentation.slides:
-                        slide_texts = []
-                        for shape in slide.shapes:
-                            if hasattr(shape, "text"):
-                                slide_texts.append(shape.text)
-                        if slide_texts:
-                            text_content.append('\n'.join(slide_texts))
-                    return '\n'.join(text_content)
-                except Exception as e:
-                    self.log_debug(f"Errore nell'estrazione del testo da file PowerPoint {file_path}: {e}")
-                    return ""
-            
-            # File PDF - con limite pagine per prestazioni
-            elif ext == '.pdf' and file_format_support["pdf"]:
-                try:
-                    with open(file_path, 'rb') as f:
-                        reader = PyPDF2.PdfReader(f)
-                        text_content = []
-                        # Limita il numero di pagine da analizzare per prestazioni
-                        max_pages = min(len(reader.pages), 50)
-                        for page_num in range(max_pages):
-                            text_content.append(reader.pages[page_num].extract_text())
-                    return '\n'.join(text_content)
-                except Exception as e:
-                    self.log_debug(f"Errore nell'estrazione del testo da file PDF {file_path}: {e}")
-                    return ""
-            
-            # File RTF
-            elif ext == '.rtf' and file_format_support["rtf"]:
-                try:
-                    with open(file_path, 'r', errors='ignore') as f:
-                        rtf_content = f.read()
-                    return rtf_to_text(rtf_content)
-                except Exception as e:
-                    self.log_debug(f"Errore nell'estrazione del testo da file RTF {file_path}: {e}")
-                    return ""
-            
-            # File di testo normali - lettura ottimizzata a blocchi
-            else:
-                return self._read_text_file_optimized(file_path)
-                
-        except Exception as e:
-            self.log_debug(f"Errore generale nell'estrazione del testo da {file_path}: {e}")
-            return ""
-    
-    def _read_text_file_optimized(self, file_path):
-        """Legge un file di testo in modo ottimizzato usando chunking"""
-        try:
-            max_size = self.max_file_size_mb.get() * 1024 * 1024
-            chunk_size = self.chunk_size
-            
-            # Controlla la dimensione del file
-            file_size = os.path.getsize(file_path)
-            if file_size > max_size:
-                self.log_debug(f"File troppo grande per lettura completa: {file_path}")
-                # Legge solo i primi e ultimi N blocchi
-                text_chunks = []
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    # Leggi i primi 5 blocchi
-                    for _ in range(5):
-                        chunk = f.read(chunk_size)
-                        if not chunk:
-                            break
-                        text_chunks.append(chunk)
-                    
-                    # Salta al 90% del file
-                    if file_size > 10 * chunk_size:
-                        f.seek(int(file_size * 0.9))
-                        
-                        # Leggi gli ultimi 5 blocchi
-                        for _ in range(5):
-                            chunk = f.read(chunk_size)
-                            if not chunk:
-                                break
-                            text_chunks.append(chunk)
-                
-                return ''.join(text_chunks)
-            else:
-                # Leggi il file intero
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    return f.read()
-        except Exception as e:
-            self.log_debug(f"Errore nella lettura ottimizzata di {file_path}: {e}")
-            return ""
-
-    def _extract_from_zip(self, file_path, internal_file):
-        """Estrae un file da un archivio zip (usato per OpenDocument)"""
-        try:
-            import zipfile
-            import re
-            
-            with zipfile.ZipFile(file_path) as z:
-                if internal_file in z.namelist():
-                    with z.open(internal_file) as f:
-                        content = f.read().decode('utf-8')
-                        # Rimuovi i tag XML per ottenere solo il testo
-                        text_only = re.sub(r'<[^>]+>', ' ', content)
-                        return text_only
-                return ""
-        except Exception as e:
-            self.log_debug(f"Errore nell'estrazione da ZIP {file_path}: {e}")
-            return ""
-
-    def apply_advanced_filters(self, file_path):
-        """Controlla se un file corrisponde ai filtri avanzati"""
-        try:
-            # Filtro dimensione
-            if self.advanced_filters["size_min"] > 0 or self.advanced_filters["size_max"] > 0:
-                try:
-                    file_size = os.path.getsize(file_path)
-                    if self.advanced_filters["size_min"] > 0 and file_size < self.advanced_filters["size_min"]:
-                        return False
-                    if self.advanced_filters["size_max"] > 0 and file_size > self.advanced_filters["size_max"]:
-                        return False
-                except:
-                    pass
-            
-            # Filtro data
-            if self.advanced_filters["date_min"] or self.advanced_filters["date_max"]:
-                try:
-                    file_time = os.path.getmtime(file_path)
-                    file_date = datetime.fromtimestamp(file_time)
-                    
-                    # Controlla data minima
-                    if self.advanced_filters["date_min"] and self.advanced_filters["date_min"].strip():
-                        min_date = datetime.strptime(self.advanced_filters["date_min"], "%d-%m-%Y")
-                        min_date = min_date.replace(hour=0, minute=0, second=0, microsecond=0)
-                        if file_date < min_date:
-                            return False
-                    
-                    # Controlla data massima
-                    if self.advanced_filters["date_max"] and self.advanced_filters["date_max"].strip():
-                        max_date = datetime.strptime(self.advanced_filters["date_max"], "%d-%m-%Y")
-                        max_date = max_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-                        if file_date > max_date:
-                            return False
-                except:
-                    pass
-            
-            # Filtro estensione
-            if self.advanced_filters["extensions"]:
-                _, ext = os.path.splitext(file_path)
-                if ext.lower() not in [e.lower() for e in self.advanced_filters["extensions"]]:
-                    return False
-            
-            # Se arriva qui, il file è passato attraverso tutti i filtri
-            return True
-        except Exception as e:
-            self.log_debug(f"Errore nei filtri avanzati per {os.path.basename(file_path)}: {str(e)}")
-            return True  # In caso di errore generale, include il file (più conservativo)
-
-    def format_size(self, size_bytes):
-        """Formatta la dimensione del file in unità leggibili"""
-        if size_bytes == 0 or size_bytes == "-":
-            return "-"
-        
-        size_names = ["B", "KB", "MB", "GB", "TB"]
-        size = float(size_bytes)
-        i = 0
-        while size >= 1024 and i < len(size_names) - 1:
-            size /= 1024
-            i += 1
-        
-        return f"{size:.1f} {size_names[i]}"
-
-    def update_results_list(self):
-        """Aggiorna la lista dei risultati nella UI rispettando il tema"""
-        # Cancella gli elementi precedenti
-        for item in self.results_list.get_children():
-            self.results_list.delete(item)
-        
-        # Aggiunge i nuovi risultati
-        if not self.search_results:
-            return
-        
-        # Ottieni lo stile e il tema corrente
-        style = ttk.Style()
-        
-        # Forza l'applicazione del colore di sfondo della treeview
-        treeview_bg = style.lookup('Treeview', 'background')
-        treeview_fg = style.lookup('Treeview', 'foreground')
-        select_bg = style.lookup('Treeview', 'selectbackground')
-        
-        # Usa colori leggermente diversi per l'alternanza delle righe
-        if self._is_dark_theme():
-            # Per temi scuri
-            odd_color = self._adjust_color(treeview_bg, 15)  # Leggermente più chiaro
-            even_color = treeview_bg  # Colore base
-        else:
-            # Per temi chiari
-            odd_color = self._adjust_color(treeview_bg, -10)  # Leggermente più scuro
-            even_color = treeview_bg  # Colore base
-        
-        # Configura i tag per i colori alternati
-        self.results_list.tag_configure("odd", background=odd_color)
-        self.results_list.tag_configure("even", background=even_color)
-        
-        # Imposta il colore di sfondo principale della Treeview
-        style.configure("Treeview", background=treeview_bg, foreground=treeview_fg)
-        
-        # Risolve un problema con il colore di sfondo nelle celle
-        style.map('Treeview', 
-                background=[('selected', select_bg)],
-                foreground=[('selected', 'white')])
-        
-        # Aggiungi risultati con i tag appropriati
-        for idx, result in enumerate(self.search_results):
-            # Limita i risultati visualizzati
-            if idx >= self.max_results.get():
-                break
-                
-            # Colore alternato per le righe
-            tags = ("even",) if idx % 2 == 0 else ("odd",)
-            
-            # Aggiunge l'elemento
-            self.results_list.insert("", "end", values=(
-                result['type'],
-                result['name'],
-                result['size'],
-                result['modified'],
-                result['created'],
-                result['path']
-            ), tags=tags)
-
-    def _is_dark_theme(self):
-        """Determina se il tema corrente è scuro"""
-        style = ttk.Style()
-        bg_color = style.lookup('TFrame', 'background')
-        
-        # Se non riesce a ottenere il colore
-        if not bg_color:
-            # Usa una lista di temi noti
-            dark_themes = ["darkly", "solar", "superhero", "cyborg", "vapor", "morph"]
-            return style.theme_use() in dark_themes
-        
-        # Verifica il colore di sfondo (se il formato è #RRGGBB)
-        if bg_color.startswith('#') and len(bg_color) == 7:
-            # Converti in RGB
-            r = int(bg_color[1:3], 16)
-            g = int(bg_color[3:5], 16)
-            b = int(bg_color[5:7], 16)
-            
-            # Calcola la luminosità (formula approssimativa)
-            brightness = (r * 299 + g * 587 + b * 114) / 1000
-            
-            # Se la luminosità è inferiore a 128, è un tema scuro
-            return brightness < 128
-        
-        # Fallback per i temi conosciuti
-        return style.theme_use() in ["darkly", "solar", "superhero", "cyborg", "vapor", "morph"]
-
-    def _adjust_color(self, hex_color, amount):
-        """Schiarisce o scurisce un colore esadecimale"""
-        # Se il colore non è nel formato esadecimale standard
-        if not hex_color or not hex_color.startswith('#') or len(hex_color) != 7:
-            return hex_color  # Ritorna il colore originale
-        
-        # Converti in RGB
-        r = int(hex_color[1:3], 16)
-        g = int(hex_color[3:5], 16)
-        b = int(hex_color[5:7], 16)
-        
-        # Aggiusta i valori RGB
-        r = max(0, min(255, r + amount))
-        g = max(0, min(255, g + amount))
-        b = max(0, min(255, b + amount))
-        
-        # Ritorna il nuovo colore in formato hex
-        return f'#{r:02x}{g:02x}{b:02x}'
-
-    def update_theme_colors(self):
-        """Aggiorna i colori dell'interfaccia quando viene cambiato il tema"""
-        style = ttk.Style()
-        current_theme = style.theme_use()
-        
-        # Imposta i colori alternati in base al tema
-        if current_theme in ["darkly", "solar", "superhero", "cyborg", "vapor", "morph"]:
-            odd_color = "#2a2a2a"
-            even_color = "#363636"
-        else:
-            odd_color = "#f0f0f0"
-            even_color = "#ffffff"
-        
-        # Aggiorna i tag
-        self.results_list.tag_configure("odd", background=odd_color)
-        self.results_list.tag_configure("even", background=even_color)
-
+# Funzione principale per eseguire l'applicazione
 def main():
+    import sys
     root = ttk.Window(themename="darkly")
     app = FileSearchApp(root)
     
-    # Imposta l'icona dell'applicazione se disponibile
-    try:
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
-        if os.path.exists(icon_path):
-            root.iconbitmap(icon_path)
-    except:
-        pass
-    
-    # Centra la finestra sullo schermo
-    root.update_idletasks()
-    width = root.winfo_width()
-    height = root.winfo_height()
-    x = (root.winfo_screenwidth() // 2) - (width // 2)
-    y = (root.winfo_screenheight() // 2) - (height // 2)
-    root.geometry('{}x{}+{}+{}'.format(width, height, x, y))
-    
-    # Imposta data e ora attuali, username
-    current_datetime = "2025-03-13 09:43:46"
-    username = "Antonino"
-    
-    # Aggiorna la barra di stato con data/ora e username
-    app.datetime_var.set(f"Data: {current_datetime} | Utente: {username}")
+    # Verifica se ci sono argomenti da linea di comando
+    if len(sys.argv) > 1:
+        # Se c'è un percorso fornito come argomento, lo imposta come percorso di ricerca
+        app.search_path.set(sys.argv[1])
     
     root.mainloop()
 
