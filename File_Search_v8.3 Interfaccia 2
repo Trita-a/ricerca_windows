@@ -106,6 +106,7 @@ class FileSearchApp:
         self.search_executor = None
         
         # Variabili aggiuntive per i miglioramenti
+        self.search_start_time = None
         self.stop_search = False
         self.max_depth = 0  # 0 = illimitato
         self.last_search_params = {}
@@ -142,6 +143,9 @@ class FileSearchApp:
         # Registra handler per CTRL+C
         self.register_interrupt_handler()
     
+        # Imposta il tema iniziale
+        self.update_theme_colors("dark")  # O "dark" se il tema predefinito è scuro
+        
     def register_interrupt_handler(self):
         """Registra il gestore degli interrupt (CTRL+C)"""
         def handle_interrupt(sig, frame):
@@ -275,11 +279,44 @@ class FileSearchApp:
         search_thread.daemon = True
         search_thread.start()
         
+        # Memorizza l'orario di inizio come oggetto datetime
+        self.search_start_time = datetime.now()
+        current_time = self.search_start_time.strftime('%H:%M')
+        self.start_time_label.config(text=current_time)
+        self.end_time_label.config(text="--:--")
+        self.total_time_label.config(text="--:--")  # Reset del tempo totale
+
         # Avvia l'aggiornamento della progress bar
         self.update_progress()
         # Salva original_params come attributo per ripristinarli dopo la ricerca
         if original_params:
             self.original_system_search_params = original_params
+
+        current_theme = "dark"  # Sostituisci con la logica per determinare il tema corrente
+        self.update_theme_colors(current_theme)
+
+        # Aggiungi questo nuovo metodo per calcolare il tempo totale
+    def update_total_time(self):
+        """Calcola e visualizza il tempo totale trascorso tra inizio e fine ricerca"""
+        if self.search_start_time:
+            end_time = datetime.now()
+            time_diff = end_time - self.search_start_time
+            
+            # Converti in minuti e secondi
+            total_seconds = int(time_diff.total_seconds())
+            minutes = total_seconds // 60
+            seconds = total_seconds % 60
+            
+            # Formatta la stringa del tempo totale
+            if minutes > 0:
+                total_time_str = f"{minutes}min {seconds}sec"
+            else:
+                total_time_str = f"{seconds}sec"
+            
+            self.total_time_label.config(text=total_time_str)   
+    # Esempio di utilizzo per cambiare il tema
+    def change_theme(self, theme):
+        self.update_theme_colors(theme)
 
     def _search_thread(self, path, keywords, search_content):
         """Thread per la ricerca file"""
@@ -848,6 +885,11 @@ class FileSearchApp:
                         # Aggiorna la lista dei risultati
                         self.update_results_list()
                         
+                        # Aggiorna l'orario di fine e il tempo totale
+                        current_time = datetime.now().strftime('%H:%M')
+                        self.end_time_label.config(text=current_time)
+                        self.update_total_time()  # Calcola e mostra il tempo totale
+                        
                         if len(self.search_results) == 0:
                             self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
                             self.root.after(100, lambda: messagebox.showinfo("Ricerca completata", "Nessun file trovato per la ricerca effettuata"))
@@ -855,8 +897,6 @@ class FileSearchApp:
                             self.status_label["text"] = f"Ricerca completata! Trovati {len(self.search_results)} risultati."
                         
                         self.progress_bar["value"] = 100
-                        current_time = datetime.now().strftime('%H:%M')
-                        self.end_time_label.config(text=current_time)
                         return
                     elif progress_type == "error":
                         self.is_searching = False
@@ -864,15 +904,17 @@ class FileSearchApp:
                         self.stop_button["state"] = "disabled"
                         current_time = datetime.now().strftime('%H:%M')
                         self.end_time_label.config(text=current_time)
+                        self.update_total_time()  # Calcola e mostra il tempo totale
                         messagebox.showerror("Errore", value)
                         return
                     elif progress_type == "timeout":
                         self.is_searching = False
                         self.search_button["state"] = "normal"
                         self.stop_button["state"] = "disabled"
-                        self.update_results_list()  # Mostra i risultati trovati fino a quel momento
+                        self.update_results_list()
                         current_time = datetime.now().strftime('%H:%M')
                         self.end_time_label.config(text=current_time)
+                        self.update_total_time()  # Calcola e mostra il tempo totale
                         messagebox.showinfo("Timeout", "La ricerca è stata interrotta per timeout. Verranno mostrati i risultati parziali trovati.")
                         return
             except queue.Empty:
@@ -887,6 +929,7 @@ class FileSearchApp:
         self.analyzed_files_label["text"] = "Ricerca interrotta dall'utente"
         current_time = datetime.now().strftime('%H:%M')
         self.end_time_label.config(text=current_time)
+        self.update_total_time()  # Calcola e mostra il tempo totale
         
         # Chiudi l'executor se esiste
         if self.search_executor:
@@ -917,18 +960,21 @@ class FileSearchApp:
         # Aggiorna lo stato
         self.status_label["text"] = f"Trovati {len(self.search_results)} risultati"
         
-    def update_theme_colors(self):
+    def update_theme_colors(self, theme="light"):
         """Aggiorna i colori del tema per evidenziare cartelle e file"""
         style = ttk.Style()
         
-        # Colori per cartelle
-        style.configure("Treeview", rowheight=25)
-        
-        # Configurazione tag per directory
-        self.results_list.tag_configure("directory", background="#e6f2ff")
-        
-        # Configurazione tag per file
-        self.results_list.tag_configure("file", background="#ffffff")
+        # Configura i colori per il tema chiaro
+        if theme == "light":
+            style.configure("Treeview", background="#ffffff", foreground="#000000", fieldbackground="#ffffff")
+            self.results_list.tag_configure("directory", background="#e6f2ff", foreground="#000000")
+            self.results_list.tag_configure("file", background="#ffffff", foreground="#000000")
+        # Configura i colori per il tema scuro
+        elif theme == "dark":
+            style.configure("Treeview", background="#333333", foreground="#ffffff", fieldbackground="#333333")
+            self.results_list.tag_configure("directory", background="#4d4d4d", foreground="#ffffff")
+            self.results_list.tag_configure("file", background="#333333", foreground="#ffffff")
+
 
     def copy_selected(self):
         """Copia i file selezionati in una directory di destinazione"""
@@ -1453,6 +1499,13 @@ class FileSearchApp:
                                     font=("", 9, "bold"))
         self.end_time_label.grid(row=0, column=3, sticky=W)
         
+        ttk.Label(times_grid, text="Durata:", 
+                font=("", 9)).grid(row=0, column=4, sticky=W, padx=(25,2))
+        self.total_time_label = ttk.Label(times_grid, text="--:--", 
+                                    font=("", 9, "bold"))
+        self.total_time_label.grid(row=0, column=5, sticky=W)
+
+
         # Frame per lo stato dell'analisi
         analysis_frame = ttk.LabelFrame(status_container, text="Stato analisi", padding=5)
         analysis_frame.pack(fill=X, pady=5)
@@ -1482,7 +1535,7 @@ class FileSearchApp:
         
         # ---- Configurazione pannello destro (risultati) ----
         
-        # Frame per i pulsanti di azione
+         # Frame per i pulsanti di azione
         action_buttons_frame = ttk.Frame(right_frame)
         action_buttons_frame.pack(fill=X, pady=(0, 5))
         
