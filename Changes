@@ -10,3 +10,8 @@ Aggiunta opzione Performance
 Migliorie varie
 V8.0
 Migliorato il sistema di ricerca in un percorso C:/
+8.4
+Migliorie varie
+8.4.1
+Supporto Word (.doc) attivato tramite pywin32
+Supporto Excel (.xls) attivato tramite pywin32
