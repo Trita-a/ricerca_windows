@@ -15,3 +15,5 @@ Migliorie varie
 8.4.1
 Supporto Word (.doc) attivato tramite pywin32
 Supporto Excel (.xls) attivato tramite pywin32
+8.4.2
+Risoluzione errore sul support Word (.doc) e Excel (.xls)
