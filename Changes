@@ -21,3 +21,9 @@ Risoluzione errore sul support Word (.doc) e Excel (.xls)
 Aggiunto il pulsante Admin per la ricerca da amministratore
 Aggiunto la gestione dei percorsi/cartelle da escludere
 Aggiunto esclusioni dei file di sistema
+8.5.1
+Aggiute ulteriori estensioni di sistema da escludere
+Aggiuto Applica tutte le ottimizzazioni consigliate in un solo clic:
+    Esclude C:/Windows e C:/Program Files
+    Esclude le cartelle di altri utenti
+    Imposta automaticamente una profondità di ricerca ottimale
