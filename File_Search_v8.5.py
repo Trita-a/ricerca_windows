@@ -109,7 +109,7 @@ class FileSearchApp:
         self.user_var = StringVar(value=getpass.getuser())
         
         # Variabili
-        self.search_content = BooleanVar(value=False)
+        self.search_content = BooleanVar(value=True)
         self.search_path = StringVar()
         self.keywords = StringVar()
         self.search_results = []
@@ -137,6 +137,19 @@ class FileSearchApp:
         # Opzioni per la gestione dei permessi
         self.skip_permission_errors = BooleanVar(value=True)  # Salta silenziosamente errori di permesso
         self.excluded_paths = []  # Lista di percorsi da escludere dalla ricerca
+
+        # Directory problematiche da escludere automaticamente
+        self.problematic_dirs = [
+            "Client Active Directory Rights Management Services",
+            "Windows Resource Protection",
+            "Windows Defender",
+            "Microsoft Office",
+            "System Volume Information",
+            "$Recycle.Bin",
+            "$WINDOWS.~BT",
+            "$Windows.~WS"
+        ]
+
         # Verifica dei privilegi di amministratore
         self.is_admin = False
         try:
@@ -149,7 +162,7 @@ class FileSearchApp:
         self.timeout_enabled = BooleanVar(value=False)
         self.timeout_seconds = IntVar(value=3600)  # Default 60 secondi
         self.max_files_to_check = IntVar(value=100000)  # Limite numero di file da controllare
-        self.max_results = IntVar(value=1000)  # Limite numero di risultati
+        self.max_results = IntVar(value=50000)  # Limite numero di risultati
         self.chunk_size = 8192  # Grandezza del chunk per la lettura dei file
         self.max_file_size_mb = IntVar(value=100)  # Dimensione massima file da analizzare (in MB)
         self.worker_threads = IntVar(value=min(8, os.cpu_count() or 4))  # Numero di worker threads per elaborazione parallela
@@ -189,7 +202,19 @@ class FileSearchApp:
     
         # Imposta il tema iniziale
         self.update_theme_colors("dark")  # O "dark" se il tema predefinito è scuro
-        
+
+    def show_content_search_warning(self):
+        """Mostra un avviso se la ricerca nei contenuti è attivata"""
+        if self.search_content.get():  # Se la checkbox è attivata
+            return messagebox.askyesno(
+                "Attenzione - Ricerca nei contenuti", 
+                "Hai attivato la ricerca nei contenuti dei file.\n\n"
+                "Questa operazione può richiedere molto più tempo, soprattutto con grandi quantità di file.\n\n"
+                "Vuoi procedere con la ricerca nei contenuti?",
+                icon="warning"
+            )
+        return True  # Se la ricerca nei contenuti non è attivata, procedi senza avviso    
+    
     def register_interrupt_handler(self):
         """Registra il gestore degli interrupt (CTRL+C)"""
         def handle_interrupt(sig, frame):
@@ -381,7 +406,8 @@ class FileSearchApp:
                 "C:/Program Files", 
                 "C:/Program Files (x86)",
                 "C:/ProgramData",
-                "C:/Users/All Users"
+                "C:/Users/All Users",
+                "C:/Program Files (x86)/Client Active Directory Rights Management Services"
             ]
             added = 0
             for path in common_paths:
@@ -487,10 +513,14 @@ class FileSearchApp:
         # Pulisci risultati precedenti
         for item in self.results_list.get_children():
             self.results_list.delete(item)
-        
+    
         if not self.search_path.get() or not self.keywords.get():
             messagebox.showerror("Errore", "Inserisci directory e parole chiave")
             return
+        
+        # Mostra avviso se la ricerca nei contenuti è attivata
+        if not self.show_content_search_warning():
+            return  # Interrompi se l'utente annulla
         
         # Reset per la nuova ricerca
         self.stop_search = False
@@ -628,85 +658,110 @@ class FileSearchApp:
             def process_file(file_path, keywords):
                 if self.stop_search:
                     return None
-                try:
-                        # Aggiungi un timeout complessivo per l'elaborazione di ogni file
-                        import signal
-                        
-                        # Funzione per gestire il timeout
-                        def timeout_handler(signum, frame):
-                            raise TimeoutError(f"Tempo scaduto durante l'elaborazione del file {file_path}")
-                        
-                        # Imposta un allarme di 20 secondi per ogni file
-                        if os.name != 'nt':  # signal.SIGALRM non è disponibile su Windows
-                            signal.signal(signal.SIGALRM, timeout_handler)
-                            signal.alarm(20)
-                        
-                        # Resto del codice di elaborazione...
-                        
-                        # Disattiva l'allarme se tutto è andato bene
-                        if os.name != 'nt':
-                            signal.alarm(0)
-                            
-                except TimeoutError as e:
-                    self.log_debug(str(e))
-                    return None
-                except Exception as e:
-                    self.log_debug(f"Errore durante l'elaborazione del file {file_path}: {str(e)}")
-                    return None
-                try:
-                    # Verifica filtri di dimensione
-                    file_size = os.path.getsize(file_path)
-                    if (self.advanced_filters["size_min"] > 0 and file_size < self.advanced_filters["size_min"]) or \
-                    (self.advanced_filters["size_max"] > 0 and file_size > self.advanced_filters["size_max"]):
-                        return None
                     
-                    # Verifica filtri di data
-                    if self.advanced_filters["date_min"] or self.advanced_filters["date_max"]:
-                        mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
-                        mod_date_str = mod_time.strftime("%d-%m-%Y")
-                        
-                        if self.advanced_filters["date_min"]:
-                            min_date = datetime.strptime(self.advanced_filters["date_min"], "%d-%m-%Y")
-                            if mod_time < min_date:
-                                return None
+                # Salta direttamente i file problematici
+                if self.should_skip_file(file_path):
+                    return None
+                
+                try:
+                    # Implementazione timeout cross-platform tramite threading
+                    result = [None]
+                    exception = [None]
+                    processing_completed = [False]
+                    
+                    def process_with_timeout():
+                        try:
+                            # Verifica filtri di dimensione
+                            file_size = os.path.getsize(file_path)
+                            if (self.advanced_filters["size_min"] > 0 and file_size < self.advanced_filters["size_min"]) or \
+                            (self.advanced_filters["size_max"] > 0 and file_size > self.advanced_filters["size_max"]):
+                                result[0] = None
+                                return
+                            
+                            # Verifica filtri di data
+                            if self.advanced_filters["date_min"] or self.advanced_filters["date_max"]:
+                                mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
                                 
-                        if self.advanced_filters["date_max"]:
-                            max_date = datetime.strptime(self.advanced_filters["date_max"], "%d-%m-%Y")
-                            if mod_time > max_date:
-                                return None
-                    
-                    # Verifica filtri estensione
-                    if self.advanced_filters["extensions"] and not any(file_path.lower().endswith(ext.lower()) 
-                                                                for ext in self.advanced_filters["extensions"]):
-                        return None
-                    if os.path.splitext(file_path)[1].lower() in ['.doc', '.xls']:
-                        self.progress_queue.put(("progress", self.progress_bar["value"]))  # Forza aggiornamento
-                        
-                    # Verifica corrispondenza nel nome file
-                    filename = os.path.basename(file_path)
-                    if any(keyword.lower() in filename.lower() for keyword in keywords):
-                        return self.create_file_info(file_path)
-                    
-                    # Verifica contenuto se richiesto
-                    if search_content and self.should_search_content(file_path):
-                        max_size_bytes = self.max_file_size_mb.get() * 1024 * 1024
-                        
-                        # Salta file troppo grandi
-                        if file_size > max_size_bytes:
-                            self.log_debug(f"File {file_path} troppo grande per l'analisi del contenuto")
-                            return None
+                                if self.advanced_filters["date_min"]:
+                                    min_date = datetime.strptime(self.advanced_filters["date_min"], "%d-%m-%Y")
+                                    if mod_time < min_date:
+                                        result[0] = None
+                                        return
+                                        
+                                if self.advanced_filters["date_max"]:
+                                    max_date = datetime.strptime(self.advanced_filters["date_max"], "%d-%m-%Y")
+                                    if mod_time > max_date:
+                                        result[0] = None
+                                        return
                             
-                        content = self.get_file_content(file_path)
-                        if content and any(keyword.lower() in content.lower() for keyword in keywords):
-                            return self.create_file_info(file_path)
-                    else:
-                        # Aggiungi questo log per tracciare i file di sistema esclusi
-                        if search_content and os.path.splitext(file_path)[1].lower() in self.system_file_extensions:
-                            self.log_debug(f"File di sistema escluso dall'analisi del contenuto: {file_path}")
-                    return None
+                            # Verifica filtri estensione
+                            if self.advanced_filters["extensions"] and not any(file_path.lower().endswith(ext.lower()) 
+                                                                        for ext in self.advanced_filters["extensions"]):
+                                result[0] = None
+                                return
+                                
+                            if os.path.splitext(file_path)[1].lower() in ['.doc', '.xls']:
+                                self.progress_queue.put(("progress", self.progress_bar["value"]))  # Forza aggiornamento
+                                
+                            # Verifica corrispondenza nel nome file
+                            filename = os.path.basename(file_path)
+                            if any(keyword.lower() in filename.lower() for keyword in keywords):
+                                result[0] = self.create_file_info(file_path)
+                                return
+                            
+                            # Verifica contenuto se richiesto
+                            if search_content and self.should_search_content(file_path):
+                                max_size_bytes = self.max_file_size_mb.get() * 1024 * 1024
+                                
+                                # Salta file troppo grandi
+                                if file_size > max_size_bytes:
+                                    self.log_debug(f"File {file_path} troppo grande per l'analisi del contenuto")
+                                    result[0] = None
+                                    return
+                                    
+                                content = self.get_file_content(file_path)
+                                if content and any(keyword.lower() in content.lower() for keyword in keywords):
+                                    result[0] = self.create_file_info(file_path)
+                                    return
+                            else:
+                                # Log per i file di sistema esclusi
+                                if search_content and os.path.splitext(file_path)[1].lower() in self.system_file_extensions:
+                                    self.log_debug(f"File di sistema escluso dall'analisi del contenuto: {file_path}")
+                                    
+                            result[0] = None
+                            
+                        except Exception as e:
+                            exception[0] = e
+                            self.log_debug(f"Errore durante l'elaborazione del file {file_path}: {str(e)}")
+                            result[0] = None
+                        finally:
+                            processing_completed[0] = True
+                    
+                    # Crea e avvia il thread di elaborazione
+                    import threading
+                    worker_thread = threading.Thread(target=process_with_timeout)
+                    worker_thread.daemon = True
+                    worker_thread.start()
+                    
+                    # Attendi il completamento del thread con timeout (20 secondi)
+                    timeout_seconds = 20
+                    worker_thread.join(timeout_seconds)
+                    
+                    # Verifica se il thread è ancora in esecuzione (timeout raggiunto)
+                    if not processing_completed[0]:
+                        self.log_debug(f"Timeout nella elaborazione del file {file_path}")
+                        return None
+                        
+                    # Verifica se si è verificata un'eccezione
+                    if exception[0]:
+                        self.log_debug(f"Eccezione nell'elaborazione del file {file_path}: {str(exception[0])}")
+                        return None
+                        
+                    # Restituisci il risultato dal thread
+                    return result[0]
                     
                 except Exception as e:
-                    self.log_debug(f"Errore durante l'elaborazione del file {file_path}: {str(e)}")
+                    self.log_debug(f"Errore generale nella elaborazione del file {file_path}: {str(e)}")
                     return None
             
             # Funzione per visitare una directory
@@ -1002,11 +1057,16 @@ class FileSearchApp:
         user_folder = os.path.join("C:/Users", getpass.getuser())
         if os.path.exists(user_folder):
             self.search_path.set(user_folder)
-            messagebox.showinfo(
-                "Ricerca configurata", 
-                f"La ricerca è stata configurata per cercare solo nella tua cartella utente:\n{user_folder}\n\n"
-                "Questa modalità evita problemi di permesso con altre cartelle protette."
-            )
+            
+            # Mostra la conferma solo se l'utente non annulla il warning sulla ricerca nei contenuti
+            if self.show_content_search_warning():
+                messagebox.showinfo(
+                    "Ricerca configurata", 
+                    f"La ricerca è stata configurata per cercare solo nella tua cartella utente:\n{user_folder}\n\n"
+                    "Questa modalità evita problemi di permesso con altre cartelle protette."
+                )
+                # Avvia direttamente la ricerca
+                self.start_search()
         else:
             messagebox.showerror("Errore", "Impossibile trovare la tua cartella utente")
 
@@ -1128,12 +1188,29 @@ class FileSearchApp:
             (ext == '.rtf' and file_format_support["rtf"]) or
             (ext == '.odt' and file_format_support["odt"])
         )
-        
+    def should_skip_file(self, file_path):
+        """Verifica se un file deve essere saltato durante l'analisi del contenuto"""
+        # Salta i file di Rights Management Services
+        if "Rights Management Services" in file_path or "IRMProtectors" in file_path:
+            self.log_debug(f"Saltato file protetto: {file_path}")
+            return True
+            
+        # Salta file con estensioni problematiche
+        problematic_extensions = [".msoprotector.doc", ".msoprotector.ppt", ".msoprotector.xls"]
+        if any(ext in file_path for ext in problematic_extensions):
+            self.log_debug(f"Saltato file con formato problematico: {file_path}")
+            return True
+            
+        return False
+   
     def get_file_content(self, file_path):
         """Ottiene il contenuto del file in base all'estensione"""
         try:
-            # Importa i moduli necessari all'inizio della funzione
-            import os  # Importa os qui per assicurarsi che sia disponibile in tutti i blocchi
+
+            if self.should_skip_file(file_path):
+                return ""
+                
+            import os
             ext = os.path.splitext(file_path)[1].lower()
             
             # File di testo semplice
@@ -1885,8 +1962,7 @@ class FileSearchApp:
         ttk.Checkbutton(options_row1, text="Cerca cartelle", 
                         variable=self.search_folders).pack(side=LEFT, padx=5)
         content_checkbox = ttk.Checkbutton(options_row1, text="Cerca nei contenuti", 
-                                        variable=self.search_content, 
-                                        command=self.warn_content_search)
+                                variable=self.search_content)
         content_checkbox.pack(side=LEFT, padx=5)
         self.create_tooltip(content_checkbox, "Cerca le parole chiave anche all'interno dei file di testo")
 
@@ -1962,7 +2038,7 @@ class FileSearchApp:
         max_results_frame = ttk.Frame(perf_grid)
         max_results_frame.grid(row=1, column=1, columnspan=2, sticky=W, pady=5)
         ttk.Label(max_results_frame, text="Max risultati:").pack(side=LEFT)
-        max_results_spinbox = ttk.Spinbox(max_results_frame, from_=100, to=100000, width=6,
+        max_results_spinbox = ttk.Spinbox(max_results_frame, from_=500, to=50000, width=6,
                                         textvariable=self.max_results)
         max_results_spinbox.pack(side=LEFT, padx=5)
         
@@ -2138,17 +2214,7 @@ class FileSearchApp:
 
         # Applica stili alle righe
         self.update_theme_colors()
-    
-    # Avviso sulla spunta della ricerca dei contenuti
-    def warn_content_search(self):
-        """Mostra un avviso se l'utente attiva la ricerca nei contenuti"""
-        if self.search_content.get():  # Se la checkbox è stata appena attivata
-            messagebox.showwarning(
-                "Attenzione", 
-                "Attivando questa opzione rallenterà la ricerca e l'attesa sarà maggiore.",
-                parent=self.root
-            )
-
+  
     def create_tooltip(self, widget, text, delay=500, fade=True):
         """Crea tooltip con ritardo, effetti di dissolvenza e larghezza automatica"""
         
