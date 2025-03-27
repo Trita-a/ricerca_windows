@@ -17,3 +17,7 @@ Supporto Word (.doc) attivato tramite pywin32
 Supporto Excel (.xls) attivato tramite pywin32
 8.4.2
 Risoluzione errore sul support Word (.doc) e Excel (.xls)
+8.5
+Aggiunto il pulsante Admin per la ricerca da amministratore
+Aggiunto la gestione dei percorsi/cartelle da escludere
+Aggiunto esclusioni dei file di sistema
