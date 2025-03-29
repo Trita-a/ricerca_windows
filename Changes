@@ -29,3 +29,6 @@ Aggiuto Applica tutte le ottimizzazioni consigliate in un solo clic:
     Imposta automaticamente una profondità di ricerca ottimale
 8.5.3
 Disabilita al click della ricerca tutti i controlli per evitare il blocco dell'applicazione
+8.6.1
+Aggiunto doppio click per l'apertura del percorso sui file trovati
+Corretto l'errore su escludi file, ora se non attiva cercherà dentro i file di sistema
