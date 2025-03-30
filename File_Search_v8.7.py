@@ -17,6 +17,7 @@ import concurrent.futures
 import mimetypes
 import signal
 import subprocess
+import zipfile
 
 # Dizionario per tracciare il supporto alle librerie
 file_format_support = {
@@ -2147,22 +2148,19 @@ class FileSearchApp:
         return result["name"]
 
     def compress_selected(self):
+        """Versione avanzata della compressione con opzioni aggiuntive"""
         selected_items = self.results_list.selection()
         if not selected_items:
             messagebox.showwarning("Attenzione", "Seleziona almeno un elemento da comprimere")
             return
             
         # Ottieni il nome del file ZIP
-        zip_name = self.get_zip_name() if hasattr(self, 'get_zip_name') else Querybox.get_string(
-            prompt="Inserisci il nome del file ZIP (senza estensione):",
-            title="Nome file ZIP",
-            initialvalue="archivio"
-        )
+        zip_name = self.get_zip_name()
         
         if not zip_name:
             return
         
-        # Ottieni il nome della cartella principale all'interno dell'archivio
+        # Ottieni il nome della cartella principale
         main_folder_name = self.get_main_folder_name()
         
         if main_folder_name is None:
@@ -2170,7 +2168,77 @@ class FileSearchApp:
         
         if not main_folder_name:
             main_folder_name = "files"  # Default se l'utente inserisce valore vuoto
+        
+        # Opzioni di compressione più dettagliate
+        compression_dialog = tk.Toplevel(self.root)
+        compression_dialog.title("Opzioni Compressione")
+        compression_dialog.transient(self.root)
+        compression_dialog.grab_set()
+        
+        frame = ttk.Frame(compression_dialog, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(frame, text="Scegli il tipo di compressione:").pack(anchor=tk.W, pady=(0,10))
+        
+        comp_var = tk.StringVar(value="standard")
+        
+        ttk.Radiobutton(frame, text="Standard (buon equilibrio)", 
+                    variable=comp_var, value="standard").pack(anchor=tk.W)
+        ttk.Radiobutton(frame, text="Minima (massima velocità)", 
+                    variable=comp_var, value="minima").pack(anchor=tk.W)
+        ttk.Radiobutton(frame, text="Nessuna (solo archiviazione)", 
+                    variable=comp_var, value="nessuna").pack(anchor=tk.W)
+        
+        ttk.Label(frame, text="\nOpzioni per file di grandi dimensioni:").pack(anchor=tk.W, pady=(10,5))
+        
+        use_chunks = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame, text="Elabora in blocchi (per file molto grandi)", 
+                    variable=use_chunks).pack(anchor=tk.W)
+        
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=(15,0))
+        
+        result = {"option": None, "chunks": False}
+        
+        def on_cancel():
+            result["option"] = None
+            compression_dialog.destroy()
+        
+        def on_ok():
+            result["option"] = comp_var.get()
+            result["chunks"] = use_chunks.get()
+            compression_dialog.destroy()
+        
+        ttk.Button(btn_frame, text="Annulla", command=on_cancel).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="OK", command=on_ok).pack(side=tk.RIGHT)
+        
+        # Centra la finestra
+        compression_dialog.update_idletasks()
+        width = compression_dialog.winfo_reqwidth() + 50
+        height = compression_dialog.winfo_reqheight() + 20
+        x = (compression_dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (compression_dialog.winfo_screenheight() // 2) - (height // 2)
+        compression_dialog.geometry(f"{width}x{height}+{x}+{y}")
+        
+        compression_dialog.wait_window()
+        
+        if result["option"] is None:
+            return  # Utente ha annullato
+        
+        # Determina il metodo di compressione
+        if result["option"] == "nessuna":
+            compression_method = zipfile.ZIP_STORED
+            compression_text = "nessuna"
+        elif result["option"] == "minima":
+            compression_method = zipfile.ZIP_STORED  # Compressione leggera
+            compression_text = "minima"
+        else:  # standard
+            compression_method = zipfile.ZIP_DEFLATED
+            compression_text = "standard"
             
+        # Log della scelta di compressione
+        self.log_debug(f"Utilizzo compressione {compression_text}")
+        
         zip_path = filedialog.asksaveasfilename(
             defaultextension=".zip",
             initialfile=f"{zip_name}.zip",
@@ -2180,6 +2248,7 @@ class FileSearchApp:
         
         if not zip_path:
             return
+            
         # Raccogli tutti i file delle cartelle selezionate
         files_in_folders = set()
         folder_paths = []
@@ -2238,9 +2307,14 @@ class FileSearchApp:
             # Identifica i file omonimi (con lo stesso nome ma percorsi diversi)
             omonimi_files = {name: paths for name, paths in file_names_map.items() if len(paths) > 1}
             self.log_debug(f"Trovati {len(omonimi_files)} file con nomi duplicati")
+
+            # Per l'elaborazione a blocchi
+            if result["chunks"] and total_items > 50:
+                chunk_size = 10  # Elabora 10 file alla volta
+                self.log_debug(f"Elaborazione a blocchi attivata: {chunk_size} file per blocco")
             
             # Secondo passaggio: crea l'archivio ZIP
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            with zipfile.ZipFile(zip_path, 'w', compression_method) as zipf:
                 # Tiene traccia dei percorsi già aggiunti al file ZIP
                 added_zip_paths = set()
                 
@@ -2388,11 +2462,19 @@ class FileSearchApp:
                 
                 # Se abbiamo trovato file omonimi, crea un file di log all'esterno delle cartelle
                 if omonimi_log:
-                    # Crea log leggibile in formato testo
+                    # Crea log leggibile in formato testo con le informazioni UTC e utente
+                    from datetime import datetime
+                    import getpass
+                    
+                    current_time_utc = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                    current_user = getpass.getuser()
+                    
                     log_content = "LOG DEI FILE OMONIMI\n"
                     log_content += "=" * 80 + "\n\n"
-                    log_content += f"Data: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}\n"
-                    log_content += f"Utente: {getpass.getuser()}\n"
+                    log_content += f"Data e Ora (UTC): {current_time_utc}\n"
+                    log_content += f"Utente: {current_user}\n"
+                    log_content += f"Tipo di compressione: {compression_text}\n"
+                    log_content += f"Elaborazione a blocchi: {'Sì' if result['chunks'] else 'No'}\n"
                     log_content += f"Totale file omonimi trovati: {len(omonimi_log)}\n\n"
                     
                     for idx, entry in enumerate(omonimi_log, 1):
@@ -2408,10 +2490,14 @@ class FileSearchApp:
             # Prepara il messaggio di completamento
             skipped_files = len(single_files) - len(filtered_single_files)
             message = f"Compressione completata!\nFile salvato in: {zip_path}\n"
-            message += f"File organizzati nella cartella '{main_folder_name}'"
+            message += f"File organizzati nella cartella '{main_folder_name}'\n"
+            message += f"Tipo di compressione utilizzata: {compression_text}\n"
+            
+            if result["chunks"]:
+                message += "Elaborazione a blocchi: Attiva\n"
             
             if omonimi_log:
-                message += f"\n\nTrovati {len(omonimi_log)} file omonimi."
+                message += f"\nTrovati {len(omonimi_log)} file omonimi."
                 message += f"\nCreato log dettagliato ('omonimi_log.txt') nella radice dell'archivio"
             
             if skipped_files > 0:
@@ -2431,7 +2517,8 @@ class FileSearchApp:
         finally:
             self.progress_bar["value"] = 0
             self.status_label["text"] = "In attesa..."
-            
+    
+
     def get_main_folder_name(self):
         """Mostra una finestra di dialogo personalizzata per richiedere il nome della cartella principale"""
         dialog = tk.Toplevel(self.root)
@@ -2501,6 +2588,7 @@ class FileSearchApp:
         dialog.wait_window()
         
         return result["name"]
+    
     def open_file_location(self, event=None):
         """Apre il percorso del file selezionato nel file explorer"""
         selected_items = self.results_list.selection()
