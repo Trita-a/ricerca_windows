@@ -2180,14 +2180,16 @@ class FileSearchApp:
         
         ttk.Label(frame, text="Scegli il tipo di compressione:").pack(anchor=tk.W, pady=(0,10))
         
-        comp_var = tk.StringVar(value="standard")
+        comp_var = tk.StringVar(value="nessuna")
         
-        ttk.Radiobutton(frame, text="Standard (buon equilibrio)", 
-                    variable=comp_var, value="standard").pack(anchor=tk.W)
-        ttk.Radiobutton(frame, text="Minima (massima velocità)", 
-                    variable=comp_var, value="minima").pack(anchor=tk.W)
         ttk.Radiobutton(frame, text="Nessuna (solo archiviazione)", 
-                    variable=comp_var, value="nessuna").pack(anchor=tk.W)
+            variable=comp_var, value="nessuna").pack(anchor=tk.W)
+        ttk.Radiobutton(frame, text="Minima (massima velocità) Liv.1", 
+                    variable=comp_var, value="minima").pack(anchor=tk.W)
+        ttk.Radiobutton(frame, text="Standard (buon equilibrio) Liv.6", 
+                    variable=comp_var, value="standard").pack(anchor=tk.W)
+        ttk.Radiobutton(frame, text="Massima (compressione ottimale, più lenta) Liv.9", 
+                    variable=comp_var, value="massima").pack(anchor=tk.W)
         
         ttk.Label(frame, text="\nOpzioni per file di grandi dimensioni:").pack(anchor=tk.W, pady=(10,5))
         
@@ -2224,20 +2226,38 @@ class FileSearchApp:
         
         if result["option"] is None:
             return  # Utente ha annullato
-        
+
         # Determina il metodo di compressione
+        compression_level = 0  # Valore predefinito
+
         if result["option"] == "nessuna":
             compression_method = zipfile.ZIP_STORED
             compression_text = "nessuna"
+            # compression_level non usato per ZIP_STORED
         elif result["option"] == "minima":
-            compression_method = zipfile.ZIP_STORED  # Compressione leggera
+            compression_method = zipfile.ZIP_DEFLATED
             compression_text = "minima"
+            compression_level = 1  # Compressione veloce, riduzione minima
+        elif result["option"] == "massima":
+            # Prova LZMA se disponibile, altrimenti BZIP2, altrimenti fallback su DEFLATED con livello massimo
+            if hasattr(zipfile, 'ZIP_LZMA'):
+                compression_method = zipfile.ZIP_LZMA
+                compression_text = "massima (LZMA)"
+                compression_level = 9
+            elif hasattr(zipfile, 'ZIP_BZIP2'):
+                compression_method = zipfile.ZIP_BZIP2
+                compression_text = "massima (BZIP2)"
+                compression_level = 9
+            else:
+                compression_method = zipfile.ZIP_DEFLATED
+                compression_text = "massima (DEFLATED)"
+                compression_level = 9
         else:  # standard
             compression_method = zipfile.ZIP_DEFLATED
             compression_text = "standard"
-            
+            compression_level = 6  # Compressione bilanciata
         # Log della scelta di compressione
-        self.log_debug(f"Utilizzo compressione {compression_text}")
+        self.log_debug(f"Utilizzo compressione {compression_text} (metodo: {compression_method}, livello: {compression_level})")
         
         zip_path = filedialog.asksaveasfilename(
             defaultextension=".zip",
@@ -2314,7 +2334,7 @@ class FileSearchApp:
                 self.log_debug(f"Elaborazione a blocchi attivata: {chunk_size} file per blocco")
             
             # Secondo passaggio: crea l'archivio ZIP
-            with zipfile.ZipFile(zip_path, 'w', compression_method) as zipf:
+            with zipfile.ZipFile(zip_path, 'w', compression_method, compresslevel=compression_level) as zipf:
                 # Tiene traccia dei percorsi già aggiunti al file ZIP
                 added_zip_paths = set()
                 
