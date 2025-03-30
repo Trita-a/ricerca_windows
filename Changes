@@ -37,4 +37,5 @@ Aggiunta la getione degli omonimi nella compressione, crea una cartella con gli 
 8.7
 Aggiunto opzione a blocchi per la performace e gestire i file di grande dimensioni a blocchi
 Aggiunto log degli omonimi dentro il file archivio con i dettagli
+Finestra di dialogo per la creazione della catella principale; per i file omonimmi cartella di default
 Migliorato aspetto generale della GUI
