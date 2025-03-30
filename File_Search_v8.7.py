@@ -2076,13 +2076,84 @@ class FileSearchApp:
             self.progress_bar["value"] = 0
             self.status_label["text"] = "In attesa..."
 
+    def get_zip_name(self):
+        """Mostra una finestra di dialogo personalizzata per richiedere il nome del file ZIP"""
+        dialog = ttk.Toplevel(self.root)
+        dialog.title("Nome file ZIP")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Variabile per memorizzare il risultato
+        result = {"name": None}
+        
+        # Frame principale con padding
+        main_frame = ttk.Frame(dialog, padding=20)
+        main_frame.pack(fill=BOTH, expand=YES)
+        
+        # Label di istruzione
+        ttk.Label(main_frame, text="Inserisci il nome del file ZIP (senza estensione):", 
+                font=("", 10)).pack(pady=(0, 10))
+        
+        # Campo di input
+        name_var = StringVar(value="archivio")
+        name_entry = ttk.Entry(main_frame, textvariable=name_var, width=40)
+        name_entry.pack(fill=X, pady=10)
+        name_entry.select_range(0, "end")  # Seleziona tutto il testo predefinito
+        name_entry.focus_set()  # Imposta il focus
+        
+        # Frame per i pulsanti
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=X, pady=(15, 0))
+        
+        # Funzioni di callback
+        def on_cancel():
+            result["name"] = None
+            dialog.destroy()
+        
+        def on_create():
+            zip_name = name_var.get().strip()
+            if zip_name:
+                result["name"] = zip_name
+                dialog.destroy()
+            else:
+                messagebox.showwarning("Attenzione", "Inserisci un nome valido per il file ZIP", parent=dialog)
+        
+        # Pulsanti con stili
+        cancel_btn = ttk.Button(btn_frame, text="Annulla", command=on_cancel, width=15)
+        cancel_btn.pack(side=LEFT, padx=(0, 10))
+        
+        create_btn = ttk.Button(btn_frame, text="Crea ZIP", command=on_create, 
+                            style="primary.TButton", width=15)
+        create_btn.pack(side=RIGHT)
+        
+        # Gestisci l'evento Invio e Escape
+        dialog.bind("<Return>", lambda e: on_create())
+        dialog.bind("<Escape>", lambda e: on_cancel())
+        
+        # Centra la finestra sullo schermo
+        dialog.update_idletasks()  # Aggiorna per ottenere dimensioni corrette
+        width = dialog.winfo_reqwidth() + 50
+        height = dialog.winfo_reqheight() + 20
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Imposta una dimensione minima
+        dialog.minsize(350, 180)
+        
+        # Blocca la finestra fino alla chiusura
+        dialog.wait_window()
+        
+        return result["name"]
+
     def compress_selected(self):
         selected_items = self.results_list.selection()
         if not selected_items:
             messagebox.showwarning("Attenzione", "Seleziona almeno un elemento da comprimere")
             return
             
-        zip_name = Querybox.get_string(
+        # Ottieni il nome del file ZIP
+        zip_name = self.get_zip_name() if hasattr(self, 'get_zip_name') else Querybox.get_string(
             prompt="Inserisci il nome del file ZIP (senza estensione):",
             title="Nome file ZIP",
             initialvalue="archivio"
@@ -2090,6 +2161,15 @@ class FileSearchApp:
         
         if not zip_name:
             return
+        
+        # Ottieni il nome della cartella principale all'interno dell'archivio
+        main_folder_name = self.get_main_folder_name()
+        
+        if main_folder_name is None:
+            return  # L'utente ha annullato
+        
+        if not main_folder_name:
+            main_folder_name = "files"  # Default se l'utente inserisce valore vuoto
             
         zip_path = filedialog.asksaveasfilename(
             defaultextension=".zip",
@@ -2100,7 +2180,6 @@ class FileSearchApp:
         
         if not zip_path:
             return
-            
         # Raccogli tutti i file delle cartelle selezionate
         files_in_folders = set()
         folder_paths = []
@@ -2131,48 +2210,107 @@ class FileSearchApp:
         omonimi_log = []
         
         try:
+            # Primo passaggio: analizza tutti i file e identifica gli omonimi
+            self.log_debug(f"Analisi dei file da comprimere nella cartella {main_folder_name}...")
+            
+            # Dizionario {nome_file: [lista_percorsi]}
+            file_names_map = {}
+            
+            # Raccogli i nomi dei file dalle cartelle
+            for folder_path in folder_paths:
+                for root, _, files in os.walk(folder_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        file_name = os.path.basename(file_path)
+                        
+                        if file_name not in file_names_map:
+                            file_names_map[file_name] = []
+                        file_names_map[file_name].append(file_path)
+            
+            # Raccogli i nomi dei file singoli
+            for file_path in filtered_single_files:
+                if os.path.exists(file_path):
+                    file_name = os.path.basename(file_path)
+                    if file_name not in file_names_map:
+                        file_names_map[file_name] = []
+                    file_names_map[file_name].append(file_path)
+            
+            # Identifica i file omonimi (con lo stesso nome ma percorsi diversi)
+            omonimi_files = {name: paths for name, paths in file_names_map.items() if len(paths) > 1}
+            self.log_debug(f"Trovati {len(omonimi_files)} file con nomi duplicati")
+            
+            # Secondo passaggio: crea l'archivio ZIP
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Mantiene traccia dei file già aggiunti nel ZIP
-                added_files = {}  # Ora è un dizionario che mappa nome file -> percorso originale
+                # Tiene traccia dei percorsi già aggiunti al file ZIP
+                added_zip_paths = set()
                 
-                # Prima comprimi le cartelle
+                # Comprimi le cartelle
                 for folder_path in folder_paths:
                     base_folder = os.path.basename(folder_path)
                     for root, _, files in os.walk(folder_path):
                         for file in files:
                             file_path = os.path.join(root, file)
-                            # Mantieni la struttura delle cartelle nel zip
-                            rel_path = os.path.relpath(file_path, os.path.dirname(folder_path))
                             file_name = os.path.basename(file_path)
                             
-                            # Verifica se il file è già stato aggiunto
-                            if file_name in added_files:
-                                # Aggiungi al log degli omonimi
-                                omonimi_log.append({
-                                    "nome_file": file_name,
-                                    "percorso_originale": file_path,
-                                    "primo_percorso": added_files[file_name],
-                                    "posizione_zip": os.path.join("omonimi", file_name)
-                                })
+                            try:
+                                # Salta file non leggibili
+                                if not os.access(file_path, os.R_OK):
+                                    self.log_debug(f"Saltato file senza permessi di lettura: {file_path}")
+                                    continue
                                 
-                                # Crea un percorso alternativo nella cartella "omonimi"
-                                # Usa un nome che include parte del percorso per evitare ulteriori conflitti
-                                folder_name = os.path.basename(os.path.dirname(file_path))
-                                alt_filename = f"{folder_name}_{file_name}"
-                                alt_path = os.path.join("omonimi", alt_filename)
+                                # Calcola il percorso relativo standard
+                                rel_path = os.path.relpath(file_path, os.path.dirname(folder_path))
                                 
-                                # Verifica se anche questo nome alternativo esiste già
-                                counter = 1
-                                while alt_filename in added_files:
-                                    alt_filename = f"{folder_name}_{counter}_{file_name}"
-                                    alt_path = os.path.join("omonimi", alt_filename)
-                                    counter += 1
+                                # Verifica se è un file omonimo
+                                if file_name in omonimi_files:
+                                    # Se questo è il primo file con questo nome, inseriscilo nella cartella principale
+                                    if omonimi_files[file_name][0] == file_path:
+                                        # Usa il percorso all'interno della cartella principale
+                                        zip_path_to_use = os.path.join(main_folder_name, rel_path)
+                                    else:
+                                        # Per i file omonimi successivi, crea un nome univoco nella cartella 'omonimi'
+                                        parent_folder = os.path.basename(os.path.dirname(file_path))
+                                        unique_name = f"{parent_folder}_{file_name}"
+                                        
+                                        # Se anche questo nome è duplicato, aggiungi un contatore
+                                        counter = 1
+                                        while os.path.join("omonimi", unique_name) in added_zip_paths:
+                                            unique_name = f"{parent_folder}_{counter}_{file_name}"
+                                            counter += 1
+                                            
+                                        zip_path_to_use = os.path.join("omonimi", unique_name)
+                                        
+                                        # Registra questo file nel log degli omonimi
+                                        omonimi_log.append({
+                                            "nome_file": file_name,
+                                            "percorso_originale": file_path,
+                                            "primo_percorso": omonimi_files[file_name][0],
+                                            "posizione_zip": zip_path_to_use
+                                        })
+                                else:
+                                    # Non è un omonimo, inseriscilo nella cartella principale
+                                    zip_path_to_use = os.path.join(main_folder_name, rel_path)
+                                
+                                # Verifica se questo percorso ZIP è già stato usato
+                                if zip_path_to_use in added_zip_paths:
+                                    self.log_debug(f"Conflitto di percorso ZIP: {zip_path_to_use}")
+                                    # Crea un nome alternativo
+                                    alt_name = f"conflitto_{os.path.basename(zip_path_to_use)}"
+                                    zip_path_to_use = os.path.join("omonimi", alt_name)
                                     
-                                zipf.write(file_path, alt_path)
-                                added_files[alt_filename] = file_path
-                            else:
-                                zipf.write(file_path, rel_path)
-                                added_files[file_name] = file_path
+                                    # Se anche questo nome è già usato, aggiungi un contatore
+                                    counter = 1
+                                    while zip_path_to_use in added_zip_paths:
+                                        alt_name = f"conflitto_{counter}_{os.path.basename(zip_path_to_use)}"
+                                        zip_path_to_use = os.path.join("omonimi", alt_name)
+                                        counter += 1
+                                
+                                # Aggiungi il file al ZIP e registra il percorso
+                                zipf.write(file_path, zip_path_to_use)
+                                added_zip_paths.add(zip_path_to_use)
+                                
+                            except Exception as e:
+                                self.log_debug(f"Errore durante la compressione di {file_path}: {str(e)}")
                     
                     processed += 1
                     progress = (processed / total_items) * 100
@@ -2180,45 +2318,75 @@ class FileSearchApp:
                     self.status_label["text"] = f"Compressi {processed} di {total_items} elementi"
                     self.root.update()
                 
-                # Poi comprimi i file singoli (solo quelli non già presenti nelle cartelle)
+                # Comprimi i file singoli
                 for file_path in filtered_single_files:
-                    if os.path.exists(file_path):  # Verifica che il file esista ancora
+                    if os.path.exists(file_path):
                         file_name = os.path.basename(file_path)
                         
-                        # Verifica se il file è già stato aggiunto
-                        if file_name in added_files:
-                            # Aggiungi al log degli omonimi
-                            omonimi_log.append({
-                                "nome_file": file_name,
-                                "percorso_originale": file_path,
-                                "primo_percorso": added_files[file_name],
-                                "posizione_zip": os.path.join("omonimi", file_name)
-                            })
+                        try:
+                            # Salta file non leggibili
+                            if not os.access(file_path, os.R_OK):
+                                self.log_debug(f"Saltato file senza permessi di lettura: {file_path}")
+                                continue
                             
-                            # Usa la stessa logica di sopra per creare un nome unico
-                            folder_name = os.path.basename(os.path.dirname(file_path))
-                            alt_filename = f"{folder_name}_{file_name}"
-                            alt_path = os.path.join("omonimi", alt_filename)
+                            # Verifica se è un file omonimo
+                            if file_name in omonimi_files:
+                                # Se questo è il primo file con questo nome, inseriscilo nella cartella principale
+                                if omonimi_files[file_name][0] == file_path:
+                                    # Usa il nome del file all'interno della cartella principale
+                                    zip_path_to_use = os.path.join(main_folder_name, file_name)
+                                else:
+                                    # Per i file omonimi successivi, crea un nome univoco nella cartella 'omonimi'
+                                    parent_folder = os.path.basename(os.path.dirname(file_path))
+                                    unique_name = f"{parent_folder}_{file_name}"
+                                    
+                                    # Se anche questo nome è duplicato, aggiungi un contatore
+                                    counter = 1
+                                    while os.path.join("omonimi", unique_name) in added_zip_paths:
+                                        unique_name = f"{parent_folder}_{counter}_{file_name}"
+                                        counter += 1
+                                    
+                                    zip_path_to_use = os.path.join("omonimi", unique_name)
+                                    
+                                    # Registra questo file nel log degli omonimi
+                                    omonimi_log.append({
+                                        "nome_file": file_name,
+                                        "percorso_originale": file_path,
+                                        "primo_percorso": omonimi_files[file_name][0],
+                                        "posizione_zip": zip_path_to_use
+                                    })
+                            else:
+                                # Non è un omonimo, inseriscilo nella cartella principale
+                                zip_path_to_use = os.path.join(main_folder_name, file_name)
                             
-                            counter = 1
-                            while alt_filename in added_files:
-                                alt_filename = f"{folder_name}_{counter}_{file_name}"
-                                alt_path = os.path.join("omonimi", alt_filename)
-                                counter += 1
+                            # Verifica se questo percorso ZIP è già stato usato
+                            if zip_path_to_use in added_zip_paths:
+                                self.log_debug(f"Conflitto di percorso ZIP: {zip_path_to_use}")
+                                # Crea un nome alternativo
+                                alt_name = f"conflitto_{os.path.basename(zip_path_to_use)}"
+                                zip_path_to_use = os.path.join("omonimi", alt_name)
                                 
-                            zipf.write(file_path, alt_path)
-                            added_files[alt_filename] = file_path
-                        else:
-                            zipf.write(file_path, file_name)
-                            added_files[file_name] = file_path
-                        
+                                # Se anche questo nome è già usato, aggiungi un contatore
+                                counter = 1
+                                while zip_path_to_use in added_zip_paths:
+                                    alt_name = f"conflitto_{counter}_{os.path.basename(zip_path_to_use)}"
+                                    zip_path_to_use = os.path.join("omonimi", alt_name)
+                                    counter += 1
+                            
+                            # Aggiungi il file al ZIP e registra il percorso
+                            zipf.write(file_path, zip_path_to_use)
+                            added_zip_paths.add(zip_path_to_use)
+                            
+                        except Exception as e:
+                            self.log_debug(f"Errore durante la compressione di {file_path}: {str(e)}")
+                    
                     processed += 1
                     progress = (processed / total_items) * 100
                     self.progress_bar["value"] = progress
                     self.status_label["text"] = f"Compressi {processed} di {total_items} elementi"
                     self.root.update()
                 
-                # Se abbiamo trovato file omonimi, crea un file di log all'interno del ZIP
+                # Se abbiamo trovato file omonimi, crea un file di log all'esterno delle cartelle
                 if omonimi_log:
                     # Crea log leggibile in formato testo
                     log_content = "LOG DEI FILE OMONIMI\n"
@@ -2234,16 +2402,17 @@ class FileSearchApp:
                         log_content += f"  Collocato in: {entry['posizione_zip']}\n"
                         log_content += f"  In conflitto con: {entry['primo_percorso']}\n\n"
                     
-                    # Aggiungi il file di log solo all'interno del ZIP
+                    # Aggiungi il file di log direttamente alla root dell'archivio
                     zipf.writestr("omonimi_log.txt", log_content)
             
             # Prepara il messaggio di completamento
             skipped_files = len(single_files) - len(filtered_single_files)
-            message = f"Compressione completata!\nFile salvato in: {zip_path}"
+            message = f"Compressione completata!\nFile salvato in: {zip_path}\n"
+            message += f"File organizzati nella cartella '{main_folder_name}'"
             
             if omonimi_log:
                 message += f"\n\nTrovati {len(omonimi_log)} file omonimi."
-                message += f"\nCreato log dettagliato all'interno dell'archivio ('omonimi_log.txt')"
+                message += f"\nCreato log dettagliato ('omonimi_log.txt') nella radice dell'archivio"
             
             if skipped_files > 0:
                 message += f"\n{skipped_files} file saltati perché già presenti nelle cartelle"
@@ -2251,13 +2420,88 @@ class FileSearchApp:
             messagebox.showinfo("Completato", message)
             
         except Exception as e:
-            messagebox.showerror("Errore", f"Errore durante la compressione: {str(e)}")
+            import traceback
+            error_details = traceback.format_exc()
+            self.log_debug(f"Errore dettagliato durante la compressione:\n{error_details}")
+            
+            messagebox.showerror("Errore", 
+                f"Errore durante la compressione: {str(e)}\n\n"
+                f"Tipo di errore: {type(e).__name__}")
             
         finally:
             self.progress_bar["value"] = 0
             self.status_label["text"] = "In attesa..."
             
-    def open_file_location(self, event):
+    def get_main_folder_name(self):
+        """Mostra una finestra di dialogo personalizzata per richiedere il nome della cartella principale"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Cartella Principale")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Variabile per memorizzare il risultato
+        result = {"name": None}
+        
+        # Frame principale con padding
+        main_frame = ttk.Frame(dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=tk.YES)
+        
+        # Label di istruzione
+        ttk.Label(main_frame, text="Inserisci il nome della cartella principale nell'archivio:", 
+                font=("", 10)).pack(pady=(0, 10))
+        
+        # Campo di input
+        name_var = tk.StringVar(value="files")
+        name_entry = ttk.Entry(main_frame, textvariable=name_var, width=40)
+        name_entry.pack(fill=tk.X, pady=10)
+        name_entry.select_range(0, "end")  # Seleziona tutto il testo predefinito
+        name_entry.focus_set()  # Imposta il focus
+        
+        # Frame per i pulsanti
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X, pady=(15, 0))
+        
+        # Funzioni di callback
+        def on_cancel():
+            result["name"] = None
+            dialog.destroy()
+        
+        def on_create():
+            folder_name = name_var.get().strip()
+            if folder_name:
+                result["name"] = folder_name
+                dialog.destroy()
+            else:
+                messagebox.showwarning("Attenzione", "Inserisci un nome valido per la cartella", parent=dialog)
+        
+        # Pulsanti con stili
+        cancel_btn = ttk.Button(btn_frame, text="Annulla", command=on_cancel, width=15)
+        cancel_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        create_btn = ttk.Button(btn_frame, text="Crea Cartella", command=on_create, 
+                            style="primary.TButton", width=15)
+        create_btn.pack(side=tk.RIGHT)
+        
+        # Gestisci l'evento Invio e Escape
+        dialog.bind("<Return>", lambda e: on_create())
+        dialog.bind("<Escape>", lambda e: on_cancel())
+        
+        # Centra la finestra sullo schermo
+        dialog.update_idletasks()  # Aggiorna per ottenere dimensioni corrette
+        width = dialog.winfo_reqwidth() + 50
+        height = dialog.winfo_reqheight() + 20
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Imposta una dimensione minima
+        dialog.minsize(350, 180)
+        
+        # Blocca la finestra fino alla chiusura
+        dialog.wait_window()
+        
+        return result["name"]
+    def open_file_location(self, event=None):
         """Apre il percorso del file selezionato nel file explorer"""
         selected_items = self.results_list.selection()
         if not selected_items:
@@ -2268,15 +2512,23 @@ class FileSearchApp:
         
         try:
             if os.path.exists(file_path):
+                # Ottieni la directory contenente il file
+                directory = os.path.dirname(file_path)
+                
                 if os.name == 'nt':  # Windows
                     # Converti eventuali forward slash in backslash per Windows
                     file_path = os.path.normpath(file_path)
-                    # Usa il metodo corretto per Windows Explorer
-                    os.system(f'explorer /select,"{file_path}"')
+                    # Usa il metodo più sicuro con subprocess invece di os.system
+                    subprocess.run(['explorer', '/select,', file_path], shell=True)
                 else:
                     # Per sistemi Linux/Unix
-                    directory = os.path.dirname(file_path)
-                    subprocess.run(['xdg-open', directory])
+                    if shutil.which('xdg-open'):  # Verifica che xdg-open sia disponibile
+                        subprocess.run(['xdg-open', directory])
+                    elif shutil.which('open'):  # Per macOS
+                        subprocess.run(['open', directory])
+                    else:
+                        self.log_debug("Nessun comando disponibile per aprire directory")
+                        messagebox.showinfo("Informazione", f"Percorso del file: {directory}")
                 
                 self.log_debug(f"Apertura percorso: {file_path}")
             else:
@@ -2285,6 +2537,7 @@ class FileSearchApp:
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile aprire il percorso: {str(e)}")
             self.log_debug(f"Errore nell'apertura del percorso: {str(e)}")
+
     def show_advanced_filters_dialog(self):
         """Mostra la finestra di dialogo per i filtri di ricerca avanzati"""
         dialog = ttk.Toplevel(self.root)
