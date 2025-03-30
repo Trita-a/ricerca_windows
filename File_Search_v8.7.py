@@ -131,6 +131,7 @@ class FileSearchApp:
         self.progress_queue = queue.Queue()
         self.search_executor = None
         self.exclude_system_files = BooleanVar(value=True)  # Per default escludiamo i file di sistema
+        self.whole_word_search = BooleanVar(value=False)
 
         # Variabili per la ricerca a blocchi
         self.max_files_per_block = IntVar(value=1000)  # Numero massimo di file per blocco
@@ -961,7 +962,34 @@ class FileSearchApp:
                                 
                             # Verifica corrispondenza nel nome file
                             filename = os.path.basename(file_path)
-                            if any(keyword.lower() in filename.lower() for keyword in keywords):
+
+                            matched = False
+                            for keyword in keywords:
+                                # Verifica se la ricerca di parole intere è attivata
+                                if self.whole_word_search.get() and ' ' not in keyword:
+                                    try:
+                                        import re
+                                        pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+                                        if re.search(pattern, filename.lower()):
+                                            matched = True
+                                            break
+                                    except:
+                                        # Fallback in caso di errore con regex
+                                        if keyword.lower() in filename.lower():
+                                            matched = True
+                                            break
+                                # Se è un termine con spazi (contesto specifico)
+                                elif ' ' in keyword:
+                                    if keyword.lower() in filename.lower():
+                                        matched = True
+                                        break
+                                # Ricerca normale
+                                else:
+                                    if keyword.lower() in filename.lower():
+                                        matched = True
+                                        break
+
+                            if matched:
                                 result[0] = self.create_file_info(file_path)
                                 return
                             
@@ -976,9 +1004,36 @@ class FileSearchApp:
                                     return
                                     
                                 content = self.get_file_content(file_path)
-                                if content and any(keyword.lower() in content.lower() for keyword in keywords):
-                                    result[0] = self.create_file_info(file_path)
-                                    return
+                                if content:
+                                    matched = False
+                                    for keyword in keywords:
+                                        # Verifica se la ricerca di parole intere è attivata
+                                        if self.whole_word_search.get() and ' ' not in keyword:
+                                            try:
+                                                import re
+                                                pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+                                                if re.search(pattern, content.lower()):
+                                                    matched = True
+                                                    break
+                                            except:
+                                                # Fallback in caso di errore con regex
+                                                if keyword.lower() in content.lower():
+                                                    matched = True
+                                                    break
+                                        # Se è un termine con spazi (contesto specifico)
+                                        elif ' ' in keyword:
+                                            if keyword.lower() in content.lower():
+                                                matched = True
+                                                break
+                                        # Ricerca normale
+                                        else:
+                                            if keyword.lower() in content.lower():
+                                                matched = True
+                                                break
+                                                
+                                    if matched:
+                                        result[0] = self.create_file_info(file_path)
+                                        return
                             else:
                                 # Log per i file di sistema esclusi
                                 if search_content and os.path.splitext(file_path)[1].lower() in self.system_file_extensions:
@@ -2695,14 +2750,9 @@ class FileSearchApp:
         max_date = ttk.DateEntry(date_frame, dateformat="%d-%m-%Y")
         max_date.grid(row=0, column=3, padx=5, pady=5)
         
-        # Prepopola le date se disponibili
-        if self.advanced_filters["date_min"]:
-            min_date.entry.delete(0, "end")
-            min_date.entry.insert(0, self.advanced_filters["date_min"])
-                
-        if self.advanced_filters["date_max"]:
-            max_date.entry.delete(0, "end")
-            max_date.entry.insert(0, self.advanced_filters["date_max"])
+        # Cancella sempre le date precedenti
+        min_date.entry.delete(0, "end")
+        max_date.entry.delete(0, "end")
         
         # Filtri estensione
         ext_frame = ttk.LabelFrame(dialog, text="Estensioni file (separate da virgola)")
@@ -2877,7 +2927,8 @@ class FileSearchApp:
         keyword_frame.pack(fill=X, pady=5)
         
         # Label di aiuto per keywords
-        example_label = ttk.Label(keyword_frame, text="Per la ricerca di più parole usa la virgola. Esempio: documento, fattura, contratto", 
+        example_label = ttk.Label(keyword_frame, text="Per la ricerca di più parole usa la virgola. Esempio: documento, fattura, contratto\n"
+                                          "Attiva 'Parola intera' per cercare 'log' senza trovare 'login' o 'logo'", 
                                 font=("", 8), foreground="gray")
         example_label.pack(anchor="w", padx=5)
         
@@ -2905,7 +2956,11 @@ class FileSearchApp:
                                 variable=self.search_content)
         content_checkbox.pack(side=LEFT, padx=5)
         self.create_tooltip(content_checkbox, "Cerca le parole chiave anche all'interno dei file di testo")
-
+        # Checkbox per la ricerca di parole intere
+        whole_word_checkbox = ttk.Checkbutton(options_row1, text="Parola intera", 
+                            variable=self.whole_word_search)
+        whole_word_checkbox.pack(side=LEFT, padx=5)
+        self.create_tooltip(whole_word_checkbox, "Cerca solo parole intere (es. 'log' non troverà 'login' o 'logging')")
         # Checkbox per escludere file di sistema
         exclude_sys_checkbox = ttk.Checkbutton(options_row1, text="Escludi file di sistema", 
                                             variable=self.exclude_system_files)
