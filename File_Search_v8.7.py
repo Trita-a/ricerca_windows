@@ -518,10 +518,25 @@ class FileSearchApp:
                     )
                     
                     return True
+                else:
+                    # NUOVA PARTE: Se l'utente risponde "No", imposta esplicitamente la profondità a 0
+                    self.depth_spinbox.set("0")
+                    self.max_depth = 0
+                    
+                    # Notifica l'utente che sta per iniziare una ricerca illimitata
+                    self.log_debug("Utente ha rifiutato le ottimizzazioni, impostata profondità illimitata (0)")
+                    
+                    # Opzionalmente, puoi mostrare un messaggio di avviso
+                    messagebox.showinfo(
+                        "Ricerca illimitata",
+                        "Stai per avviare una ricerca illimitata sull'intero disco.\n\n"
+                        "La profondità di ricerca è stata impostata a illimitata (0).\n"
+                        "Questa operazione potrebbe richiedere molto tempo e risorse di sistema."
+                    )
+                
+                return False
             
-            return False
-        
-        return False  # Per percorsi non di sistema, non fare nulla
+            return False  # Per percorsi non di sistema, non fare nulla
     def debug_exclusions(self):
         """Visualizza lo stato corrente delle esclusioni per debug"""
         if hasattr(self, 'excluded_paths'):
@@ -3081,8 +3096,6 @@ class FileSearchApp:
         self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
         self.progress_bar.pack(fill=X)
         
-        # ---- Configurazione pannello destro (risultati) ----
-        
          # Frame per i pulsanti di azione
         action_buttons_frame = ttk.Frame(right_frame)
         action_buttons_frame.pack(fill=X, pady=(0, 5))
@@ -3097,57 +3110,68 @@ class FileSearchApp:
                 command=self.deselect_all).pack(side=LEFT, padx=2)
         ttk.Button(selection_frame, text="Inverti selezione", 
                 command=self.invert_selection).pack(side=LEFT, padx=2)
-        
-        # Scrollbar per la lista risultati
-        scrollbar = ttk.Scrollbar(right_frame)
-        scrollbar.pack(side=RIGHT, fill=Y)
-        
-        # TreeView per i risultati
-        self.results_list = ttk.Treeview(right_frame, selectmode="extended",
-                                        columns=("type", "author", "size", "modified", "created", "path"),
-                                        show="headings",
-                                        yscrollcommand=scrollbar.set)
-        
-        # Imposta le colonne con larghezze ottimizzate
-        self.results_list.column("type", width=80, anchor="center")
-        self.results_list.column("author", width=200, anchor="w")
-        self.results_list.column("size", width=80, anchor="center")
-        self.results_list.column("modified", width=120, anchor="center")
-        self.results_list.column("created", width=120, anchor="center")
-        self.results_list.column("path", width=350, anchor="w")
+        action_subframe = ttk.Frame(action_buttons_frame)
+        action_subframe.pack(side=RIGHT, fill=Y)
 
-        # Imposta le intestazioni
-        self.results_list.heading("type", text="Tipo File")
-        self.results_list.heading("author", text="Nome File")
-        self.results_list.heading("size", text="Dimensione")
-        self.results_list.heading("modified", text="Modificato")
-        self.results_list.heading("created", text="Creato")
-        self.results_list.heading("path", text="Percorso")
-        
-        self.results_list.pack(fill=BOTH, expand=YES)
-        
-        # Configura scrollbar
-        scrollbar.config(command=self.results_list.yview)
-        
-        # Aggiungi binding per l'evento di doppio clic
-        self.results_list.bind("<Double-1>", self.open_file_location)
-        
-        # Frame per i pulsanti di azione principali sotto la lista
-        main_buttons_frame = ttk.Frame(right_frame)
-        main_buttons_frame.pack(fill=X, pady=5)
-        
-        # Pulsanti copia e comprimi
-        self.copy_button = ttk.Button(main_buttons_frame, text="Copia selezionati",
+        # Sposta i pulsanti "Copia selezionati" e "Comprimi selezionati" qui
+        self.copy_button = ttk.Button(action_subframe, text="Copia selezionati",
                                     command=self.copy_selected,
                                     style="TButton")
         self.copy_button.pack(side=LEFT, padx=5)
         self.create_tooltip(self.copy_button, "Copia i file selezionati nella directory specificata")
-        
-        self.compress_button = ttk.Button(main_buttons_frame, text="Comprimi selezionati",
+
+        self.compress_button = ttk.Button(action_subframe, text="Comprimi selezionati",
                                         command=self.compress_selected,
                                         style="TButton")
         self.compress_button.pack(side=LEFT, padx=5)
         self.create_tooltip(self.compress_button, "Comprimi i file selezionati in un archivio ZIP")
+
+        # 1. Frame contenitore per TreeView e scrollbar
+        treeview_container = ttk.Frame(right_frame)
+        treeview_container.pack(fill=BOTH, expand=True)
+
+        # 2. Creazione della TreeView
+        self.results_list = ttk.Treeview(treeview_container, selectmode="extended",
+                                    columns=("type", "author", "size", "modified", "created", "path"),
+                                    show="headings")
+
+        # 3. Creazione di ENTRAMBE le scrollbar
+        vsb = ttk.Scrollbar(treeview_container, orient="vertical", command=self.results_list.yview)
+        hsb = ttk.Scrollbar(treeview_container, orient="horizontal", command=self.results_list.xview)
+
+        # 4. Configurazione delle scrollbar nella TreeView
+        self.results_list.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        # 5. Posizionamento con grid
+        self.results_list.grid(column=0, row=0, sticky='nsew')
+        vsb.grid(column=1, row=0, sticky='ns')
+        hsb.grid(column=0, row=1, sticky='ew')
+
+        # 6. Configura grid layout per l'espansione
+        treeview_container.grid_columnconfigure(0, weight=1)
+        treeview_container.grid_rowconfigure(0, weight=1)
+
+        # 7. Impostazione delle intestazioni delle colonne
+        self.results_list.heading("type", text="Tipo")
+        self.results_list.heading("author", text="Autore") 
+        self.results_list.heading("size", text="Dimensione")
+        self.results_list.heading("modified", text="Modificato")
+        self.results_list.heading("created", text="Creato")
+        self.results_list.heading("path", text="Percorso")
+
+        # 8. Impostazione delle larghezze delle colonne - FONDAMENTALE PER LO SCROLLING
+        self.results_list.column("type", width=100, minwidth=50, stretch=NO)
+        self.results_list.column("author", width=150, minwidth=80, stretch=NO)
+        self.results_list.column("size", width=100, minwidth=80, stretch=NO) 
+        self.results_list.column("modified", width=150, minwidth=120, stretch=NO)
+        self.results_list.column("created", width=150, minwidth=120, stretch=NO)
+        self.results_list.column("path", width=800, minwidth=200, stretch=NO)  # IMPORTANTE: stretch=NO
+        
+        # Configura scrollbar
+        vsb.config(command=self.results_list.yview)
+        
+        # Aggiungi binding per l'evento di doppio clic
+        self.results_list.bind("<Double-1>", self.open_file_location)
 
         # Applica stili alle righe
         self.update_theme_colors()
