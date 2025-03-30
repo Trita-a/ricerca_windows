@@ -32,3 +32,5 @@ Disabilita al click della ricerca tutti i controlli per evitare il blocco dell'a
 8.6.1
 Aggiunto doppio click per l'apertura del percorso sui file trovati
 Corretto l'errore su escludi file, ora se non attiva cercherà dentro i file di sistema
+8.1.2
+Aggiunta la getione degli omonimi nella compressione, crea una cartella con gli omonini trovati
