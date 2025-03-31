@@ -41,3 +41,7 @@ Aggiunto Finestra di dialogo per la creazione della catella principale; per i fi
 Aggiunto scelta del Livello di compressione
 Aggiunto ricerca parola intera
 Migliorato aspetto generale della GUI
+8.7.1
+Correzione file di sistema
+Aggiunto log dei file esclusi dalla ricerca per problematiche, il log conterrà la data e l'ora, il tipo di file, il nome del file, il percorso del file e la ragione per cui il file è stato saltato
+Aggiunto nel file Log Omonimi le informazioni relative alla ricerca
