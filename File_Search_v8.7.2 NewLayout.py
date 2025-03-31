@@ -1655,7 +1655,10 @@ class FileSearchApp:
 
             if self.should_skip_file(file_path):
                 return ""
-                
+            elif ext == '.doc' and file_format_support["doc"]:
+                # Salta i file .doc completamente per evitare blocchi
+                self.log_debug(f"File .doc saltato per evitare blocchi: {file_path}")
+                return ""
             import os
             ext = os.path.splitext(file_path)[1].lower()
             
@@ -1894,91 +1897,112 @@ class FileSearchApp:
     def update_progress(self):
         if self.is_searching:
             try:
-                while True:
-                    progress_type, value = self.progress_queue.get_nowait()
-                    if progress_type == "update_total_time":
-                        self.total_time_label.config(text=value)
-                    if progress_type == "progress":
-                        self.progress_bar["value"] = value
-                    elif progress_type == "status":
-                        # Se il messaggio contiene informazioni sui file, separiamo le informazioni
-                        if "analizzati" in value.lower() or "cartelle:" in value.lower() or "file:" in value.lower():
-                            # Estrai il percorso se presente
-                            if "analisi:" in value.lower():
-                                parts = value.split("(", 1)
-                                if len(parts) > 1:
-                                    path_part = parts[0].strip()
-                                    counts_part = "(" + parts[1]
-                                    self.status_label["text"] = path_part
-                                    self.analyzed_files_label["text"] = counts_part
+                # Processa tutti i messaggi nella coda
+                messages_processed = 0
+                max_messages_per_cycle = 50  # Limita il numero di messaggi processati per ciclo
+                
+                while messages_processed < max_messages_per_cycle:
+                    try:
+                        progress_type, value = self.progress_queue.get_nowait()
+                        
+                        # Processa il messaggio (codice esistente)
+                        if progress_type == "update_total_time":
+                            self.total_time_label.config(text=value)
+                        elif progress_type == "progress":
+                            self.progress_bar["value"] = value
+                        elif progress_type == "status":
+                            # Se il messaggio contiene informazioni sui file, separiamo le informazioni
+                            if "analizzati" in value.lower() or "cartelle:" in value.lower() or "file:" in value.lower():
+                                # Estrai il percorso se presente
+                                if "analisi:" in value.lower():
+                                    parts = value.split("(", 1)
+                                    if len(parts) > 1:
+                                        path_part = parts[0].strip()
+                                        counts_part = "(" + parts[1]
+                                        self.status_label["text"] = path_part
+                                        self.analyzed_files_label["text"] = counts_part
+                                    else:
+                                        self.analyzed_files_label["text"] = value
                                 else:
                                     self.analyzed_files_label["text"] = value
                             else:
-                                self.analyzed_files_label["text"] = value
-                        else:
-                            # È solo un messaggio di stato semplice
-                            self.status_label["text"] = value
-                    elif progress_type == "complete":
-                        self.is_searching = False
-                        self.enable_all_controls()
-                        self.stop_button["state"] = "disabled"
-                        
-                        # Aggiorna la lista dei risultati
-                        self.update_results_list()
-                        
-                        # Aggiorna l'orario di fine e il tempo totale
-                        current_time = datetime.now().strftime('%H:%M')
-                        self.end_time_label.config(text=current_time)
-                        self.update_total_time()  # Calcola e mostra il tempo totale
-                        
-                        # Calcola la dimensione del percorso alla fine della ricerca
-                        self.dir_size_var.set("Calcolo in corso...")
-                        path = self.search_path.get()
-                        threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True).start()
+                                # È solo un messaggio di stato semplice
+                                self.status_label["text"] = value
+                        elif progress_type == "complete":
+                            self.is_searching = False
+                            self.enable_all_controls()
+                            self.stop_button["state"] = "disabled"
+                            
+                            # Aggiorna la lista dei risultati
+                            self.update_results_list()
+                            
+                            # Aggiorna l'orario di fine e il tempo totale
+                            current_time = datetime.now().strftime('%H:%M')
+                            self.end_time_label.config(text=current_time)
+                            self.update_total_time()  # Calcola e mostra il tempo totale
+                            
+                            # Calcola la dimensione del percorso alla fine della ricerca
+                            self.dir_size_var.set("Calcolo in corso...")
+                            path = self.search_path.get()
+                            threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True).start()
 
-                        if len(self.search_results) == 0:
-                            self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
-                            self.root.after(100, lambda: messagebox.showinfo("Ricerca completata", "Nessun file trovato per la ricerca effettuata"))
-                        else:
-                            self.status_label["text"] = f"Ricerca completata! Trovati {len(self.search_results)} risultati."
+                            if len(self.search_results) == 0:
+                                self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
+                                self.root.after(100, lambda: messagebox.showinfo("Ricerca completata", "Nessun file trovato per la ricerca effettuata"))
+                            else:
+                                self.status_label["text"] = f"Ricerca completata! Trovati {len(self.search_results)} risultati."
+                            
+                            self.progress_bar["value"] = 100
+                            return
+                        elif progress_type == "error":
+                            self.is_searching = False
+                            self.enable_all_controls()
+                            self.stop_button["state"] = "disabled"
+                            current_time = datetime.now().strftime('%H:%M')
+                            self.end_time_label.config(text=current_time)
+                            self.update_total_time()  # Calcola e mostra il tempo totale
+                            messagebox.showerror("Errore", value)
+                            return
+                        elif progress_type == "timeout":
+                            self.is_searching = False
+                            self.enable_all_controls()
+                            self.stop_button["state"] = "disabled"
+                            self.update_results_list()
+                            current_time = datetime.now().strftime('%H:%M')
+                            self.end_time_label.config(text=current_time)
+                            self.update_total_time()  # Calcola e mostra il tempo totale
+                            messagebox.showinfo("Timeout", "La ricerca è stata interrotta per timeout. Verranno mostrati i risultati parziali trovati.")
+                            return
+                        elif progress_type == "admin_prompt":
+                            # Chiedi all'utente se desidera riavviare l'app come amministratore
+                            response = messagebox.askyesno(
+                                "Accesso limitato", 
+                                "Alcune cartelle richiedono privilegi di amministratore per essere lette.\n\n" + 
+                                "Vuoi riavviare l'applicazione come amministratore per ottenere accesso completo?",
+                                icon="question"
+                            )
+                            if response:
+                                self.stop_search_process()
+                                self.root.after(1000, self.restart_as_admin)
+                            return  # Non interrompere la ricerca se l'utente rifiuta
                         
-                        self.progress_bar["value"] = 100
-                        return
-                    elif progress_type == "error":
-                        self.is_searching = False
-                        self.enable_all_controls()
-                        self.stop_button["state"] = "disabled"
-                        current_time = datetime.now().strftime('%H:%M')
-                        self.end_time_label.config(text=current_time)
-                        self.update_total_time()  # Calcola e mostra il tempo totale
-                        messagebox.showerror("Errore", value)
-                        return
-                    elif progress_type == "timeout":
-                        self.is_searching = False
-                        self.enable_all_controls()
-                        self.stop_button["state"] = "disabled"
-                        self.update_results_list()
-                        current_time = datetime.now().strftime('%H:%M')
-                        self.end_time_label.config(text=current_time)
-                        self.update_total_time()  # Calcola e mostra il tempo totale
-                        messagebox.showinfo("Timeout", "La ricerca è stata interrotta per timeout. Verranno mostrati i risultati parziali trovati.")
-                        return
-                    elif progress_type == "admin_prompt":
-                        # Chiedi all'utente se desidera riavviare l'app come amministratore
-                        response = messagebox.askyesno(
-                            "Accesso limitato", 
-                            "Alcune cartelle richiedono privilegi di amministratore per essere lette.\n\n" + 
-                            "Vuoi riavviare l'applicazione come amministratore per ottenere accesso completo?",
-                            icon="question"
-                        )
-                        if response:
-                            self.stop_search_process()
-                            self.root.after(1000, self.restart_as_admin)
-                        return  # Non interrompere la ricerca se l'utente rifiuta
-            except queue.Empty:
-                pass
-                    
-            self.root.after_idle(self.update_progress)
+                        messages_processed += 1
+                        
+                        # Forza l'aggiornamento dell'interfaccia ogni 10 messaggi
+                        if messages_processed % 10 == 0:
+                            self.root.update_idletasks()
+                        
+                    except queue.Empty:
+                        break
+                        
+                # Aggiorna l'UI forzatamente dopo aver processato i messaggi
+                self.root.update_idletasks()
+                
+                # Richiama se stesso più frequentemente per essere più reattivo
+                self.root.after(100, self.update_progress)  # Ridotto da 200ms a 100ms
+            except Exception as e:
+                self.log_debug(f"Errore nell'aggiornamento del progresso: {str(e)}")
+                self.root.after(500, self.update_progress)
             
     def stop_search_process(self):
         """Ferma il processo di ricerca in corso"""
@@ -1987,9 +2011,9 @@ class FileSearchApp:
         self.analyzed_files_label["text"] = "Ricerca interrotta dall'utente"
         current_time = datetime.now().strftime('%H:%M')
         self.end_time_label.config(text=current_time)
-        self.update_total_time()  # Calcola e mostra il tempo totale
+        self.update_total_time()
         
-        # Chiudi l'executor se esiste in modo più deciso
+        # Chiusura più decisa dell'executor
         if hasattr(self, 'search_executor') and self.search_executor:
             try:
                 self.search_executor.shutdown(wait=False, cancel_futures=True)
@@ -1998,12 +2022,15 @@ class FileSearchApp:
                 self.log_debug(f"Errore nella chiusura dell'executor: {str(e)}")
                 self.search_executor = None
         
-        # Riabilita tutti i controlli UI
-        self.root.after(100, self.enable_all_controls)  # Aggiunto delay per evitare problemi con l'interfaccia
+        # Ritardo per evitare problemi con l'interfaccia
+        self.root.after(100, self.enable_all_controls)
         self.stop_button["state"] = "disabled"
     
-    # Aggiorna l'interfaccia utente
-    self.root.update_idletasks()
+        # Aggiornamento forzato dell'interfaccia
+        self.root.update_idletasks()
+        
+        # Aggiorna l'interfaccia utente
+        self.root.update_idletasks()
 
     def update_results_list(self):
         """Aggiorna la lista dei risultati con i risultati trovati"""
