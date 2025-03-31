@@ -3508,68 +3508,74 @@ class FileSearchApp:
         # ==========================================================
         info_container = ttk.Frame(main_container)
         info_container.pack(fill=X, padx=10, pady=5)
-        
-        # Frame sinistro: stato ricerca
+
+        # Ridisegno completo della sezione stato ricerca per renderla fissa e più larga
         status_frame = ttk.LabelFrame(info_container, text="Stato ricerca", padding=5)
-        status_frame.pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
-        
+        status_frame.pack(fill=X, pady=5)  # Riempie tutto lo spazio orizzontale disponibile
+
         # Progress bar
         self.progress_bar = ttk.Progressbar(status_frame, mode='determinate')
         self.progress_bar.pack(fill=X, pady=5)
-        
-        # Status labels
-        status_inner_frame = ttk.Frame(status_frame)
-        status_inner_frame.pack(fill=X)
-        
-        ttk.Label(status_inner_frame, text="Analisi:", font=("", 9, "bold")).pack(anchor=W)
-        self.status_label = ttk.Label(status_inner_frame, text="In attesa...", wraplength=400)
-        self.status_label.pack(anchor=W, padx=5)
-        
-        ttk.Label(status_inner_frame, text="File analizzati:", font=("", 9, "bold")).pack(anchor=W, pady=(5, 0))
-        self.analyzed_files_label = ttk.Label(status_inner_frame, text="Nessuna ricerca avviata", wraplength=400)
-        self.analyzed_files_label.pack(anchor=W, padx=5)
-        
-        # Frame destro: tempi e spazio disco
-        stats_frame = ttk.Frame(info_container)
-        stats_frame.pack(side=LEFT, fill=X, expand=YES, padx=(5, 0))
-        
-        # Frame per i tempi
-        time_frame = ttk.LabelFrame(stats_frame, text="Informazioni temporali", padding=5)
-        time_frame.pack(fill=X, pady=(0, 5))
-        
-        # Grid per i tempi
+
+        # Layout a due colonne per le informazioni di stato
+        status_grid = ttk.Frame(status_frame)
+        status_grid.pack(fill=X, expand=YES)
+        status_grid.columnconfigure(1, weight=1)  # La seconda colonna si espande
+
+        # Riga 1: Status
+        ttk.Label(status_grid, text="Analisi:", font=("", 9, "bold")).grid(row=0, column=0, sticky=W, padx=5, pady=2)
+        self.status_label = ttk.Label(status_grid, text="In attesa...", wraplength=800)
+        self.status_label.grid(row=0, column=1, sticky=W+E, padx=5, pady=2)
+
+        # Riga 2: File analizzati
+        ttk.Label(status_grid, text="File analizzati:", font=("", 9, "bold")).grid(row=1, column=0, sticky=W, padx=5, pady=2)
+        self.analyzed_files_label = ttk.Label(status_grid, text="Nessuna ricerca avviata", wraplength=800)
+        self.analyzed_files_label.grid(row=1, column=1, sticky=W+E, padx=5, pady=2)
+
+        # Contenitore per le informazioni temporali e di spazio disco (sulla stessa riga)
+        stats_container = ttk.Frame(info_container)
+        stats_container.pack(fill=X, expand=YES, pady=5)
+
+        # Frame per i tempi (metà sinistra)
+        time_frame = ttk.LabelFrame(stats_container, text="Informazioni temporali", padding=5)
+        time_frame.pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
+
+        # Grid per i tempi con layout migliorato
         time_grid = ttk.Frame(time_frame)
         time_grid.pack(fill=X, pady=2)
-        
+        time_grid.columnconfigure(1, weight=1)
+        time_grid.columnconfigure(3, weight=1)
+        time_grid.columnconfigure(5, weight=1)
+
         ttk.Label(time_grid, text="Avvio:").grid(row=0, column=0, sticky=W, padx=5)
         self.start_time_label = ttk.Label(time_grid, text="--:--", font=("", 9, "bold"))
         self.start_time_label.grid(row=0, column=1, sticky=W, padx=5)
-        
+
         ttk.Label(time_grid, text="Fine:").grid(row=0, column=2, sticky=W, padx=5)
         self.end_time_label = ttk.Label(time_grid, text="--:--", font=("", 9, "bold"))
         self.end_time_label.grid(row=0, column=3, sticky=W, padx=5)
-        
+
         ttk.Label(time_grid, text="Durata:").grid(row=0, column=4, sticky=W, padx=5)
         self.total_time_label = ttk.Label(time_grid, text="--:--", font=("", 9, "bold"))
         self.total_time_label.grid(row=0, column=5, sticky=W, padx=5)
-        
-        # Frame per info disco
-        disk_info_frame = ttk.LabelFrame(stats_frame, text="Spazio disco", padding=5)
-        disk_info_frame.pack(fill=X)
-        
+
+        # Frame per info disco (metà destra)
+        disk_info_frame = ttk.LabelFrame(stats_container, text="Spazio disco", padding=5)
+        disk_info_frame.pack(side=LEFT, fill=X, expand=YES)
+
         # Grid per info disco
         disk_grid = ttk.Frame(disk_info_frame)
         disk_grid.pack(fill=X, pady=2)
-        
+
         ttk.Label(disk_grid, text="Directory:").grid(row=0, column=0, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.dir_size_var, font=("", 9, "bold")).grid(row=0, column=1, sticky=W, padx=5)
-        
+
         ttk.Label(disk_grid, text="Disco:").grid(row=0, column=2, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.total_disk_var, font=("", 9, "bold")).grid(row=0, column=3, sticky=W, padx=5)
-        
+
         ttk.Label(disk_grid, text="Usato:").grid(row=1, column=0, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.used_disk_var, font=("", 9, "bold")).grid(row=1, column=1, sticky=W, padx=5)
-        
+
         ttk.Label(disk_grid, text="Libero:").grid(row=1, column=2, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.free_disk_var, font=("", 9, "bold")).grid(row=1, column=3, sticky=W, padx=5)
         
