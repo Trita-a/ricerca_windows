@@ -46,4 +46,6 @@ Correzione file di sistema
 Aggiunto log dei file esclusi dalla ricerca per problematiche, il log conterrà la data e l'ora, il tipo di file, il nome del file, il percorso del file e la ragione per cui il file è stato saltato
 Aggiunto nel file Log Omonimi le informazioni relative alla ricerca
 Aggiunto log dei file trovati
+8.7.2
 I log sono in CVS con i collegamti alle cartelle relativi ai percorsi
+Aggiunto calcolo delle varie dimensioni del disco
