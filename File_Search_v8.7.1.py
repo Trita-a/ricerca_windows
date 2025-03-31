@@ -18,6 +18,8 @@ import mimetypes
 import signal
 import subprocess
 import zipfile
+import io
+import csv
 
 # Dizionario per tracciare il supporto alle librerie
 file_format_support = {
@@ -1585,34 +1587,37 @@ class FileSearchApp:
     def should_skip_file(self, file_path):
         """Verifica se un file deve essere saltato durante l'analisi del contenuto"""
         ext = os.path.splitext(file_path)[1].lower()
-        file_type = "File di sistema" if ext in self.system_file_extensions else "File"
-        file_name = os.path.basename(file_path)
+        skip_type = "File di sistema" if ext in self.system_file_extensions else "File"
+        skip_filename = os.path.basename(file_path)
         
         # Salta i file di Rights Management Services
         if "Rights Management Services" in file_path or "IRMProtectors" in file_path:
             self.log_debug(f"Saltato file protetto: {file_path}")
-            self.log_skipped_file(file_path, file_type, file_name, "Rights Management Services")
+            self.log_skipped_file(file_path, skip_type, skip_filename, "Rights Management Services")
             return True
-            
+                
         # Salta file con estensioni problematiche
         problematic_extensions = [".msoprotector.doc", ".msoprotector.ppt", ".msoprotector.xls"]
         if any(ext in file_path for ext in problematic_extensions):
             self.log_debug(f"Saltato file con formato problematico: {file_path}")
-            self.log_skipped_file(file_path, file_type, file_name, "Formato problematico")
+            self.log_skipped_file(file_path, skip_type, skip_filename, "Formato problematico")
             return True
 
         # Salta file di sistema
         if self.exclude_system_files.get() and ext in self.system_file_extensions:
             self.log_debug(f"File di sistema escluso: {file_path}")
-            self.log_skipped_file(file_path, file_type, file_name, "File di sistema")
+            self.log_skipped_file(file_path, skip_type, skip_filename, "File di sistema")
             return True
-            
+                
         return False
-    def log_skipped_file(self, file_path, reason):
+    def log_skipped_file(self, filepath, skiptype, filename, skipreason):
         """Registra i file saltati in un file di log"""
         try:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            log_entry = f"{timestamp} - {skiptype} - {filename} - {filepath} - {skipreason}\n"
+            
             with open(self.skipped_files_log_path, 'a', encoding='utf-8') as log_file:
-                log_file.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {file_type} - {file_name} - {file_path} - {reason}\n")
+                log_file.write(log_entry)
         except Exception as e:
             self.log_debug(f"Errore durante la scrittura del log dei file saltati: {str(e)}")
 
@@ -2241,7 +2246,7 @@ class FileSearchApp:
         return result["name"]
 
     def compress_selected(self):
-        """Versione avanzata della compressione con opzioni aggiuntive"""
+        """Versione avanzata della compressione con opzioni aggiuntive e log completo dei file"""
         selected_items = self.results_list.selection()
         if not selected_items:
             messagebox.showwarning("Attenzione", "Seleziona almeno un elemento da comprimere")
@@ -2349,6 +2354,7 @@ class FileSearchApp:
             compression_method = zipfile.ZIP_DEFLATED
             compression_text = "standard"
             compression_level = 6  # Compressione bilanciata
+            
         # Log della scelta di compressione
         self.log_debug(f"Utilizzo compressione {compression_text} (metodo: {compression_method}, livello: {compression_level})")
 
@@ -2388,7 +2394,9 @@ class FileSearchApp:
         total_items = len(folder_paths) + len(filtered_single_files)
         processed = 0
 
-        # Lista per tenere traccia dei file omonimi
+        # Lista per tenere traccia dei file (tutti, non solo omonimi)
+        all_files_log = []
+        # Lista per tenere traccia dei file omonimi (come prima)
         omonimi_log = []
 
         try:
@@ -2405,6 +2413,18 @@ class FileSearchApp:
                         file_path = os.path.join(root, file)
                         file_name = os.path.basename(file_path)
 
+                        # Aggiungi al log di tutti i file
+                        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                        modified_time = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%d/%m/%Y %H:%M') if os.path.exists(file_path) else 'N/A'
+                        
+                        all_files_log.append({
+                            "nome_file": file_name,
+                            "percorso_originale": file_path,
+                            "dimensione": self._format_size(file_size),
+                            "ultima_modifica": modified_time,
+                            "tipo": self._get_file_type(file_path)
+                        })
+
                         if file_name not in file_names_map:
                             file_names_map[file_name] = []
                         file_names_map[file_name].append(file_path)
@@ -2413,6 +2433,19 @@ class FileSearchApp:
             for file_path in filtered_single_files:
                 if os.path.exists(file_path):
                     file_name = os.path.basename(file_path)
+                    
+                    # Aggiungi al log di tutti i file
+                    file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+                    modified_time = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%d/%m/%Y %H:%M') if os.path.exists(file_path) else 'N/A'
+                    
+                    all_files_log.append({
+                        "nome_file": file_name,
+                        "percorso_originale": file_path,
+                        "dimensione": self._format_size(file_size),
+                        "ultima_modifica": modified_time,
+                        "tipo": self._get_file_type(file_path)
+                    })
+                    
                     if file_name not in file_names_map:
                         file_names_map[file_name] = []
                     file_names_map[file_name].append(file_path)
@@ -2573,47 +2606,125 @@ class FileSearchApp:
                     self.status_label["text"] = f"Compressi {processed} di {total_items} elementi"
                     self.root.update()
 
-                # Se abbiamo trovato file omonimi, crea un file di log all'esterno delle cartelle
+                # Crea log in formato CSV con collegamenti ipertestuali
+                current_time_utc = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                current_time_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                current_user = getpass.getuser()
+
+                # Identifica quali file sono omonimi per poterli escludere dal log generale
+                omonimo_paths = set()
+                for entry in omonimi_log:
+                    omonimo_paths.add(entry['percorso_originale'])
+
+                # Lista di file normali (esclude gli omonimi)
+                normal_files_log = [f for f in all_files_log if f['percorso_originale'] not in omonimo_paths]
+
+                # ---------- CREAZIONE DEL CSV DEI FILE NORMALI ----------
+                # Creazione intestazione per il CSV
+                csv_header = f"LOG DEI FILE TROVATI - {current_time_local}\n"
+                csv_header += f"Utente: {current_user}, Compressione: {compression_text}\n"
+                csv_header += f"Totale file (esclusi omonimi): {len(normal_files_log)}\n\n"
+
+                # Prepara l'output CSV
+                csv_content = io.StringIO()
+                csv_writer = csv.writer(csv_content, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+                # Intestazione colonne
+                csv_writer.writerow(["Nome file", "Tipo", "Dimensione", "Ultima modifica", "Percorso completo", "Link"])
+
+                # Aggiungi i file normali (non omonimi)
+                for file_entry in sorted(normal_files_log, key=lambda x: x["nome_file"]):
+                    # Ottieni il percorso della directory che contiene il file
+                    file_path = file_entry['percorso_originale']
+                    directory_path = os.path.dirname(file_path).replace('\\', '/')
+                    # Formatta il percorso della directory per il collegamento ipertestuale
+                    folder_uri = f"file:///{directory_path}"
+                    
+                    # Aggiungi riga al CSV con la formula italiana per i collegamenti alla CARTELLA
+                    csv_writer.writerow([
+                        file_entry['nome_file'],
+                        file_entry['tipo'],
+                        file_entry['dimensione'],
+                        file_entry['ultima_modifica'],
+                        file_entry['percorso_originale'],
+                        f'=COLLEG.IPERTESTUALE("{folder_uri}";"Apri percorso")'
+    ])
+
+                # Ottieni il contenuto del CSV come stringa
+                csv_data = csv_header + csv_content.getvalue()
+
+                # Aggiungi il file CSV dei file normali all'archivio
+                zipf.writestr("Log_file_Trovati.csv", csv_data)
+
+                # ---------- CREAZIONE DEL CSV DEGLI OMONIMI (SOLO SE CE NE SONO) ----------
                 if omonimi_log:
-                    # Crea log leggibile in formato testo con le informazioni UTC e utente
-                    from datetime import datetime
-                    import getpass
-
-                    current_time_utc = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-                    current_user = getpass.getuser()
-
-                    log_content = "LOG DEI FILE OMONIMI\n"
-                    log_content += "=" * 80 + "\n\n"
-                    log_content += f"Data e Ora (UTC): {current_time_utc}\n"
-                    log_content += f"Utente: {current_user}\n"
-                    log_content += f"Tipo di compressione: {compression_text}\n"
-                    log_content += f"Elaborazione a blocchi: {'Sì' if result['chunks'] else 'No'}\n"
-                    log_content += f"Totale file omonimi trovati: {len(omonimi_log)}\n\n"
-                    log_content += f"Testo ricercato: {self.keywords.get()}\n"
-                    log_content += f"Percorso di ricerca: {self.search_path.get()}\n\n"
-
-                    for idx, entry in enumerate(omonimi_log, 1):
-                        log_content += f"File omonimo #{idx}:\n"
-                        log_content += f"  Nome file: {entry['nome_file']}\n"
-                        log_content += f"  Percorso originale: {entry['percorso_originale']}\n"
-                        log_content += f"  Collocato in: {entry['posizione_zip']}\n"
-                        log_content += f"  In conflitto con: {entry['primo_percorso']}\n\n"
-
-                    # Aggiungi il file di log direttamente alla root dell'archivio
-                    zipf.writestr("omonimi_log.txt", log_content)
+                    # Creazione intestazione per il CSV degli omonimi
+                    omonimi_csv_header = f"LOG DEI FILE OMONIMI - {current_time_local}\n"
+                    omonimi_csv_header += f"Utente: {current_user}, Compressione: {compression_text}\n"
+                    omonimi_csv_header += f"Totale file omonimi trovati: {len(omonimi_log)}\n\n"
+                    
+                    # Prepara l'output CSV per gli omonimi
+                    omonimi_csv_content = io.StringIO()
+                    omonimi_csv_writer = csv.writer(omonimi_csv_content, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                    
+                    # Intestazione colonne specifiche per gli omonimi
+                    omonimi_csv_writer.writerow([
+                        "Nome file", "Tipo", "Dimensione", "Ultima modifica", 
+                        "Percorso originale", "Link", "Posizione nello ZIP", "In conflitto con"
+                    ])
+                    
+                    # Estrai dai log completi solo i file omonimi
+                    omonimi_files_details = [f for f in all_files_log if f['percorso_originale'] in omonimo_paths]
+                    
+                    # Crea un dizionario per unire le informazioni di omonimi_log e omonimi_files_details
+                    omonimi_details_dict = {}
+                    for entry in omonimi_log:
+                        omonimi_details_dict[entry['percorso_originale']] = entry
+                    
+                    # Aggiungi i file omonimi al CSV
+                    for file_entry in sorted(omonimi_files_details, key=lambda x: x["nome_file"]):
+                        # Ottieni il percorso della directory che contiene il file
+                        file_path = file_entry['percorso_originale']
+                        directory_path = os.path.dirname(file_path).replace('\\', '/')
+                        # Formatta il percorso della directory per il collegamento ipertestuale
+                        folder_uri = f"file:///{directory_path}"
+                        
+                        # Trova le informazioni aggiuntive sugli omonimi
+                        omonimo_info = omonimi_details_dict.get(file_entry['percorso_originale'], {})
+                        posizione_zip = omonimo_info.get('posizione_zip', 'N/A')
+                        in_conflitto = omonimo_info.get('primo_percorso', 'N/A')
+                        
+                        # Aggiungi riga al CSV degli omonimi con la formula italiana per i collegamenti alla CARTELLA
+                        omonimi_csv_writer.writerow([
+                            file_entry['nome_file'],
+                            file_entry['tipo'],
+                            file_entry['dimensione'],
+                            file_entry['ultima_modifica'],
+                            file_entry['percorso_originale'],
+                            f'=COLLEG.IPERTESTUALE("{folder_uri}";"Apri percorso")',
+                            posizione_zip,
+                            in_conflitto
+    ])
+                    
+                    # Ottieni il contenuto del CSV come stringa
+                    omonimi_csv_data = omonimi_csv_header + omonimi_csv_content.getvalue()
+                    
+                    # Aggiungi il file CSV degli omonimi all'archivio
+                    zipf.writestr("omonimi_log.csv", omonimi_csv_data)
 
             # Prepara il messaggio di completamento
             skipped_files = len(single_files) - len(filtered_single_files)
             message = f"Compressione completata!\nFile salvato in: {zip_path}\n"
             message += f"File organizzati nella cartella '{main_folder_name}'\n"
             message += f"Tipo di compressione utilizzata: {compression_text}\n"
+            message += f"\nCreato file di log completo ('Log_file_Trovati.txt')"
 
             if result["chunks"]:
-                message += "Elaborazione a blocchi: Attiva\n"
+                message += "\nElaborazione a blocchi: Attiva"
 
             if omonimi_log:
                 message += f"\nTrovati {len(omonimi_log)} file omonimi."
-                message += f"\nCreato log dettagliato ('omonimi_log.txt') nella radice dell'archivio"
+                message += f"\nCreato log dettagliato degli omonimi ('omonimi_log.txt')"
 
             if skipped_files > 0:
                 message += f"\n{skipped_files} file saltati perché già presenti nelle cartelle"
@@ -2632,8 +2743,42 @@ class FileSearchApp:
         finally:
             self.progress_bar["value"] = 0
             self.status_label["text"] = "In attesa..."
-    
+    # Funzione helper per formattare la dimensione del file
+    def _format_size(self, size_bytes):
+        """Formatta la dimensione del file in modo leggibile"""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        else:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
 
+    # Funzione helper per determinare il tipo di file
+    def _get_file_type(self, file_path):
+        """Determina il tipo di file in base all'estensione"""
+        ext = os.path.splitext(file_path)[1].lower()
+        
+        if ext in ['.txt', '.md', '.rtf']:
+            return "Documento di testo"
+        elif ext in ['.doc', '.docx', '.odt']:
+            return "Documento Word"
+        elif ext in ['.xls', '.xlsx', '.ods']:
+            return "Foglio di calcolo"
+        elif ext in ['.pdf']:
+            return "PDF"
+        elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+            return "Immagine"
+        elif ext in ['.mp3', '.wav', '.ogg', '.flac']:
+            return "Audio"
+        elif ext in ['.mp4', '.avi', '.mkv', '.mov']:
+            return "Video"
+        elif ext in ['.zip', '.rar', '.7z', '.tar', '.gz']:
+            return "Archivio"
+        elif ext in ['.exe', '.dll', '.bat', '.cmd']:
+            return "Eseguibile"
+        else:
+            return "File"
+    
     def get_main_folder_name(self):
         """Mostra una finestra di dialogo personalizzata per richiedere il nome della cartella principale"""
         dialog = tk.Toplevel(self.root)
