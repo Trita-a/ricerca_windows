@@ -20,6 +20,7 @@ import subprocess
 import zipfile
 import io
 import csv
+import re
 
 # Dizionario per tracciare il supporto alle librerie
 file_format_support = {
@@ -114,7 +115,7 @@ except ImportError:
 class FileSearchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V8.7.2. Nucleo Perugia")
+        self.root.title("File Search Tool V8.7.3. Nucleo Perugia")
         self.root.geometry("1300x850")
         
         # Inizializza le variabili per data/ora e utente
@@ -1025,18 +1026,11 @@ class FileSearchApp:
                             matched = False
                             for keyword in keywords:
                                 # Verifica se la ricerca di parole intere è attivata
-                                if self.whole_word_search.get() and ' ' not in keyword:
-                                    try:
-                                        import re
-                                        pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
-                                        if re.search(pattern, filename.lower()):
-                                            matched = True
-                                            break
-                                    except:
-                                        # Fallback in caso di errore con regex
-                                        if keyword.lower() in filename.lower():
-                                            matched = True
-                                            break
+                                if self.whole_word_search.get():
+                                    # Gestisce anche frasi con spazi usando la nuova funzione helper
+                                    if self.is_whole_word_match(keyword, filename):
+                                        matched = True
+                                        break
                                 # Se è un termine con spazi (contesto specifico)
                                 elif ' ' in keyword:
                                     if keyword.lower() in filename.lower():
@@ -1047,8 +1041,10 @@ class FileSearchApp:
                                     if keyword.lower() in filename.lower():
                                         matched = True
                                         break
-
+                            
                             if matched:
+                                if self.debug_mode and self.whole_word_search.get():
+                                    self.log_debug(f"Trovata corrispondenza per parola intera: '{keyword}' nel nome del file {os.path.basename(file_path)}")
                                 result[0] = self.create_file_info(file_path)
                                 return
                             
@@ -1067,18 +1063,11 @@ class FileSearchApp:
                                     matched = False
                                     for keyword in keywords:
                                         # Verifica se la ricerca di parole intere è attivata
-                                        if self.whole_word_search.get() and ' ' not in keyword:
-                                            try:
-                                                import re
-                                                pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
-                                                if re.search(pattern, content.lower()):
-                                                    matched = True
-                                                    break
-                                            except:
-                                                # Fallback in caso di errore con regex
-                                                if keyword.lower() in content.lower():
-                                                    matched = True
-                                                    break
+                                        if self.whole_word_search.get():
+                                            # Gestisce anche frasi con spazi usando la nuova funzione helper
+                                            if self.is_whole_word_match(keyword, content):
+                                                matched = True
+                                                break
                                         # Se è un termine con spazi (contesto specifico)
                                         elif ' ' in keyword:
                                             if keyword.lower() in content.lower():
@@ -1091,6 +1080,8 @@ class FileSearchApp:
                                                 break
                                                 
                                     if matched:
+                                        if self.debug_mode and self.whole_word_search.get():
+                                            self.log_debug(f"Trovata corrispondenza per parola intera: '{keyword}' nel contenuto del file {os.path.basename(file_path)}")
                                         result[0] = self.create_file_info(file_path)
                                         return
                             else:
@@ -1142,7 +1133,41 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore generale nella elaborazione del file {file_path}: {str(e)}")
                     return None
-            
+                
+            def is_whole_word_match(self, keyword, text):
+                """Verifica se la keyword è presente nel testo come parola intera."""
+                try:
+                    pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+                    return re.search(pattern, text.lower()) is not None
+                except re.error as e:
+                    self.log_debug(f"Errore regex con il termine '{keyword}': {str(e)}")
+                    
+                    # Fallback manuale se la regex fallisce
+                    keyword_lower = keyword.lower()
+                    text_lower = text.lower()
+                    
+                    if keyword_lower not in text_lower:
+                        return False
+                        
+                    # Verifica manuale dei confini parola
+                    index = text_lower.find(keyword_lower)
+                    while index != -1:
+                        # Controlla il carattere prima della keyword
+                        has_char_before = index > 0 and text_lower[index-1].isalnum()
+                        
+                        # Controlla il carattere dopo la keyword
+                        end_pos = index + len(keyword_lower)
+                        has_char_after = end_pos < len(text_lower) and text_lower[end_pos].isalnum()
+                        
+                        # Se non ci sono caratteri alfanumerici prima e dopo, è una parola intera
+                        if not has_char_before and not has_char_after:
+                            return True
+                            
+                        # Cerca la prossima occorrenza
+                        index = text_lower.find(keyword_lower, index + 1)
+                    
+                    return False
+                
             # NUOVO: calcola la priorità del blocco (numerica, più bassa = più alta priorità)
             def calculate_block_priority(directory):
                 # Se l'opzione è disabilitata, usa priorità standard per tutti
@@ -3372,7 +3397,7 @@ class FileSearchApp:
         
         word_check = ttk.Checkbutton(options_frame, text="Parola intera", variable=self.whole_word_search)
         word_check.pack(side=LEFT, padx=10)
-        self.create_tooltip(word_check, "Cerca solo parole intere (es. 'log' non troverà 'login' o 'logging')")
+        self.create_tooltip(word_check, "Cerca solo parole o frasi intere (es. 'log' non troverà 'login' o 'logging', e 'file di testo' non troverà 'molti file di testo.doc')")
         
         sys_check = ttk.Checkbutton(options_frame, text="Escludi file di sistema", variable=self.exclude_system_files)
         sys_check.pack(side=LEFT, padx=10)
