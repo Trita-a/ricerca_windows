@@ -233,7 +233,46 @@ class FileSearchApp:
         
         # Aggiungi variabile per il percorso del log dei file saltati
         self.skipped_files_log_path = os.path.join(os.path.expanduser("~"), "skipped_files_log.txt")
+    def manage_memory(self):
+        """ Gestisce l'utilizzo della memoria durante la ricerca per evitare problemi"""
+        import psutil
+        import gc
         
+        process = psutil.Process(os.getpid())
+        memory_usage = process.memory_info().rss / 1024 / 1024  # MB
+        
+        # Se l'uso della memoria è troppo alto, esegui la garbage collection forzata
+        if memory_usage > 500:  # 500 MB
+            self.log_debug(f"Utilizzo memoria elevato: {memory_usage:.2f} MB. Esecuzione garbage collection.")
+            gc.collect()
+            
+            # Dopo la GC, ricalcola l'utilizzo della memoria
+            memory_usage = process.memory_info().rss / 1024 / 1024
+            self.log_debug(f"Utilizzo memoria dopo GC: {memory_usage:.2f} MB")    
+
+    def run_with_timeout(self, func, args=(), kwargs={}, timeout_sec=10):
+        """ Esegue una funzione con un timeout, evitando blocchi indefiniti Returns: (result, completed)
+            - result: risultato della funzione o None
+            - completed: True se completata, False se interrotta per timeout
+        """
+        result = [None]
+        completed = [False]
+        
+        def target():
+            try:
+                result[0] = func(*args, **kwargs)
+            except Exception as e:
+                self.log_debug(f"Eccezione nella funzione con timeout: {str(e)}")
+            finally:
+                completed[0] = True
+        
+        thread = threading.Thread(target=target)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout_sec)
+        
+        return result[0], completed[0]
+    
     def _get_all_descendants(self, widget):
         """Ottiene ricorsivamente tutti i widget discendenti"""
         descendants = []
@@ -1184,19 +1223,25 @@ class FileSearchApp:
             # MODIFICATO: Ricerca breadth-first basata su blocchi
             def process_blocks():
                 nonlocal files_checked, dirs_checked, last_update_time
+    
                 # Determina il numero massimo di file per blocco in base alle impostazioni
                 max_files_in_block = self.max_files_per_block.get()
                 
                 # Adatta automaticamente la dimensione del blocco se richiesto
                 if self.block_size_auto_adjust.get():
+                    # Ottimizzazione per ricerche di sistema o cartelle molto grandi
                     if is_system_search:
-                        max_files_in_block = max(2000, max_files_in_block)  # Aumenta per ricerche di sistema
+                        max_files_in_block = max(2000, max_files_in_block)
                     elif files_checked > 100000:
-                        max_files_in_block = max(5000, max_files_in_block)  # Aumenta per ricerche molto grandi
+                        max_files_in_block = max(5000, max_files_in_block)
                 
-                # Traccia quanti blocchi sono attualmente in elaborazione
+                # Ottimizza il numero di blocchi paralleli in base al carico di sistema
                 active_blocks = 0
                 max_parallel = self.max_parallel_blocks.get()
+                
+                # Utilizziamo un set per tracciare i blocchi già processati più efficiente
+                processed_blocks = set()
+                
                 while not block_queue.empty() and not self.stop_search:
                     # Verifica timeout
                     if timeout and time.time() - start_time > timeout:
@@ -1207,9 +1252,15 @@ class FileSearchApp:
                         # Prendi il blocco con priorità più alta
                         _, current_block = block_queue.get(block=False)
                         
+                        # Salta blocchi già processati
+                        if current_block in processed_blocks:
+                            continue
+                            
+                        processed_blocks.add(current_block)
+                        
                         # Aggiorna lo stato
                         current_time = time.time()
-                        if current_time - last_update_time >= 1.0:
+                        if current_time - last_update_time >= 0.5:  # Aggiorna ogni mezzo secondo
                             elapsed_time = current_time - start_time
                             self.progress_queue.put(("status", 
                                 f"Analisi blocco: {current_block} (Cartelle: {dirs_checked}, File: {files_checked}, Tempo: {int(elapsed_time)}s)"))
@@ -1311,6 +1362,8 @@ class FileSearchApp:
                                     try:
                                         # Verifica limite file
                                         files_checked += 1
+                                        if files_checked % 1000 == 0:
+                                            self.manage_memory()
                                         if files_checked > self.max_files_to_check.get():
                                             self.stop_search = True
                                             self.progress_queue.put(("status", 
@@ -1665,6 +1718,23 @@ class FileSearchApp:
             # File di testo semplice
             if ext in ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log']:
                 try:
+                    # Per file molto grandi, limita la lettura
+                    file_size = os.path.getsize(file_path)
+                    if file_size > 10 * 1024 * 1024:  # Se è più grande di 10MB
+                        try:
+                            with open(file_path, 'rb') as f:
+                                # Leggi solo i primi e gli ultimi 500KB
+                                header = f.read(512 * 1024).decode('utf-8', errors='ignore')
+                                
+                                # Posiziona il cursore per leggere la fine del file
+                                f.seek(-min(512 * 1024, file_size), 2)
+                                footer = f.read().decode('utf-8', errors='ignore')
+                                
+                                return header + "\n[...contenuto troncato...]\n" + footer
+                        except Exception as e:
+                            self.log_debug(f"Errore nella lettura parziale del file grande {file_path}: {str(e)}")
+                    
+                    # Per file di dimensioni normali, leggi tutto normalmente
                     with open(file_path, 'r', encoding='utf-8') as f:
                         return f.read()
                 except UnicodeDecodeError:
