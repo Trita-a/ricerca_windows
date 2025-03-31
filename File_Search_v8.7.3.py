@@ -142,10 +142,10 @@ class FileSearchApp:
         self.block_size_auto_adjust = BooleanVar(value=True)  # Adatta automaticamente la dimensione dei blocchi
         
         # Variables for disk information
-        self.dir_size_var = StringVar(value="N/A")
-        self.total_disk_var = StringVar(value="N/A")
-        self.used_disk_var = StringVar(value="N/A")
-        self.free_disk_var = StringVar(value="N/A")
+        self.dir_size_var = StringVar(value="")
+        self.total_disk_var = StringVar(value="")
+        self.used_disk_var = StringVar(value="")
+        self.free_disk_var = StringVar(value="")
 
         # Variabili aggiuntive per i miglioramenti
         self.search_start_time = None
@@ -3283,29 +3283,32 @@ class FileSearchApp:
         # Intestazione (titolo e informazioni)
         header_frame = ttk.Frame(main_container, padding="10")
         header_frame.pack(fill=X)
-        
-        # Titolo principale al centro
-        title_label = ttk.Label(header_frame, text="File Search Tool.. Nucleo Perugia", 
-                            font=("Helvetica", 14, "bold"))
-        title_label.pack(side=TOP)
 
-        # Frame informativo con data/ora e tema
-        info_frame = ttk.Frame(header_frame)
-        info_frame.pack(fill=X, pady=5)
-        
-        # Informazioni a sinistra (tema)
-        theme_frame = ttk.Frame(info_frame)
-        theme_frame.pack(side=LEFT)
-        
+        # Layout a tre colonne in una singola riga
+        # 1. Tema a sinistra
+        theme_frame = ttk.Frame(header_frame)
+        theme_frame.pack(side=LEFT, fill=Y)
+
         ttk.Label(theme_frame, text="Tema:").pack(side=LEFT)
         themes = ttk.Style().theme_names()
         self.theme_combobox = ttk.Combobox(theme_frame, values=themes, width=15)
         self.theme_combobox.pack(side=LEFT, padx=5)
         self.theme_combobox.current(themes.index("darkly"))
         self.theme_combobox.bind("<<ComboboxSelected>>", lambda e: [ttk.Style().theme_use(self.theme_combobox.get()),self.update_theme_colors()])
-        
-        # Informazioni a destra (data e utente)
-        datetime_label = ttk.Label(info_frame, textvariable=self.datetime_var, font=("Helvetica", 9))
+
+        # 2. Titolo al centro
+        title_frame = ttk.Frame(header_frame)
+        title_frame.pack(side=LEFT, expand=True)
+
+        title_label = ttk.Label(title_frame, text="File Search Tool.. Nucleo Perugia", 
+                            font=("Helvetica", 14, "bold"))
+        title_label.pack(anchor=CENTER)
+
+        # 3. Data/ora e utente a destra
+        datetime_frame = ttk.Frame(header_frame)
+        datetime_frame.pack(side=RIGHT, fill=Y)
+
+        datetime_label = ttk.Label(datetime_frame, textvariable=self.datetime_var, font=("Helvetica", 9))
         datetime_label.pack(side=RIGHT)
 
         # ==========================================================
