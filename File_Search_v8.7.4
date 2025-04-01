@@ -20,6 +20,7 @@ import subprocess
 import zipfile
 import io
 import csv
+import re
 
 # Dizionario per tracciare il supporto alle librerie
 file_format_support = {
@@ -114,7 +115,7 @@ except ImportError:
 class FileSearchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V8.7.2. Nucleo Perugia")
+        self.root.title("File Search Tool V8.7.3. Nucleo Perugia")
         self.root.geometry("1300x850")
         
         # Inizializza le variabili per data/ora e utente
@@ -142,10 +143,10 @@ class FileSearchApp:
         self.block_size_auto_adjust = BooleanVar(value=True)  # Adatta automaticamente la dimensione dei blocchi
         
         # Variables for disk information
-        self.dir_size_var = StringVar(value="N/A")
-        self.total_disk_var = StringVar(value="N/A")
-        self.used_disk_var = StringVar(value="N/A")
-        self.free_disk_var = StringVar(value="N/A")
+        self.dir_size_var = StringVar(value="")
+        self.total_disk_var = StringVar(value="")
+        self.used_disk_var = StringVar(value="")
+        self.free_disk_var = StringVar(value="")
 
         # Variabili aggiuntive per i miglioramenti
         self.search_start_time = None
@@ -233,7 +234,46 @@ class FileSearchApp:
         
         # Aggiungi variabile per il percorso del log dei file saltati
         self.skipped_files_log_path = os.path.join(os.path.expanduser("~"), "skipped_files_log.txt")
+    def manage_memory(self):
+        """ Gestisce l'utilizzo della memoria durante la ricerca per evitare problemi"""
+        import psutil
+        import gc
         
+        process = psutil.Process(os.getpid())
+        memory_usage = process.memory_info().rss / 1024 / 1024  # MB
+        
+        # Se l'uso della memoria è troppo alto, esegui la garbage collection forzata
+        if memory_usage > 500:  # 500 MB
+            self.log_debug(f"Utilizzo memoria elevato: {memory_usage:.2f} MB. Esecuzione garbage collection.")
+            gc.collect()
+            
+            # Dopo la GC, ricalcola l'utilizzo della memoria
+            memory_usage = process.memory_info().rss / 1024 / 1024
+            self.log_debug(f"Utilizzo memoria dopo GC: {memory_usage:.2f} MB")    
+
+    def run_with_timeout(self, func, args=(), kwargs={}, timeout_sec=10):
+        """ Esegue una funzione con un timeout, evitando blocchi indefiniti Returns: (result, completed)
+            - result: risultato della funzione o None
+            - completed: True se completata, False se interrotta per timeout
+        """
+        result = [None]
+        completed = [False]
+        
+        def target():
+            try:
+                result[0] = func(*args, **kwargs)
+            except Exception as e:
+                self.log_debug(f"Eccezione nella funzione con timeout: {str(e)}")
+            finally:
+                completed[0] = True
+        
+        thread = threading.Thread(target=target)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout_sec)
+        
+        return result[0], completed[0]
+    
     def _get_all_descendants(self, widget):
         """Ottiene ricorsivamente tutti i widget discendenti"""
         descendants = []
@@ -986,18 +1026,11 @@ class FileSearchApp:
                             matched = False
                             for keyword in keywords:
                                 # Verifica se la ricerca di parole intere è attivata
-                                if self.whole_word_search.get() and ' ' not in keyword:
-                                    try:
-                                        import re
-                                        pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
-                                        if re.search(pattern, filename.lower()):
-                                            matched = True
-                                            break
-                                    except:
-                                        # Fallback in caso di errore con regex
-                                        if keyword.lower() in filename.lower():
-                                            matched = True
-                                            break
+                                if self.whole_word_search.get():
+                                    # Gestisce anche frasi con spazi usando la nuova funzione helper
+                                    if self.is_whole_word_match(keyword, filename):
+                                        matched = True
+                                        break
                                 # Se è un termine con spazi (contesto specifico)
                                 elif ' ' in keyword:
                                     if keyword.lower() in filename.lower():
@@ -1008,8 +1041,10 @@ class FileSearchApp:
                                     if keyword.lower() in filename.lower():
                                         matched = True
                                         break
-
+                            
                             if matched:
+                                if self.debug_mode and self.whole_word_search.get():
+                                    self.log_debug(f"Trovata corrispondenza per parola intera: '{keyword}' nel nome del file {os.path.basename(file_path)}")
                                 result[0] = self.create_file_info(file_path)
                                 return
                             
@@ -1028,18 +1063,11 @@ class FileSearchApp:
                                     matched = False
                                     for keyword in keywords:
                                         # Verifica se la ricerca di parole intere è attivata
-                                        if self.whole_word_search.get() and ' ' not in keyword:
-                                            try:
-                                                import re
-                                                pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
-                                                if re.search(pattern, content.lower()):
-                                                    matched = True
-                                                    break
-                                            except:
-                                                # Fallback in caso di errore con regex
-                                                if keyword.lower() in content.lower():
-                                                    matched = True
-                                                    break
+                                        if self.whole_word_search.get():
+                                            # Gestisce anche frasi con spazi usando la nuova funzione helper
+                                            if self.is_whole_word_match(keyword, content):
+                                                matched = True
+                                                break
                                         # Se è un termine con spazi (contesto specifico)
                                         elif ' ' in keyword:
                                             if keyword.lower() in content.lower():
@@ -1052,6 +1080,8 @@ class FileSearchApp:
                                                 break
                                                 
                                     if matched:
+                                        if self.debug_mode and self.whole_word_search.get():
+                                            self.log_debug(f"Trovata corrispondenza per parola intera: '{keyword}' nel contenuto del file {os.path.basename(file_path)}")
                                         result[0] = self.create_file_info(file_path)
                                         return
                             else:
@@ -1103,7 +1133,41 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore generale nella elaborazione del file {file_path}: {str(e)}")
                     return None
-            
+                
+            def is_whole_word_match(self, keyword, text):
+                """Verifica se la keyword è presente nel testo come parola intera."""
+                try:
+                    pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+                    return re.search(pattern, text.lower()) is not None
+                except re.error as e:
+                    self.log_debug(f"Errore regex con il termine '{keyword}': {str(e)}")
+                    
+                    # Fallback manuale se la regex fallisce
+                    keyword_lower = keyword.lower()
+                    text_lower = text.lower()
+                    
+                    if keyword_lower not in text_lower:
+                        return False
+                        
+                    # Verifica manuale dei confini parola
+                    index = text_lower.find(keyword_lower)
+                    while index != -1:
+                        # Controlla il carattere prima della keyword
+                        has_char_before = index > 0 and text_lower[index-1].isalnum()
+                        
+                        # Controlla il carattere dopo la keyword
+                        end_pos = index + len(keyword_lower)
+                        has_char_after = end_pos < len(text_lower) and text_lower[end_pos].isalnum()
+                        
+                        # Se non ci sono caratteri alfanumerici prima e dopo, è una parola intera
+                        if not has_char_before and not has_char_after:
+                            return True
+                            
+                        # Cerca la prossima occorrenza
+                        index = text_lower.find(keyword_lower, index + 1)
+                    
+                    return False
+                
             # NUOVO: calcola la priorità del blocco (numerica, più bassa = più alta priorità)
             def calculate_block_priority(directory):
                 # Se l'opzione è disabilitata, usa priorità standard per tutti
@@ -1184,19 +1248,25 @@ class FileSearchApp:
             # MODIFICATO: Ricerca breadth-first basata su blocchi
             def process_blocks():
                 nonlocal files_checked, dirs_checked, last_update_time
+    
                 # Determina il numero massimo di file per blocco in base alle impostazioni
                 max_files_in_block = self.max_files_per_block.get()
                 
                 # Adatta automaticamente la dimensione del blocco se richiesto
                 if self.block_size_auto_adjust.get():
+                    # Ottimizzazione per ricerche di sistema o cartelle molto grandi
                     if is_system_search:
-                        max_files_in_block = max(2000, max_files_in_block)  # Aumenta per ricerche di sistema
+                        max_files_in_block = max(2000, max_files_in_block)
                     elif files_checked > 100000:
-                        max_files_in_block = max(5000, max_files_in_block)  # Aumenta per ricerche molto grandi
+                        max_files_in_block = max(5000, max_files_in_block)
                 
-                # Traccia quanti blocchi sono attualmente in elaborazione
+                # Ottimizza il numero di blocchi paralleli in base al carico di sistema
                 active_blocks = 0
                 max_parallel = self.max_parallel_blocks.get()
+                
+                # Utilizziamo un set per tracciare i blocchi già processati più efficiente
+                processed_blocks = set()
+                
                 while not block_queue.empty() and not self.stop_search:
                     # Verifica timeout
                     if timeout and time.time() - start_time > timeout:
@@ -1207,9 +1277,15 @@ class FileSearchApp:
                         # Prendi il blocco con priorità più alta
                         _, current_block = block_queue.get(block=False)
                         
+                        # Salta blocchi già processati
+                        if current_block in processed_blocks:
+                            continue
+                            
+                        processed_blocks.add(current_block)
+                        
                         # Aggiorna lo stato
                         current_time = time.time()
-                        if current_time - last_update_time >= 1.0:
+                        if current_time - last_update_time >= 0.5:  # Aggiorna ogni mezzo secondo
                             elapsed_time = current_time - start_time
                             self.progress_queue.put(("status", 
                                 f"Analisi blocco: {current_block} (Cartelle: {dirs_checked}, File: {files_checked}, Tempo: {int(elapsed_time)}s)"))
@@ -1311,6 +1387,8 @@ class FileSearchApp:
                                     try:
                                         # Verifica limite file
                                         files_checked += 1
+                                        if files_checked % 1000 == 0:
+                                            self.manage_memory()
                                         if files_checked > self.max_files_to_check.get():
                                             self.stop_search = True
                                             self.progress_queue.put(("status", 
@@ -1665,6 +1743,23 @@ class FileSearchApp:
             # File di testo semplice
             if ext in ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log']:
                 try:
+                    # Per file molto grandi, limita la lettura
+                    file_size = os.path.getsize(file_path)
+                    if file_size > 10 * 1024 * 1024:  # Se è più grande di 10MB
+                        try:
+                            with open(file_path, 'rb') as f:
+                                # Leggi solo i primi e gli ultimi 500KB
+                                header = f.read(512 * 1024).decode('utf-8', errors='ignore')
+                                
+                                # Posiziona il cursore per leggere la fine del file
+                                f.seek(-min(512 * 1024, file_size), 2)
+                                footer = f.read().decode('utf-8', errors='ignore')
+                                
+                                return header + "\n[...contenuto troncato...]\n" + footer
+                        except Exception as e:
+                            self.log_debug(f"Errore nella lettura parziale del file grande {file_path}: {str(e)}")
+                    
+                    # Per file di dimensioni normali, leggi tutto normalmente
                     with open(file_path, 'r', encoding='utf-8') as f:
                         return f.read()
                 except UnicodeDecodeError:
@@ -3213,29 +3308,32 @@ class FileSearchApp:
         # Intestazione (titolo e informazioni)
         header_frame = ttk.Frame(main_container, padding="10")
         header_frame.pack(fill=X)
-        
-        # Titolo principale al centro
-        title_label = ttk.Label(header_frame, text="File Search Tool.. Nucleo Perugia", 
-                            font=("Helvetica", 14, "bold"))
-        title_label.pack(side=TOP)
 
-        # Frame informativo con data/ora e tema
-        info_frame = ttk.Frame(header_frame)
-        info_frame.pack(fill=X, pady=5)
-        
-        # Informazioni a sinistra (tema)
-        theme_frame = ttk.Frame(info_frame)
-        theme_frame.pack(side=LEFT)
-        
+        # Layout a tre colonne in una singola riga
+        # 1. Tema a sinistra
+        theme_frame = ttk.Frame(header_frame)
+        theme_frame.pack(side=LEFT, fill=Y)
+
         ttk.Label(theme_frame, text="Tema:").pack(side=LEFT)
         themes = ttk.Style().theme_names()
         self.theme_combobox = ttk.Combobox(theme_frame, values=themes, width=15)
         self.theme_combobox.pack(side=LEFT, padx=5)
         self.theme_combobox.current(themes.index("darkly"))
         self.theme_combobox.bind("<<ComboboxSelected>>", lambda e: [ttk.Style().theme_use(self.theme_combobox.get()),self.update_theme_colors()])
-        
-        # Informazioni a destra (data e utente)
-        datetime_label = ttk.Label(info_frame, textvariable=self.datetime_var, font=("Helvetica", 9))
+
+        # 2. Titolo al centro
+        title_frame = ttk.Frame(header_frame)
+        title_frame.pack(side=LEFT, expand=True)
+
+        title_label = ttk.Label(title_frame, text="File Search Tool.. Nucleo Perugia", 
+                            font=("Helvetica", 14, "bold"))
+        title_label.pack(anchor=CENTER)
+
+        # 3. Data/ora e utente a destra
+        datetime_frame = ttk.Frame(header_frame)
+        datetime_frame.pack(side=RIGHT, fill=Y)
+
+        datetime_label = ttk.Label(datetime_frame, textvariable=self.datetime_var, font=("Helvetica", 9))
         datetime_label.pack(side=RIGHT)
 
         # ==========================================================
@@ -3299,7 +3397,7 @@ class FileSearchApp:
         
         word_check = ttk.Checkbutton(options_frame, text="Parola intera", variable=self.whole_word_search)
         word_check.pack(side=LEFT, padx=10)
-        self.create_tooltip(word_check, "Cerca solo parole intere (es. 'log' non troverà 'login' o 'logging')")
+        self.create_tooltip(word_check, "Cerca solo parole o frasi intere (es. 'log' non troverà 'login' o 'logging', e 'file di testo' non troverà 'molti file di testo.doc')")
         
         sys_check = ttk.Checkbutton(options_frame, text="Escludi file di sistema", variable=self.exclude_system_files)
         sys_check.pack(side=LEFT, padx=10)
@@ -3435,73 +3533,82 @@ class FileSearchApp:
         # ==========================================================
         info_container = ttk.Frame(main_container)
         info_container.pack(fill=X, padx=10, pady=5)
-        
-        # Frame sinistro: stato ricerca
+
+        # Contenitore per le informazioni di stato
         status_frame = ttk.LabelFrame(info_container, text="Stato ricerca", padding=5)
-        status_frame.pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
-        
+        status_frame.pack(fill=X, side=LEFT, pady=5, expand=YES)
+
+        # Griglia per lo stato
+        status_grid = ttk.Frame(status_frame)
+        status_grid.pack(fill=X, expand=YES)
+        status_grid.columnconfigure(1, weight=1)
+
         # Progress bar
-        self.progress_bar = ttk.Progressbar(status_frame, mode='determinate')
-        self.progress_bar.pack(fill=X, pady=5)
-        
-        # Status labels
-        status_inner_frame = ttk.Frame(status_frame)
-        status_inner_frame.pack(fill=X)
-        
-        ttk.Label(status_inner_frame, text="Analisi:", font=("", 9, "bold")).pack(anchor=W)
-        self.status_label = ttk.Label(status_inner_frame, text="In attesa...", wraplength=400)
-        self.status_label.pack(anchor=W, padx=5)
-        
-        ttk.Label(status_inner_frame, text="File analizzati:", font=("", 9, "bold")).pack(anchor=W, pady=(5, 0))
-        self.analyzed_files_label = ttk.Label(status_inner_frame, text="Nessuna ricerca avviata", wraplength=400)
-        self.analyzed_files_label.pack(anchor=W, padx=5)
-        
-        # Frame destro: tempi e spazio disco
-        stats_frame = ttk.Frame(info_container)
-        stats_frame.pack(side=LEFT, fill=X, expand=YES, padx=(5, 0))
-        
-        # Frame per i tempi
-        time_frame = ttk.LabelFrame(stats_frame, text="Informazioni temporali", padding=5)
-        time_frame.pack(fill=X, pady=(0, 5))
-        
-        # Grid per i tempi
+        self.progress_bar = ttk.Progressbar(status_grid, mode='determinate')
+        self.progress_bar.grid(row=0, column=0, columnspan=2, sticky=W+E, pady=5)
+
+        # Riga 1: Status
+        ttk.Label(status_grid, text="Analisi:", font=("", 9, "bold")).grid(row=1, column=0, sticky=W, padx=5, pady=2)
+        self.status_label = ttk.Label(status_grid, text="In attesa...", wraplength=800)
+        self.status_label.grid(row=1, column=1, sticky=W+E, padx=5, pady=2)
+
+        # Riga 2: File analizzati
+        ttk.Label(status_grid, text="File analizzati:", font=("", 9, "bold")).grid(row=2, column=0, sticky=W, padx=5, pady=2)
+        self.analyzed_files_label = ttk.Label(status_grid, text="Nessuna ricerca avviata", wraplength=2000)
+        self.analyzed_files_label.grid(row=2, column=1, sticky=W+E, padx=5, pady=2)
+
+        # Contenitore per le informazioni temporali e di spazio disco sulla destra
+        right_info_frame = ttk.Frame(info_container)
+        right_info_frame.pack(side=LEFT, fill=Y, padx=5, pady=2, expand=NO)
+
+        # Frame per i tempi (metà superiore)
+        time_frame = ttk.LabelFrame(right_info_frame, text="Informazioni temporali", padding=5)
+        time_frame.pack(side=TOP, fill=X, expand=YES)
+
+        # Grid per i tempi con layout migliorato
         time_grid = ttk.Frame(time_frame)
         time_grid.pack(fill=X, pady=2)
-        
+        time_grid.columnconfigure(1, weight=1)
+        time_grid.columnconfigure(3, weight=1)
+        time_grid.columnconfigure(5, weight=1)
+
         ttk.Label(time_grid, text="Avvio:").grid(row=0, column=0, sticky=W, padx=5)
         self.start_time_label = ttk.Label(time_grid, text="--:--", font=("", 9, "bold"))
         self.start_time_label.grid(row=0, column=1, sticky=W, padx=5)
-        
+
         ttk.Label(time_grid, text="Fine:").grid(row=0, column=2, sticky=W, padx=5)
         self.end_time_label = ttk.Label(time_grid, text="--:--", font=("", 9, "bold"))
         self.end_time_label.grid(row=0, column=3, sticky=W, padx=5)
-        
+
         ttk.Label(time_grid, text="Durata:").grid(row=0, column=4, sticky=W, padx=5)
         self.total_time_label = ttk.Label(time_grid, text="--:--", font=("", 9, "bold"))
         self.total_time_label.grid(row=0, column=5, sticky=W, padx=5)
-        
-        # Frame per info disco
-        disk_info_frame = ttk.LabelFrame(stats_frame, text="Spazio disco", padding=5)
-        disk_info_frame.pack(fill=X)
-        
+
+        # Frame per info disco (metà inferiore)
+        disk_info_frame = ttk.LabelFrame(right_info_frame, text="Spazio disco", padding=5)
+        disk_info_frame.pack(side=TOP, fill=X, expand=YES, pady=(5, 0))
+
         # Grid per info disco
         disk_grid = ttk.Frame(disk_info_frame)
         disk_grid.pack(fill=X, pady=2)
-        
+        disk_grid.columnconfigure(1, weight=1)
+        disk_grid.columnconfigure(3, weight=1)
+        disk_grid.columnconfigure(5, weight=1)
+        disk_grid.columnconfigure(7, weight=1)
+
         ttk.Label(disk_grid, text="Directory:").grid(row=0, column=0, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.dir_size_var, font=("", 9, "bold")).grid(row=0, column=1, sticky=W, padx=5)
-        
+
         ttk.Label(disk_grid, text="Disco:").grid(row=0, column=2, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.total_disk_var, font=("", 9, "bold")).grid(row=0, column=3, sticky=W, padx=5)
-        
-        ttk.Label(disk_grid, text="Usato:").grid(row=1, column=0, sticky=W, padx=5)
-        ttk.Label(disk_grid, textvariable=self.used_disk_var, font=("", 9, "bold")).grid(row=1, column=1, sticky=W, padx=5)
-        
-        ttk.Label(disk_grid, text="Libero:").grid(row=1, column=2, sticky=W, padx=5)
-        ttk.Label(disk_grid, textvariable=self.free_disk_var, font=("", 9, "bold")).grid(row=1, column=3, sticky=W, padx=5)
-        
+
+        ttk.Label(disk_grid, text="Usato:").grid(row=0, column=4, sticky=W, padx=5)
+        ttk.Label(disk_grid, textvariable=self.used_disk_var, font=("", 9, "bold")).grid(row=0, column=5, sticky=W, padx=5)
+
+        ttk.Label(disk_grid, text="Libero:").grid(row=0, column=6, sticky=W, padx=5)
+        ttk.Label(disk_grid, textvariable=self.free_disk_var, font=("", 9, "bold")).grid(row=0, column=7, sticky=W, padx=5)
         # ==========================================================
-        # SEZIONE RISULTATI (mantenuta come richiesto)
+        # SEZIONE RISULTATI 
         # ==========================================================
         results_container = ttk.LabelFrame(main_container, text="Risultati di ricerca", padding=10)
         results_container.pack(fill=BOTH, expand=YES, padx=10, pady=(5, 10))
