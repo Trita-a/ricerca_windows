@@ -919,7 +919,7 @@ class FileSearchApp:
     # Esempio di utilizzo per cambiare il tema
     def change_theme(self, theme):
         self.update_theme_colors(theme)
-
+   
     def _search_thread(self, path, keywords, search_content):
         try:
             # Inizializza i contatori di file e directory esaminati e il tempo di inizio
@@ -1133,41 +1133,7 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore generale nella elaborazione del file {file_path}: {str(e)}")
                     return None
-                
-            def is_whole_word_match(self, keyword, text):
-                """Verifica se la keyword è presente nel testo come parola intera."""
-                try:
-                    pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
-                    return re.search(pattern, text.lower()) is not None
-                except re.error as e:
-                    self.log_debug(f"Errore regex con il termine '{keyword}': {str(e)}")
-                    
-                    # Fallback manuale se la regex fallisce
-                    keyword_lower = keyword.lower()
-                    text_lower = text.lower()
-                    
-                    if keyword_lower not in text_lower:
-                        return False
-                        
-                    # Verifica manuale dei confini parola
-                    index = text_lower.find(keyword_lower)
-                    while index != -1:
-                        # Controlla il carattere prima della keyword
-                        has_char_before = index > 0 and text_lower[index-1].isalnum()
-                        
-                        # Controlla il carattere dopo la keyword
-                        end_pos = index + len(keyword_lower)
-                        has_char_after = end_pos < len(text_lower) and text_lower[end_pos].isalnum()
-                        
-                        # Se non ci sono caratteri alfanumerici prima e dopo, è una parola intera
-                        if not has_char_before and not has_char_after:
-                            return True
-                            
-                        # Cerca la prossima occorrenza
-                        index = text_lower.find(keyword_lower, index + 1)
-                    
-                    return False
-                
+       
             # NUOVO: calcola la priorità del blocco (numerica, più bassa = più alta priorità)
             def calculate_block_priority(directory):
                 # Se l'opzione è disabilitata, usa priorità standard per tutti
@@ -1542,6 +1508,40 @@ class FileSearchApp:
             self.log_debug(error_msg)
             self.progress_queue.put(("error", error_msg))
 
+    def is_whole_word_match(self, keyword, text):
+        """Verifica se la keyword è presente nel testo come parola intera."""
+        try:
+            pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+            return re.search(pattern, text.lower()) is not None
+        except re.error as e:
+            self.log_debug(f"Errore regex con il termine '{keyword}': {str(e)}")
+            
+            # Fallback manuale se la regex fallisce
+            keyword_lower = keyword.lower()
+            text_lower = text.lower()
+            
+            if keyword_lower not in text_lower:
+                return False
+                
+            # Verifica manuale dei confini parola
+            index = text_lower.find(keyword_lower)
+            while index != -1:
+                # Controlla il carattere prima della keyword
+                has_char_before = index > 0 and text_lower[index-1].isalnum()
+                
+                # Controlla il carattere dopo la keyword
+                end_pos = index + len(keyword_lower)
+                has_char_after = end_pos < len(text_lower) and text_lower[end_pos].isalnum()
+                
+                # Se non ci sono caratteri alfanumerici prima e dopo, è una parola intera
+                if not has_char_before and not has_char_after:
+                    return True
+                    
+                # Cerca la prossima occorrenza
+                index = text_lower.find(keyword_lower, index + 1)
+            
+            return False
+                
     def search_current_user_only(self):
         """Imposta la ricerca solo nella cartella dell'utente corrente"""
         user_folder = os.path.join("C:/Users", getpass.getuser())
@@ -3692,8 +3692,7 @@ class FileSearchApp:
         
         # Aggiungi binding per l'evento di doppio clic
         self.results_list.bind("<Double-1>", self.open_file_location)
-        self.create_tooltip(self.results_list, "Doppio click per aprire la posizione del file nel File Explorer")
-
+        
         # Applica stili alle righe
         self.update_theme_colors()
 
