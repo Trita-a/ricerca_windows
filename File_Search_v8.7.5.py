@@ -134,6 +134,7 @@ class FileSearchApp:
         self.search_executor = None
         self.exclude_system_files = BooleanVar(value=True)  # Per default escludiamo i file di sistema
         self.whole_word_search = BooleanVar(value=False)
+        self.dir_size_calculation = StringVar(value="incrementale")  # "incrementale", "preciso", "stimato", "sistema", "disabilitato"
 
         # Variabili per la ricerca a blocchi
         self.max_files_per_block = IntVar(value=1000)  # Numero massimo di file per blocco
@@ -1263,6 +1264,7 @@ class FileSearchApp:
                                     if any(keyword.lower() in item.lower() for keyword in keywords):
                                         folder_info = self.create_folder_info(item_path)
                                         self.search_results.append(folder_info)
+                                        
                         except Exception as e:
                             self.log_debug(f"Errore nell'analisi della directory {item_path}: {str(e)}")
                     
@@ -1311,7 +1313,18 @@ class FileSearchApp:
                                         f"Limite di {self.max_files_to_check.get()} file controllati raggiunto. "
                                         f"Aumenta il limite nelle opzioni per cercare più file."))
                                     return
-                                
+                                try:
+                                    item_path = os.path.join(current_block, item)
+                                    if os.path.isfile(item_path) and not os.path.islink(item_path):
+                                        file_size = os.path.getsize(item_path)
+                                        self.current_search_size += file_size
+                                        
+                                        # Aggiorna la dimensione mostrata ogni 1000 file o ogni 5 secondi
+                                        if files_checked % 1000 == 0 or (time.time() - last_size_update_time) > 5:
+                                            self.progress_queue.put(("update_dir_size", self.current_search_size))
+                                            last_size_update_time = time.time()
+                                except:
+                                    pass  # Ignora errori durante il calcolo della dimensione
                                 # Gestione sicura dell'executor
                                 try:
                                     if self.search_executor and not self.search_executor._shutdown:
@@ -1364,6 +1377,9 @@ class FileSearchApp:
             start_time = time.time()
             timeout = self.timeout_seconds.get() if self.timeout_enabled.get() else None
             
+            self.current_search_size = 0  # Dimensione totale dei file trovati
+            last_size_update_time = time.time()  # Per aggiornamenti periodici
+
             # Determina se si tratta di una ricerca completa del sistema (C:/ o simile)
             is_system_search = path.lower() in ["c:/", "c:\\", "d:/", "d:\\", "e:/", "e:\\"] or path in [os.path.abspath("/")]
 
@@ -2024,6 +2040,8 @@ class FileSearchApp:
                             else:
                                 # È solo un messaggio di stato semplice
                                 self.status_label["text"] = value
+                        elif progress_type == "update_dir_size":
+                            self.dir_size_var.set(value)  # value è già formattato
                         elif progress_type == "complete":
                             self.is_searching = False
                             self.enable_all_controls()
@@ -2957,7 +2975,83 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Error calculating directory size for {path}: {str(e)}")
             return 0
-          
+        
+    def get_directory_size_system(self, path):
+        """Utilizza comandi di sistema per ottenere dimensioni di directory molto grandi"""
+        try:
+            if os.name == 'nt':  # Windows
+                import subprocess
+                # Usa PowerShell per calcolare la dimensione (molto più veloce per directory grandi)
+                cmd = f'powershell -command "Get-ChildItem -Path \'{path}\' -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum | Select-Object -ExpandProperty Sum"'
+                result = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
+                size = int(result.strip())
+                return size
+            else:  # Linux/Unix
+                # Usa il comando du che è ottimizzato per il calcolo delle dimensioni
+                result = subprocess.check_output(['du', '-sb', path])
+                size = int(result.split()[0])
+                return size
+        except Exception as e:
+            self.log_debug(f"Errore nel calcolo della dimensione tramite comando di sistema: {str(e)}")
+            # Fallback al metodo standard
+            return self.get_directory_size(path)
+    def estimate_directory_size(self, path, sample_size=100):
+        """Stima la dimensione di una directory campionando alcuni file"""
+        import random
+        
+        if not os.path.exists(path) or os.path.isfile(path):
+            return self.get_directory_size(path)  # Usa il metodo esatto per file o percorsi non validi
+        
+        try:
+            # Ottieni un conteggio rapido dei file (questo è veloce)
+            total_files = 0
+            sampled_files = 0
+            total_sampled_size = 0
+            
+            # Prima passata veloce per contare i file
+            for root, _, files in os.walk(path, topdown=True):
+                total_files += len(files)
+                # Limita il tempo della prima passata
+                if total_files > 10000:  # Se ci sono più di 10000 file, passiamo alla stima
+                    break
+            
+            # Se pochi file, usare metodo preciso
+            if total_files < 1000:
+                return self.get_directory_size(path)
+                
+            # Seconda passata per il campionamento
+            for root, _, files in os.walk(path, topdown=True):
+                for file in files:
+                    # Campiona casualmente 1 file ogni X
+                    if random.randint(1, max(1, total_files // sample_size)) == 1:
+                        try:
+                            file_path = os.path.join(root, file)
+                            if os.path.exists(file_path) and not os.path.islink(file_path):
+                                total_sampled_size += os.path.getsize(file_path)
+                                sampled_files += 1
+                        except:
+                            pass
+                    
+                    # Se abbiamo campionato abbastanza file, calcola la stima
+                    if sampled_files >= sample_size:
+                        break
+                
+                if sampled_files >= sample_size:
+                    break
+            
+            # Calcola la stima finale
+            if sampled_files > 0:
+                avg_file_size = total_sampled_size / sampled_files
+                estimated_size = avg_file_size * total_files
+                self.log_debug(f"Dimensione stimata per {path}: {self._format_size(estimated_size)} (basata su {sampled_files} campioni)")
+                return estimated_size
+            else:
+                return self.get_directory_size(path)  # Fallback al metodo standard
+                
+        except Exception as e:
+            self.log_debug(f"Errore nella stima della dimensione: {str(e)}")
+            return 0
+     
     def get_disk_space(self, path):
         """Get disk space information for the partition containing the path"""
         if not os.path.exists(path):
@@ -3002,8 +3096,20 @@ class FileSearchApp:
             self.used_disk_var.set("Errore")
             self.free_disk_var.set("Errore")
         
-        # Non calcolare la dimensione della cartella all'avvio della ricerca
-        # perché potrebbe bloccare l'interfaccia troppo a lungo
+        # MODIFICA QUI: Verifica modalità di calcolo dimensione
+        calculation_mode = self.dir_size_calculation.get()
+        
+        if calculation_mode == "disabilitato":
+            self.dir_size_var.set("Calcolo disattivato")
+            return
+        
+        # Se è incrementale e siamo in fase di ricerca, non fare niente qui
+        # (il calcolo avverrà durante la ricerca stessa)
+        if calculation_mode == "incrementale" and self.is_searching:
+            self.dir_size_var.set("Calcolo in corso...")
+            return
+            
+        # Per le altre modalità o se non siamo in ricerca
         if calculate_dir_size:
             self.dir_size_var.set("Calcolo in corso...")
             # Get directory size in a separate thread
@@ -3013,11 +3119,26 @@ class FileSearchApp:
         
     def _calculate_dir_size_thread(self, path):
         """Thread function to calculate directory size"""
-        dir_size = self.get_directory_size(path)
+        calculation_mode = self.dir_size_calculation.get()
+        dir_size = 0
         
-        # Update the UI from the main thread
-        self.root.after(0, lambda: self.dir_size_var.set(self._format_size(dir_size)))
-        self.root.after(0, lambda: self.status_label.config(text="In attesa..."))
+        try:
+            if calculation_mode == "preciso":
+                dir_size = self.get_directory_size(path)
+            elif calculation_mode == "stimato":
+                dir_size = self.estimate_directory_size(path)
+            elif calculation_mode == "sistema":
+                dir_size = self.get_directory_size_system(path)
+            else:  # incrementale o fallback
+                dir_size = self.get_directory_size(path)
+                
+            # Update the UI from the main thread
+            self.root.after(0, lambda: self.dir_size_var.set(self._format_size(dir_size)))
+            self.root.after(0, lambda: self.status_label.config(text="In attesa..."))
+        except Exception as e:
+            self.log_debug(f"Errore nel calcolo della dimensione: {str(e)}")
+            self.root.after(0, lambda: self.dir_size_var.set("Errore"))
+            self.root.after(0, lambda: self.status_label.config(text="In attesa..."))
 
     # Funzione helper per formattare la dimensione del file
     def _format_size(self, size_bytes):
@@ -3446,6 +3567,20 @@ class FileSearchApp:
         perf_row1 = ttk.Frame(self.perf_frame)
         perf_row1.pack(fill=X, pady=2)
 
+        # AGGIUNGI QUI: opzione per il calcolo della dimensione
+        ttk.Label(perf_row1, text="Calcolo dim.:").pack(side=LEFT, padx=(0,5))
+        dir_size_combo = ttk.Combobox(perf_row1, textvariable=self.dir_size_calculation, 
+                                    values=["incrementale", "preciso", "stimato", "sistema", "disabilitato"], 
+                                    width=12, state="readonly")
+        dir_size_combo.pack(side=LEFT, padx=5)
+        self.create_tooltip(dir_size_combo, 
+            "Scegli come calcolare la dimensione delle directory:\n" + 
+            "- Incrementale: aggiorna durante la ricerca\n" +
+            "- Preciso: calcolo completo ma più lento\n" +
+            "- Stimato: più veloce ma approssimato\n" +
+            "- Sistema: usa comandi di sistema esterni\n" +
+            "- Disabilitato: non calcolare le dimensioni")
+        
         # Timeout
         timeout_check = ttk.Checkbutton(perf_row1, text="Timeout ricerca", variable=self.timeout_enabled)
         timeout_check.pack(side=LEFT, padx=5)
