@@ -284,7 +284,7 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore generale nella elaborazione del file {file_path}: {str(e)}")
             return None
-        
+            
     def process_with_timeout(self, file_path, keywords, result, exception, processing_completed, search_content=True):
         try:
             # Verifica filtri di dimensione
@@ -1132,170 +1132,6 @@ class FileSearchApp:
             # NUOVO: coda di priorità per i blocchi di ricerca
             block_queue = queue.PriorityQueue()
 
-            # Funzione per elaborare un file
-            def process_file(file_path, keywords):
-                if self.stop_search:
-                    return None
-                    
-                # Salta direttamente i file problematici
-                if self.should_skip_file(file_path):
-                    return None
-                
-                try:
-                    # Implementazione timeout cross-platform tramite threading
-                    result = [None]
-                    exception = [None]
-                    processing_completed = [False]
-                    
-                    # INSERISCI QUI LA FUNZIONE process_with_timeout()
-                    def process_with_timeout():
-                        try:
-                            # Verifica filtri di dimensione
-                            file_size = os.path.getsize(file_path)
-                            if (self.advanced_filters["size_min"] > 0 and file_size < self.advanced_filters["size_min"]) or \
-                            (self.advanced_filters["size_max"] > 0 and file_size > self.advanced_filters["size_max"]):
-                                result[0] = None
-                                return
-                            
-                            # Verifica filtri di data
-                            if self.advanced_filters["date_min"] or self.advanced_filters["date_max"]:
-                                mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
-                                
-                                if self.advanced_filters["date_min"]:
-                                    min_date = datetime.strptime(self.advanced_filters["date_min"], "%d-%m-%Y")
-                                    if mod_time < min_date:
-                                        result[0] = None
-                                        return
-                                        
-                                if self.advanced_filters["date_max"]:
-                                    max_date = datetime.strptime(self.advanced_filters["date_max"], "%d-%m-%Y")
-                                    if mod_time > max_date:
-                                        result[0] = None
-                                        return
-                            
-                            # Verifica filtri estensione
-                            if self.advanced_filters["extensions"] and not any(file_path.lower().endswith(ext.lower()) 
-                                                                        for ext in self.advanced_filters["extensions"]):
-                                result[0] = None
-                                return
-                                
-                            if os.path.splitext(file_path)[1].lower() in ['.doc', '.xls']:
-                                self.progress_queue.put(("progress", self.progress_bar["value"]))  # Forza aggiornamento
-                                
-                            # Verifica corrispondenza nel nome file
-                            filename = os.path.basename(file_path)
-
-                            matched = False
-                            for keyword in keywords:
-                                # Verifica se la ricerca di parole intere è attivata
-                                if self.whole_word_search.get():
-                                    # Gestisce anche frasi con spazi usando la nuova funzione helper
-                                    if self.is_whole_word_match(keyword, filename):
-                                        matched = True
-                                        break
-                                # Se è un termine con spazi (contesto specifico)
-                                elif ' ' in keyword:
-                                    if keyword.lower() in filename.lower():
-                                        matched = True
-                                        break
-                                # Ricerca normale
-                                else:
-                                    if keyword.lower() in filename.lower():
-                                        matched = True
-                                        break
-                            
-                            if matched:
-                                if self.debug_mode and self.whole_word_search.get():
-                                    self.log_debug(f"Trovata corrispondenza per parola intera: '{keyword}' nel nome del file {os.path.basename(file_path)}")
-                                result[0] = self.create_file_info(file_path)
-                                return
-                            
-                            # Verifica contenuto se richiesto
-                            if search_content and self.should_search_content(file_path):
-                                max_size_bytes = self.max_file_size_mb.get() * 1024 * 1024
-                                
-                                # Salta file troppo grandi
-                                if file_size > max_size_bytes:
-                                    self.log_debug(f"File {file_path} troppo grande per l'analisi del contenuto")
-                                    result[0] = None
-                                    return
-                                    
-                                content = self.get_file_content(file_path)
-                                if content:
-                                    matched = False
-                                    for keyword in keywords:
-                                        # Verifica se la ricerca di parole intere è attivata
-                                        if self.whole_word_search.get():
-                                            # Gestisce anche frasi con spazi usando la nuova funzione helper
-                                            if self.is_whole_word_match(keyword, content):
-                                                matched = True
-                                                break
-                                        # Se è un termine con spazi (contesto specifico)
-                                        elif ' ' in keyword:
-                                            if keyword.lower() in content.lower():
-                                                matched = True
-                                                break
-                                        # Ricerca normale
-                                        else:
-                                            if keyword.lower() in content.lower():
-                                                matched = True
-                                                break
-                                                
-                                    if matched:
-                                        if self.debug_mode and self.whole_word_search.get():
-                                            self.log_debug(f"Trovata corrispondenza per parola intera: '{keyword}' nel contenuto del file {os.path.basename(file_path)}")
-                                        result[0] = self.create_file_info(file_path)
-                                        return
-                            else:
-                                # Log per i file di sistema esclusi
-                                if search_content and os.path.splitext(file_path)[1].lower() in self.system_file_extensions:
-                                    self.log_debug(f"File di sistema escluso dall'analisi del contenuto: {file_path}")
-                                    
-                            result[0] = None
-                            
-                        except Exception as e:
-                            exception[0] = e
-                            self.log_debug(f"Errore durante l'elaborazione del file {file_path}: {str(e)}")
-                            result[0] = None
-                        finally:
-                            processing_completed[0] = True
-                    
-                    # Avvia il thread con un nome identificativo
-                    import threading
-                    worker_thread = threading.Thread(
-                        target=process_with_timeout, 
-                        name=f"Process-{os.path.basename(file_path)}"
-                    )
-                    worker_thread.daemon = True
-                    worker_thread.start()
-                    
-                    # Attendi il completamento del thread con timeout ridotto
-                    if os.path.splitext(file_path)[1].lower() in ['.doc', '.xls']:
-                        # Timeout ridotto per file problematici
-                        timeout_seconds = 5
-                        self.log_debug(f"Utilizzo timeout ridotto (5s) per il file: {file_path}")
-                    else:
-                        timeout_seconds = 20
-                    worker_thread.join(timeout_seconds)
-                    
-                    # Verifica se il thread è ancora in esecuzione (timeout raggiunto)
-                    if not processing_completed[0]:
-                        self.log_debug(f"Timeout nella elaborazione del file {file_path}")
-                        # Non attendere più il thread, continua semplicemente
-                        return None
-                        
-                    # Verifica se si è verificata un'eccezione
-                    if exception[0]:
-                        self.log_debug(f"Eccezione nell'elaborazione del file {file_path}: {str(exception[0])}")
-                        return None
-                        
-                    # Restituisci il risultato dal thread
-                    return result[0]
-                    
-                except Exception as e:
-                    self.log_debug(f"Errore generale nella elaborazione del file {file_path}: {str(e)}")
-                    return None
-       
             # NUOVO: calcola la priorità del blocco (numerica, più bassa = più alta priorità)
             def calculate_block_priority(directory):
                 # Se l'opzione è disabilitata, usa priorità standard per tutti
@@ -1363,7 +1199,7 @@ class FileSearchApp:
                                         self.stop_search = True
                                         return
                                     
-                                    future = self.search_executor.submit(process_file, item_path, keywords)
+                                    future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
                                     futures.append(future)
                         except Exception as e:
                             self.log_debug(f"Errore nell'elaborazione del file {item_path}: {str(e)}")
@@ -1376,7 +1212,7 @@ class FileSearchApp:
             # MODIFICATO: Ricerca breadth-first basata su blocchi
             def process_blocks():
                 nonlocal files_checked, dirs_checked, last_update_time
-    
+
                 # Determina il numero massimo di file per blocco in base alle impostazioni
                 max_files_in_block = self.max_files_per_block.get()
                 
@@ -1527,16 +1363,16 @@ class FileSearchApp:
                                         # Gestione sicura dell'executor
                                         try:
                                             if self.search_executor and not self.search_executor._shutdown:
-                                                future = self.search_executor.submit(process_file, item_path, keywords)
+                                                future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
                                                 futures.append(future)
                                             else:
-                                                result = process_file(item_path, keywords)
+                                                result = self.process_file(item_path, keywords, search_content)
                                                 if result:
                                                     self.search_results.append(result)
                                         except Exception as e:
                                             self.log_debug(f"Errore nell'elaborazione parallela del file {item_path}: {str(e)}")
                                             try:
-                                                result = process_file(item_path, keywords)
+                                                result = self.process_file(item_path, keywords, search_content)
                                                 if result:
                                                     self.search_results.append(result)
                                             except:
