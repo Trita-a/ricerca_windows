@@ -17,7 +17,6 @@ import concurrent.futures
 import mimetypes
 import signal
 import subprocess
-import zipfile
 import io
 import csv
 import re
@@ -1081,12 +1080,287 @@ class FileSearchApp:
     # Esempio di utilizzo per cambiare il tema
     def change_theme(self, theme):
         self.update_theme_colors(theme)
-   
+
+    def calculate_block_priority(self, directory):
+        """Calcola la priorità del blocco (numerica, più bassa = più alta priorità)"""
+        # Se l'opzione è disabilitata, usa priorità standard per tutti
+        if not self.prioritize_user_folders.get():
+            return 1
+            
+        # Altrimenti, applica la prioritizzazione configurata
+        # Dai priorità alle cartelle degli utenti
+        if "users" in directory.lower() or "documenti" in directory.lower() or "desktop" in directory.lower():
+            return 0  # Alta priorità
+        # Dai priorità medio-alta alle cartelle di dati
+        elif "data" in directory.lower() or "database" in directory.lower() or "downloads" in directory.lower():
+            return 1  # Priorità media-alta
+        # Dai priorità bassa a cartelle di sistema
+        elif "windows" in directory.lower() or "program files" in directory.lower():
+            return 3  # Priorità bassa
+        # Priorità standard per altre cartelle
+        return 2
+    
+    def initialize_block_queue(self, root_path, block_queue, visited_dirs, files_checked, keywords, search_content, futures):
+        """Inizializza la coda di blocchi con il percorso principale"""
+        try:
+            items = os.listdir(root_path)
+            
+            # Prima aggiungi le directory come blocchi separati
+            for item in items:
+                item_path = os.path.join(root_path, item)
+                try:
+                    if os.path.isdir(item_path):
+                        # Salta directory nascoste se richiesto
+                        if self.ignore_hidden.get() and (item.startswith('.') or 
+                            (os.name == 'nt' and os.path.exists(item_path) and 
+                            os.stat(item_path).st_file_attributes & 2)):
+                            continue
+                        
+                        # Salta directory escluse
+                        if hasattr(self, 'excluded_paths') and any(
+                            item_path.lower().startswith(excluded.lower()) 
+                            for excluded in self.excluded_paths):
+                            continue
+                            
+                        # Calcola priorità e aggiungi alla coda
+                        priority = self.calculate_block_priority(item_path)
+                        block_queue.put((priority, item_path))
+                        visited_dirs.add(os.path.realpath(item_path))
+                except Exception as e:
+                    self.log_debug(f"Errore nell'aggiunta del blocco {item_path}: {str(e)}")
+            
+            # Poi processa i file nella directory principale
+            for item in items:
+                if self.stop_search:
+                    return
+                    
+                item_path = os.path.join(root_path, item)
+                try:
+                    if not os.path.isdir(item_path):
+                        if self.search_files.get():
+                            # Verifica file nascosti
+                            if self.ignore_hidden.get() and (item.startswith('.') or 
+                                (os.name == 'nt' and os.path.exists(item_path) and 
+                                os.stat(item_path).st_file_attributes & 2)):
+                                continue
+                            
+                            # Processa direttamente i file nella directory principale
+                            nonlocal_files_checked = files_checked[0]
+                            nonlocal_files_checked += 1
+                            files_checked[0] = nonlocal_files_checked
+                            if nonlocal_files_checked > self.max_files_to_check.get():
+                                self.stop_search = True
+                                return
+                            
+                            future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
+                            futures.append(future)
+                except Exception as e:
+                    self.log_debug(f"Errore nell'elaborazione del file {item_path}: {str(e)}")
+                    
+        except PermissionError:
+            self.log_debug(f"Permesso negato per la directory {root_path}")
+        except Exception as e:
+            self.log_debug(f"Errore nell'inizializzazione dei blocchi da {root_path}: {str(e)}")
+
+    def process_blocks(self, block_queue, visited_dirs, start_time, timeout, is_system_search, 
+                    files_checked, dirs_checked, last_update_time, path, keywords, search_content, futures):
+        """Elabora i blocchi dalla coda in base alla priorità"""
+        # Determina il numero massimo di file per blocco in base alle impostazioni
+        max_files_in_block = self.max_files_per_block.get()
+        
+        # Adatta automaticamente la dimensione del blocco se richiesto
+        if self.block_size_auto_adjust.get():
+            # Ottimizzazione per ricerche di sistema o cartelle molto grandi
+            if is_system_search:
+                max_files_in_block = max(2000, max_files_in_block)
+            elif files_checked[0] > 100000:
+                max_files_in_block = max(5000, max_files_in_block)
+        
+        # Ottimizza il numero di blocchi paralleli in base al carico di sistema
+        active_blocks = 0
+        max_parallel = self.max_parallel_blocks.get()
+        
+        # Utilizziamo un set per tracciare i blocchi già processati più efficiente
+        processed_blocks = set()
+        
+        while not block_queue.empty() and not self.stop_search:
+            # Verifica timeout
+            if timeout and time.time() - start_time > timeout:
+                self.progress_queue.put(("timeout", "Timeout raggiunto"))
+                return
+            
+            try:
+                # Prendi il blocco con priorità più alta
+                _, current_block = block_queue.get(block=False)
+                
+                # Salta blocchi già processati
+                if current_block in processed_blocks:
+                    continue
+                    
+                processed_blocks.add(current_block)
+                
+                # Aggiorna lo stato
+                current_time = time.time()
+                if current_time - last_update_time[0] >= 0.5:  # Aggiorna ogni mezzo secondo
+                    elapsed_time = current_time - start_time
+                    self.progress_queue.put(("status", 
+                        f"Analisi blocco: {current_block} (Cartelle: {dirs_checked[0]}, File: {files_checked[0]}, Tempo: {int(elapsed_time)}s)"))
+                    self.progress_queue.put(("progress", 
+                        min(90, int((files_checked[0] / max(1, self.max_files_to_check.get())) * 100))))
+                    last_update_time[0] = current_time
+                
+                # Aggiungi blocchi di livello inferiore dalla directory corrente
+                try:
+                    # Blocco attualmente in elaborazione
+                    dirs_checked[0] += 1
+                    
+                    # Lista elementi nella directory
+                    items = os.listdir(current_block)
+                    
+                    # Prima processa le sottocartelle (aggiungi nuovi blocchi)
+                    subfolders = []
+                    for item in items:
+                        if self.stop_search:
+                            return
+                            
+                        item_path = os.path.join(current_block, item)
+                        
+                        # Salta file/cartelle nascoste
+                        try:
+                            if self.ignore_hidden.get() and (item.startswith('.') or 
+                                (os.name == 'nt' and os.path.exists(item_path) and 
+                                os.stat(item_path).st_file_attributes & 2)):
+                                continue
+                        except Exception as e:
+                            self.log_debug(f"Errore nel controllo hidden per {item_path}: {str(e)}")
+                            continue
+                            
+                        # Gestione sottodirectory
+                        try:
+                            if os.path.isdir(item_path):
+                                # Verifica se la cartella è già stata visitata
+                                try:
+                                    real_path = os.path.realpath(item_path)
+                                    if real_path in visited_dirs:
+                                        continue
+                                    visited_dirs.add(real_path)
+                                except:
+                                    if item_path in visited_dirs:
+                                        continue
+                                    visited_dirs.add(item_path)
+                                
+                                # Verifica se il percorso deve essere escluso
+                                if hasattr(self, 'excluded_paths') and any(
+                                    item_path.lower().startswith(excluded.lower()) 
+                                    for excluded in self.excluded_paths):
+                                    continue
+                                
+                                # Aggiungi alla lista delle sottocartelle
+                                subfolders.append(item_path)
+                                
+                                # Verifica corrispondenza nome cartella
+                                if self.search_folders.get():
+                                    if any(keyword.lower() in item.lower() for keyword in keywords):
+                                        folder_info = self.create_folder_info(item_path)
+                                        self.search_results.append(folder_info)
+                        except Exception as e:
+                            self.log_debug(f"Errore nell'analisi della directory {item_path}: {str(e)}")
+                    
+                    # Aggiunta sottocartelle alla coda con priorità calcolata
+                    for subfolder in subfolders:
+                        # Verifica limite di profondità
+                        folder_depth = subfolder.count(os.path.sep) - path.count(os.path.sep)
+                        if self.max_depth > 0 and folder_depth > self.max_depth:
+                            continue
+                            
+                        priority = self.calculate_block_priority(subfolder)
+                        block_queue.put((priority, subfolder))
+                    
+                    # Processa i file nella directory corrente
+                    for item in items:
+                        if self.stop_search:
+                            return
+                            
+                        item_path = os.path.join(current_block, item)
+                        
+                        # Salta i file nascosti e le directory (già processate)
+                        try:
+                            # Controllo file nascosto
+                            if self.ignore_hidden.get() and (item.startswith('.') or 
+                                        (os.name == 'nt' and os.path.exists(item_path) and 
+                                            os.stat(item_path).st_file_attributes & 2)):
+                                continue
+                                
+                            # Salta le directory (già processate)
+                            if os.path.isdir(item_path):
+                                continue
+                        except Exception as e:
+                            self.log_debug(f"Errore nel controllo del tipo per {item_path}: {str(e)}")
+                            continue
+                            
+                        # Processa i file
+                        if self.search_files.get():
+                            try:
+                                # Verifica limite file
+                                files_checked[0] += 1
+                                if files_checked[0] % 1000 == 0:
+                                    self.manage_memory()
+                                if files_checked[0] > self.max_files_to_check.get():
+                                    self.stop_search = True
+                                    self.progress_queue.put(("status", 
+                                        f"Limite di {self.max_files_to_check.get()} file controllati raggiunto. "
+                                        f"Aumenta il limite nelle opzioni per cercare più file."))
+                                    return
+                                
+                                # Gestione sicura dell'executor
+                                try:
+                                    if self.search_executor and not self.search_executor._shutdown:
+                                        future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
+                                        futures.append(future)
+                                    else:
+                                        result = self.process_file(item_path, keywords, search_content)
+                                        if result:
+                                            self.search_results.append(result)
+                                except Exception as e:
+                                    self.log_debug(f"Errore nell'elaborazione parallela del file {item_path}: {str(e)}")
+                                    try:
+                                        result = self.process_file(item_path, keywords, search_content)
+                                        if result:
+                                            self.search_results.append(result)
+                                    except:
+                                        pass
+                                    
+                            except Exception as e:
+                                self.log_debug(f"Errore nell'aggiunta del file {item_path} alla coda: {str(e)}")
+                                continue
+                    
+                except PermissionError:
+                    if self.skip_permission_errors.get():
+                        self.log_debug(f"Saltata directory con permesso negato: {current_block}")
+                    else:
+                        dir_name = os.path.basename(current_block)
+                        parent_dir = os.path.dirname(current_block)
+                        
+                        is_user_folder = (parent_dir.lower() in ["c:/users", "c:\\users"] and 
+                                        dir_name.lower() != getpass.getuser().lower())
+                        
+                        if is_user_folder:
+                            self.log_debug(f"Cartella di un altro utente inaccessibile: {current_block}")
+                            self.progress_queue.put(("status", f"Saltata cartella utente protetta: {current_block}"))
+                        else:
+                            self.log_debug(f"Permesso negato per la directory {current_block}")
+                            self.progress_queue.put(("status", f"Permesso negato: {current_block}"))
+                except Exception as e:
+                    self.log_debug(f"Errore durante l'analisi della directory {current_block}: {str(e)}")
+                    
+            except queue.Empty:
+                break
+
     def _search_thread(self, path, keywords, search_content):
         try:
             # Inizializza i contatori di file e directory esaminati e il tempo di inizio
-            files_checked = 0
-            dirs_checked = 0
+            files_checked = [0]  # Uso una lista per poter modificare il valore nelle funzioni chiamate
+            dirs_checked = [0]
             start_time = time.time()
             timeout = self.timeout_seconds.get() if self.timeout_enabled.get() else None
             
@@ -1113,7 +1387,7 @@ class FileSearchApp:
                 self.progress_queue.put(("status", "Ricerca completa avviata - parametri adattati per ricerca approfondita"))
             
             # Variabili per gestire l'aggiornamento ogni secondo
-            last_update_time = time.time()
+            last_update_time = [time.time()]
             
             # Crea un executor per processare i file in parallelo in modo sicuro
             try:
@@ -1129,280 +1403,8 @@ class FileSearchApp:
             # Insieme per tenere traccia delle cartelle visitate (evita loop infiniti con symlink)
             visited_dirs = set()
             
-            # NUOVO: coda di priorità per i blocchi di ricerca
+            # Coda di priorità per i blocchi di ricerca
             block_queue = queue.PriorityQueue()
-
-            # NUOVO: calcola la priorità del blocco (numerica, più bassa = più alta priorità)
-            def calculate_block_priority(directory):
-                # Se l'opzione è disabilitata, usa priorità standard per tutti
-                if not self.prioritize_user_folders.get():
-                    return 1
-                    
-                # Altrimenti, applica la prioritizzazione configurata
-                # Dai priorità alle cartelle degli utenti
-                if "users" in directory.lower() or "documenti" in directory.lower() or "desktop" in directory.lower():
-                    return 0  # Alta priorità
-                # Dai priorità medio-alta alle cartelle di dati
-                elif "data" in directory.lower() or "database" in directory.lower() or "downloads" in directory.lower():
-                    return 1  # Priorità media-alta
-                # Dai priorità bassa a cartelle di sistema
-                elif "windows" in directory.lower() or "program files" in directory.lower():
-                    return 3  # Priorità bassa
-                # Priorità standard per altre cartelle
-                return 2
-            
-            # NUOVO: Inizializza la coda con blocchi iniziali
-            def initialize_block_queue(root_path):
-                try:
-                    items = os.listdir(root_path)
-                    
-                    # Prima aggiungi le directory come blocchi separati
-                    for item in items:
-                        item_path = os.path.join(root_path, item)
-                        try:
-                            if os.path.isdir(item_path):
-                                # Salta directory nascoste se richiesto
-                                if self.ignore_hidden.get() and (item.startswith('.') or 
-                                    (os.name == 'nt' and os.path.exists(item_path) and 
-                                    os.stat(item_path).st_file_attributes & 2)):
-                                    continue
-                                
-                                # Salta directory escluse
-                                if hasattr(self, 'excluded_paths') and any(
-                                    item_path.lower().startswith(excluded.lower()) 
-                                    for excluded in self.excluded_paths):
-                                    continue
-                                    
-                                # Calcola priorità e aggiungi alla coda
-                                priority = calculate_block_priority(item_path)
-                                block_queue.put((priority, item_path))
-                                visited_dirs.add(os.path.realpath(item_path))
-                        except Exception as e:
-                            self.log_debug(f"Errore nell'aggiunta del blocco {item_path}: {str(e)}")
-                    
-                    # Poi processa i file nella directory principale
-                    for item in items:
-                        item_path = os.path.join(root_path, item)
-                        try:
-                            if not os.path.isdir(item_path):
-                                if self.search_files.get():
-                                    # Verifica file nascosti
-                                    if self.ignore_hidden.get() and (item.startswith('.') or 
-                                        (os.name == 'nt' and os.path.exists(item_path) and 
-                                        os.stat(item_path).st_file_attributes & 2)):
-                                        continue
-                                    
-                                    # Processa direttamente i file nella directory principale
-                                    nonlocal files_checked
-                                    files_checked += 1
-                                    if files_checked > self.max_files_to_check.get():
-                                        self.stop_search = True
-                                        return
-                                    
-                                    future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
-                                    futures.append(future)
-                        except Exception as e:
-                            self.log_debug(f"Errore nell'elaborazione del file {item_path}: {str(e)}")
-                            
-                except PermissionError:
-                    self.log_debug(f"Permesso negato per la directory {root_path}")
-                except Exception as e:
-                    self.log_debug(f"Errore nell'inizializzazione dei blocchi da {root_path}: {str(e)}")
-            
-            # MODIFICATO: Ricerca breadth-first basata su blocchi
-            def process_blocks():
-                nonlocal files_checked, dirs_checked, last_update_time
-
-                # Determina il numero massimo di file per blocco in base alle impostazioni
-                max_files_in_block = self.max_files_per_block.get()
-                
-                # Adatta automaticamente la dimensione del blocco se richiesto
-                if self.block_size_auto_adjust.get():
-                    # Ottimizzazione per ricerche di sistema o cartelle molto grandi
-                    if is_system_search:
-                        max_files_in_block = max(2000, max_files_in_block)
-                    elif files_checked > 100000:
-                        max_files_in_block = max(5000, max_files_in_block)
-                
-                # Ottimizza il numero di blocchi paralleli in base al carico di sistema
-                active_blocks = 0
-                max_parallel = self.max_parallel_blocks.get()
-                
-                # Utilizziamo un set per tracciare i blocchi già processati più efficiente
-                processed_blocks = set()
-                
-                while not block_queue.empty() and not self.stop_search:
-                    # Verifica timeout
-                    if timeout and time.time() - start_time > timeout:
-                        self.progress_queue.put(("timeout", "Timeout raggiunto"))
-                        return
-                    
-                    try:
-                        # Prendi il blocco con priorità più alta
-                        _, current_block = block_queue.get(block=False)
-                        
-                        # Salta blocchi già processati
-                        if current_block in processed_blocks:
-                            continue
-                            
-                        processed_blocks.add(current_block)
-                        
-                        # Aggiorna lo stato
-                        current_time = time.time()
-                        if current_time - last_update_time >= 0.5:  # Aggiorna ogni mezzo secondo
-                            elapsed_time = current_time - start_time
-                            self.progress_queue.put(("status", 
-                                f"Analisi blocco: {current_block} (Cartelle: {dirs_checked}, File: {files_checked}, Tempo: {int(elapsed_time)}s)"))
-                            self.progress_queue.put(("progress", 
-                                min(90, int((files_checked / max(1, self.max_files_to_check.get())) * 100))))
-                            last_update_time = current_time
-                        
-                        # Aggiungi blocchi di livello inferiore dalla directory corrente
-                        try:
-                            # Blocco attualmente in elaborazione
-                            dirs_checked += 1
-                            
-                            # Lista elementi nella directory
-                            items = os.listdir(current_block)
-                            
-                            # Prima processa le sottocartelle (aggiungi nuovi blocchi)
-                            subfolders = []
-                            for item in items:
-                                if self.stop_search:
-                                    return
-                                    
-                                item_path = os.path.join(current_block, item)
-                                
-                                # Salta file/cartelle nascoste
-                                try:
-                                    if self.ignore_hidden.get() and (item.startswith('.') or 
-                                        (os.name == 'nt' and os.path.exists(item_path) and 
-                                        os.stat(item_path).st_file_attributes & 2)):
-                                        continue
-                                except Exception as e:
-                                    self.log_debug(f"Errore nel controllo hidden per {item_path}: {str(e)}")
-                                    continue
-                                    
-                                # Gestione sottodirectory
-                                try:
-                                    if os.path.isdir(item_path):
-                                        # Verifica se la cartella è già stata visitata
-                                        try:
-                                            real_path = os.path.realpath(item_path)
-                                            if real_path in visited_dirs:
-                                                continue
-                                            visited_dirs.add(real_path)
-                                        except:
-                                            if item_path in visited_dirs:
-                                                continue
-                                            visited_dirs.add(item_path)
-                                        
-                                        # Verifica se il percorso deve essere escluso
-                                        if hasattr(self, 'excluded_paths') and any(
-                                            item_path.lower().startswith(excluded.lower()) 
-                                            for excluded in self.excluded_paths):
-                                            continue
-                                        
-                                        # Aggiungi alla lista delle sottocartelle
-                                        subfolders.append(item_path)
-                                        
-                                        # Verifica corrispondenza nome cartella
-                                        if self.search_folders.get():
-                                            if any(keyword.lower() in item.lower() for keyword in keywords):
-                                                folder_info = self.create_folder_info(item_path)
-                                                self.search_results.append(folder_info)
-                                except Exception as e:
-                                    self.log_debug(f"Errore nell'analisi della directory {item_path}: {str(e)}")
-                            
-                            # Aggiunta sottocartelle alla coda con priorità calcolata
-                            for subfolder in subfolders:
-                                # Verifica limite di profondità
-                                folder_depth = subfolder.count(os.path.sep) - path.count(os.path.sep)
-                                if self.max_depth > 0 and folder_depth > self.max_depth:
-                                    continue
-                                    
-                                priority = calculate_block_priority(subfolder)
-                                block_queue.put((priority, subfolder))
-                            
-                            # Processa i file nella directory corrente
-                            for item in items:
-                                if self.stop_search:
-                                    return
-                                    
-                                item_path = os.path.join(current_block, item)
-                                
-                                # Salta i file nascosti e le directory (già processate)
-                                try:
-                                    # Controllo file nascosto
-                                    if self.ignore_hidden.get() and (item.startswith('.') or 
-                                                (os.name == 'nt' and os.path.exists(item_path) and 
-                                                    os.stat(item_path).st_file_attributes & 2)):
-                                        continue
-                                        
-                                    # Salta le directory (già processate)
-                                    if os.path.isdir(item_path):
-                                        continue
-                                except Exception as e:
-                                    self.log_debug(f"Errore nel controllo del tipo per {item_path}: {str(e)}")
-                                    continue
-                                    
-                                # Processa i file
-                                if self.search_files.get():
-                                    try:
-                                        # Verifica limite file
-                                        files_checked += 1
-                                        if files_checked % 1000 == 0:
-                                            self.manage_memory()
-                                        if files_checked > self.max_files_to_check.get():
-                                            self.stop_search = True
-                                            self.progress_queue.put(("status", 
-                                                f"Limite di {self.max_files_to_check.get()} file controllati raggiunto. "
-                                                f"Aumenta il limite nelle opzioni per cercare più file."))
-                                            return
-                                        
-                                        # Gestione sicura dell'executor
-                                        try:
-                                            if self.search_executor and not self.search_executor._shutdown:
-                                                future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
-                                                futures.append(future)
-                                            else:
-                                                result = self.process_file(item_path, keywords, search_content)
-                                                if result:
-                                                    self.search_results.append(result)
-                                        except Exception as e:
-                                            self.log_debug(f"Errore nell'elaborazione parallela del file {item_path}: {str(e)}")
-                                            try:
-                                                result = self.process_file(item_path, keywords, search_content)
-                                                if result:
-                                                    self.search_results.append(result)
-                                            except:
-                                                pass
-                                            
-                                    except Exception as e:
-                                        self.log_debug(f"Errore nell'aggiunta del file {item_path} alla coda: {str(e)}")
-                                        continue
-                            
-                        except PermissionError:
-                            if self.skip_permission_errors.get():
-                                self.log_debug(f"Saltata directory con permesso negato: {current_block}")
-                            else:
-                                dir_name = os.path.basename(current_block)
-                                parent_dir = os.path.dirname(current_block)
-                                
-                                is_user_folder = (parent_dir.lower() in ["c:/users", "c:\\users"] and 
-                                                dir_name.lower() != getpass.getuser().lower())
-                                
-                                if is_user_folder:
-                                    self.log_debug(f"Cartella di un altro utente inaccessibile: {current_block}")
-                                    self.progress_queue.put(("status", f"Saltata cartella utente protetta: {current_block}"))
-                                else:
-                                    self.log_debug(f"Permesso negato per la directory {current_block}")
-                                    self.progress_queue.put(("status", f"Permesso negato: {current_block}"))
-                        except Exception as e:
-                            self.log_debug(f"Errore durante l'analisi della directory {current_block}: {str(e)}")
-                            
-                    except queue.Empty:
-                        break
 
             # Aggiorna lo stato iniziale
             self.progress_queue.put(("status", f"Inizio ricerca a blocchi in: {path} (Profondità: {'illimitata' if self.max_depth == 0 else self.max_depth})"))
@@ -1412,20 +1414,21 @@ class FileSearchApp:
                 self.excluded_paths = []
                 
             # Avvia la ricerca a blocchi
-            initialize_block_queue(path)
-            process_blocks()
+            self.initialize_block_queue(path, block_queue, visited_dirs, files_checked, keywords, search_content, futures)
+            self.process_blocks(block_queue, visited_dirs, start_time, timeout, is_system_search, 
+                            files_checked, dirs_checked, last_update_time, path, keywords, search_content, futures)
             
             # Ripristina i parametri originali se erano stati modificati
             if is_system_search and self.max_depth == 0 and 'original_max_files' in locals():
                 self.max_files_to_check.set(original_max_files)
             
             # Aggiorna lo stato finale di analisi
-            self.progress_queue.put(("status", f"Elaborazione risultati... (analizzati {files_checked} file in {dirs_checked} cartelle)"))
+            self.progress_queue.put(("status", f"Elaborazione risultati... (analizzati {files_checked[0]} file in {dirs_checked[0]} cartelle)"))
             
-            # MODIFICA: Raccolta risultati dalle future con aggiornamento temporizzato
+            # Raccolta risultati dalle future con aggiornamento temporizzato
             completed = 0
             total_futures = len(futures)
-            last_update_time = time.time()
+            last_update_time[0] = time.time()
             
             # Gestione sicura delle future
             if self.search_executor and not self.search_executor._shutdown and futures:
@@ -1443,7 +1446,7 @@ class FileSearchApp:
                             
                             # Aggiorna il progresso e il tempo più frequentemente
                             current_time = time.time()
-                            if completed % 20 == 0 or current_time - last_update_time > 2:  # Aggiorna ogni 20 file o ogni 2 secondi
+                            if completed % 20 == 0 or current_time - last_update_time[0] > 2:  # Aggiorna ogni 20 file o ogni 2 secondi
                                 progress = 90 + min(10, int((completed / max(1, len(futures))) * 10))
                                 self.progress_queue.put(("progress", progress))
                                 
@@ -1466,7 +1469,7 @@ class FileSearchApp:
                                         
                                     self.progress_queue.put(("update_total_time", total_time_str))
                                 
-                                last_update_time = current_time
+                                last_update_time[0] = current_time
                         except Exception as e:
                             self.log_debug(f"Errore nell'elaborazione di un risultato: {str(e)}")
                 except Exception as e:
@@ -1493,7 +1496,7 @@ class FileSearchApp:
             # Riporta il risultato finale
             elapsed_time = time.time() - start_time
             self.progress_queue.put(("status", 
-                f"Ricerca completata! Analizzati {files_checked} file in {dirs_checked} cartelle in {int(elapsed_time)} secondi."))
+                f"Ricerca completata! Analizzati {files_checked[0]} file in {dirs_checked[0]} cartelle in {int(elapsed_time)} secondi."))
             
             # Ordina i risultati per tipo e nome
             self.search_results.sort(key=lambda x: (x[0], x[1]))
