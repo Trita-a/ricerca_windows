@@ -8,7 +8,7 @@ import threading
 import queue
 from datetime import datetime
 import getpass
-
+import csv
 # Importazioni che erano nel metodo import_non_essential_modules
 import shutil
 import zipfile
@@ -1893,9 +1893,17 @@ class FileSearchApp:
     def export_skipped_files_log(self):
         """Esporta il log dei file saltati in un formato CSV"""
         try:
+            # Importazione locale per sicurezza
+            import csv
+            
             # Verifica se il file di log esiste
             if not os.path.exists(self.skipped_files_log_path):
                 messagebox.showinfo("Informazione", "Non ci sono file di log da esportare.")
+                return
+                
+            # Verifica che il file non sia vuoto
+            if os.path.getsize(self.skipped_files_log_path) == 0:
+                messagebox.showinfo("Informazione", "Il file di log esiste ma è vuoto. Non ci sono file esclusi da esportare.")
                 return
 
             # Chiedi all'utente dove salvare il file esportato
@@ -1962,6 +1970,11 @@ class FileSearchApp:
             # Verifica se il file di log esiste
             if not os.path.exists(self.skipped_files_log_path):
                 messagebox.showinfo("Informazione", "Non ci sono file di log da visualizzare.")
+                return
+                
+            # Verifica che il file non sia vuoto
+            if os.path.getsize(self.skipped_files_log_path) == 0:
+                messagebox.showinfo("Informazione", "Il file di log esiste ma è vuoto. Non ci sono file esclusi da visualizzare.")
                 return
                 
             # Crea una nuova finestra
