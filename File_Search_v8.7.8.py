@@ -1,6 +1,5 @@
 # Importazioni essenziali per l'avvio
 import os
-import sys
 import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -10,20 +9,16 @@ import queue
 from datetime import datetime
 import getpass
 
-# Posticipa le importazioni non essenziali
-def import_non_essential_modules():
-    global shutil, zipfile, traceback, time, concurrent, mimetypes, signal, re, io, csv, subprocess
-    import shutil
-    import zipfile
-    import traceback
-    import time
-    import concurrent.futures
-    import mimetypes
-    import signal
-    import re
-    import io  
-    import csv 
-    import subprocess
+# Importazioni che erano nel metodo import_non_essential_modules
+import shutil
+import zipfile
+import traceback
+import time
+import concurrent.futures
+import mimetypes
+import signal
+import re
+import subprocess
 
 # Dizionario per tracciare il supporto alle librerie - sarà popolato in seguito
 file_format_support = {
@@ -37,8 +32,7 @@ missing_libraries = []
 class FileSearchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V8.7.7. Nucleo Perugia")
-        self.root.geometry("1300x850")
+        self.root.title("File Search Tool V8.7.8 Nucleo Perugia")
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
@@ -46,14 +40,18 @@ class FileSearchApp:
         # Aggiungi questa riga per inizializzare current_user
         self.current_user = getpass.getuser()
         
-        # Inizializza le variabili essenziali
+        # Inizializza tutte le variabili in un passaggio
         self._init_essential_variables()
+        self._init_remaining_variables()
         
-        # Crea prima l'interfaccia di base minima
-        self.create_base_interface()
+        # Crea l'intera interfaccia in una volta sola
+        self.create_widgets()
         
-        # Posticipa la creazione completa dell'interfaccia e altre operazioni pesanti
-        self.root.after(100, self.complete_initialization)
+        # Applica il tema una sola volta
+        self.update_theme_colors("dark")
+        
+        # Esegui attività di background dopo un breve ritardo
+        self.root.after(500, self._delayed_startup_tasks)
 
     def create_base_interface(self):
         """Crea solo l'interfaccia essenziale per un avvio veloce"""
@@ -110,7 +108,7 @@ class FileSearchApp:
         self.search_executor = None
         self.exclude_system_files = BooleanVar(value=True)
         self.whole_word_search = BooleanVar(value=False)
-        self.dir_size_calculation = StringVar(value="incrementale")
+        self.dir_size_calculation = StringVar(value="disabilitato")
         
         # Variabili per la visualizzazione
         self.dir_size_var = StringVar(value="")
@@ -3026,7 +3024,6 @@ class FileSearchApp:
         """Utilizza comandi di sistema per ottenere dimensioni di directory molto grandi"""
         try:
             if os.name == 'nt':  # Windows
-                import subprocess
                 # Usa PowerShell per calcolare la dimensione (molto più veloce per directory grandi)
                 cmd = f'powershell -command "Get-ChildItem -Path \'{path}\' -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum | Select-Object -ExpandProperty Sum"'
                 result = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
@@ -3041,6 +3038,7 @@ class FileSearchApp:
             self.log_debug(f"Errore nel calcolo della dimensione tramite comando di sistema: {str(e)}")
             # Fallback al metodo standard
             return self.get_directory_size(path)
+        
     def estimate_directory_size(self, path, sample_size=100):
         """Stima la dimensione di una directory campionando alcuni file"""
         import random
@@ -3113,6 +3111,27 @@ class FileSearchApp:
             self.log_debug(f"Error getting disk space for {path}: {str(e)}")
             return (0, 0, 0)
 
+    def update_disk_info(self, path=None, calculate_dir_size=True):
+        """
+        Aggiorna le informazioni del disco.
+        Funzione wrapper che mantiene compatibilità con le chiamate esistenti.
+        """
+        # Se non viene specificato un percorso, usa quello corrente
+        if path is None:
+            path = self.search_path.get()
+        
+        # Se il percorso non esiste o è vuoto, non fare nulla
+        if not path or not os.path.exists(path):
+            self.log_debug(f"Percorso non valido per update_disk_info: {path}")
+            return
+        
+        # Avvia un thread separato per calcolare le informazioni del disco
+        threading.Thread(
+            target=self._async_update_disk_info,
+            args=(path, calculate_dir_size),
+            daemon=True
+        ).start()
+        
     def _update_disk_info_thread(self, path, calculate_dir_size):
         """Thread per calcolare le informazioni del disco"""
         try:
@@ -3306,8 +3325,7 @@ class FileSearchApp:
     
     def open_file_location(self, event=None):
         """Apre il percorso del file selezionato nel file explorer"""
-        import subprocess
-        
+               
         selected_items = self.results_list.selection()
         if not selected_items:
             return
@@ -4043,62 +4061,62 @@ class FileSearchApp:
 def main():
     import sys
     
-    # Crea una funzione di splash screen
-    def show_splash(root):
-        splash_win = tk.Toplevel(root)
-        splash_win.title("")
-        splash_win.overrideredirect(True)
-        splash_win.attributes("-topmost", True)
-        
-        # Dimensioni splash
-        width, height = 400, 200
-        screen_width = splash_win.winfo_screenwidth()
-        screen_height = splash_win.winfo_screenheight()
-        x = (screen_width // 2) - (width // 2)
-        y = (screen_height // 2) - (height // 2)
-        splash_win.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # Contenuto splash
-        frame = ttk.Frame(splash_win, padding=20)
-        frame.pack(fill=BOTH, expand=YES)
-        
-        ttk.Label(frame, text="File Search Tool V8.7.7", 
-                font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
-        ttk.Label(frame, text="Nucleo Perugia", 
-                font=("Helvetica", 14)).pack(pady=(0, 20))
-        ttk.Label(frame, text="Caricamento applicazione in corso...").pack()
-        
-        progress = ttk.Progressbar(frame, mode="indeterminate")
-        progress.pack(fill=X, pady=10)
-        progress.start(10)
-        
-        return splash_win
-    
-    # Inizializza l'applicazione con splash screen
+    # Crea la finestra principale con il tema desiderato
     root = ttk.Window(themename="darkly")
-    root.withdraw()  # Nasconde la finestra principale durante il caricamento
+    root.withdraw()  # Nascondi completamente la finestra durante l'inizializzazione
     
-    # Mostra splash screen
-    splash = show_splash(root)
+    # Crea la schermata di splash
+    splash = create_splash_screen(root)
     
-    # Crea l'app
+    # Inizializza l'applicazione (ma l'interfaccia rimane nascosta)
     app = FileSearchApp(root)
     
-    # Verifica se ci sono argomenti da linea di comando
+    # Controlla se ci sono argomenti da linea di comando
     if len(sys.argv) > 1:
-        # Se c'è un percorso fornito come argomento, lo imposta come percorso di ricerca
         app.search_path.set(sys.argv[1])
     
-    # Funzione per completare l'avvio
+    # Funzione per completare l'avvio e mostrare la finestra principale
     def finish_startup():
         splash.destroy()
-        root.deiconify()  # Mostra la finestra principale
+        # Configura le dimensioni della finestra prima di mostrarla
+        root.geometry("1300x850")
+        # Mostra la finestra completamente costruita
+        root.deiconify()
         
     # Completa l'avvio dopo un breve ritardo
     root.after(1500, finish_startup)
     
     root.mainloop()
 
+def create_splash_screen(parent):
+    splash_win = tk.Toplevel(parent)
+    splash_win.title("")
+    splash_win.overrideredirect(True)
+    splash_win.attributes("-topmost", True)
+    
+    # Dimensioni dello splash
+    width, height = 400, 200
+    screen_width = splash_win.winfo_screenwidth()
+    screen_height = splash_win.winfo_screenheight()
+    x = (screen_width // 2) - (width // 2)
+    y = (screen_height // 2) - (height // 2)
+    splash_win.geometry(f"{width}x{height}+{x}+{y}")
+    
+    # Contenuto dello splash
+    frame = ttk.Frame(splash_win, padding=20)
+    frame.pack(fill=tk.BOTH, expand=tk.YES)
+    
+    ttk.Label(frame, text="File Search Tool V8.7.8", 
+            font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
+    ttk.Label(frame, text="Nucleo Perugia", 
+            font=("Helvetica", 14)).pack(pady=(0, 20))
+    ttk.Label(frame, text="Caricamento applicazione in corso...").pack()
+    
+    progress = ttk.Progressbar(frame, mode="indeterminate")
+    progress.pack(fill=tk.X, pady=10)
+    progress.start(10)
+    
+    return splash_win
 if __name__ == "__main__":
     try:
         main()
