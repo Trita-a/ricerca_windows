@@ -1895,26 +1895,12 @@ class FileSearchApp:
         # Ottieni le estensioni personalizzate dell'utente
         custom_extensions = self.get_extension_settings(search_level)
         
-        # MODIFICA: Se ci sono estensioni personalizzate, usa solo quelle
-        if custom_extensions:
-            # Se l'estensione è nelle estensioni personalizzate, cerca nel contenuto
-            if ext in custom_extensions:
-                return True
-            
-            # MODIFICA: Verifica il supporto a formati specifici, ma solo se sono nelle estensioni personalizzate
-            if (ext == '.docx' and file_format_support["docx"] and '.docx' in custom_extensions) or \
-            (ext == '.pdf' and file_format_support["pdf"] and '.pdf' in custom_extensions) or \
-            (ext in {'.pptx', '.ppt'} and file_format_support["pptx"] and any(e in custom_extensions for e in ['.pptx', '.ppt'])) or \
-            (ext in {'.xls', '.xlsx'} and file_format_support["excel"] and any(e in custom_extensions for e in ['.xls', '.xlsx'])) or \
-            (ext == '.rtf' and file_format_support["rtf"] and '.rtf' in custom_extensions) or \
-            (ext == '.odt' and file_format_support["odt"] and '.odt' in custom_extensions):
-                return True
-            
-            # Se l'estensione non è tra quelle personalizzate, non cercare nel contenuto
-            return False
+        # Verifica prima se l'estensione è nelle estensioni personalizzate
+        if ext in custom_extensions:
+            return True
         
-        # Se non ci sono estensioni personalizzate, usa le predefinite
-        # (il resto del codice rimane invariato)
+        # Se non ci sono estensioni personalizzate o l'estensione non è tra quelle,
+        # usa le predefinite
         # Liste predefinite nel codice
         base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                         '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
@@ -1933,8 +1919,8 @@ class FileSearchApp:
             allowed_extensions = advanced_extensions
         else:  # profonda
             allowed_extensions = deep_extensions
-            # In modalità profonda, cerca in tutti i file se esplicitamente configurato
-            if search_level == "profonda":
+            # In modalità profonda, cerca in tutti i file se non ci sono estensioni personalizzate
+            if search_level == "profonda" and not custom_extensions:
                 return True
         
         # Verifica se l'estensione è supportata per il livello di ricerca scelto
