@@ -66,7 +66,7 @@ class FileSearchApp:
         self.search_executor = None
         self.exclude_system_files = BooleanVar(value=True)
         self.whole_word_search = BooleanVar(value=False)
-        self.dir_size_calculation = StringVar(value="incrementale")
+        self.dir_size_calculation = StringVar(value="disabilitato")
 
         # Variabili per la ricerca a blocchi
         self.max_files_per_block = IntVar(value=1000)
