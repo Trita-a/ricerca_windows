@@ -32,7 +32,7 @@ missing_libraries = []
 class FileSearchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V8.7.8 Nucleo Perugia")
+        self.root.title("File Search Tool V8.7.9 Forensics G.di F.")
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
@@ -1155,7 +1155,7 @@ class FileSearchApp:
         # Pulisci risultati precedenti
         for item in self.results_list.get_children():
             self.results_list.delete(item)
-        
+    
         # Ottieni i valori direttamente dai widget
         search_path = self.search_path.get().strip()
         keywords = self.keyword_entry.get().strip()
@@ -1174,10 +1174,17 @@ class FileSearchApp:
         
         # 2. Verifica le parole chiave
         placeholder = "Scrivi la parola da ricercare..."
-        if not keywords or keywords == placeholder:
+        keywords_raw = self.keyword_entry.get()  # Ottieni il valore grezzo senza strip()
+
+        # Verifica se è vuoto, solo spazi, o è il placeholder
+        if (not keywords_raw or 
+            keywords_raw.strip() == "" or 
+            keywords_raw == placeholder or 
+            self.keyword_entry.cget("foreground") == "gray"):
+            
             messagebox.showerror("Errore", "Inserisci le parole chiave da cercare")
             return
-        
+
         # 3. Verifica colore (controllo extra per il placeholder)
         try:
             if self.keyword_entry.cget("foreground") == "gray":
@@ -1885,8 +1892,7 @@ class FileSearchApp:
         base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                         '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
         
-        advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
-                                            '.vbs', '.js', '.config', '.ini', '.reg']
+        advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.config', '.ini', '.reg']
         
         deep_extensions = advanced_extensions + ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', 
                                             '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
@@ -1925,12 +1931,16 @@ class FileSearchApp:
         skip_type = "File di sistema" if ext in self.system_file_extensions else "File"
         skip_filename = os.path.basename(file_path)
         
+        # Skip file types based on search level
+        search_level = self.search_depth.get()
+        script_files = ['.bat', '.cmd', '.ps1', '.vbs']
+        
         # Salta i file di Rights Management Services
         if "Rights Management Services" in file_path or "IRMProtectors" in file_path:
             self.log_debug(f"Saltato file protetto: {file_path}")
             self.log_skipped_file(file_path, skip_type, skip_filename, "Rights Management Services")
             return True
-                
+                    
         # Salta file con estensioni problematiche
         problematic_extensions = [".msoprotector.doc", ".msoprotector.ppt", ".msoprotector.xls"]
         if any(ext in file_path for ext in problematic_extensions):
@@ -1938,12 +1948,15 @@ class FileSearchApp:
             self.log_skipped_file(file_path, skip_type, skip_filename, "Formato problematico")
             return True
 
-        # Salta file di sistema
+        # Salta file di sistema, ma con eccezione per script files in ricerca avanzata/profonda
         if self.exclude_system_files.get() and ext in self.system_file_extensions:
+            # Don't skip script files in advanced/deep search
+            if ext in script_files and search_level in ["avanzata", "profonda"]:
+                return False
             self.log_debug(f"File di sistema escluso: {file_path}")
             self.log_skipped_file(file_path, skip_type, skip_filename, "File di sistema")
             return True
-                
+                    
         return False
     
     def log_skipped_file(self, filepath, skiptype, filename, skipreason):
@@ -2507,10 +2520,14 @@ class FileSearchApp:
                             self.end_time_label.config(text=current_time)
                             self.update_total_time()  # Calcola e mostra il tempo totale
                             
-                            # Calcola la dimensione del percorso alla fine della ricerca
-                            self.dir_size_var.set("Calcolo in corso...")
-                            path = self.search_path.get()
-                            threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True).start()
+                            # Calcola la dimensione del percorso alla fine della ricerca solo se non è disabilitato
+                            calculation_mode = self.dir_size_calculation.get()
+                            if calculation_mode == "disabilitato":
+                                self.dir_size_var.set("Calcolo disattivato")
+                            else:
+                                self.dir_size_var.set("Calcolo in corso...")
+                                path = self.search_path.get()
+                                threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True).start()
 
                             if len(self.search_results) == 0:
                                 self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
@@ -3626,6 +3643,35 @@ class FileSearchApp:
             self.root.after(0, lambda: self.dir_size_var.set("Errore"))
             self.root.after(0, lambda: self.status_label.config(text="In attesa..."))
 
+    def refresh_directory_size(self):
+        """Aggiorna manualmente il calcolo della dimensione della directory"""
+        # Ottieni il percorso corrente
+        path = self.search_path.get()
+        
+        # Verifica che il percorso esista
+        if not path or not os.path.exists(path):
+            messagebox.showinfo("Informazione", "Seleziona prima un percorso valido")
+            return
+            
+        # Verifica la modalità di calcolo
+        calculation_mode = self.dir_size_calculation.get()
+        if calculation_mode == "disabilitato":
+            response = messagebox.askyesno("Calcolo disabilitato", 
+                                        "Il calcolo della dimensione è attualmente disabilitato.\n\n" +
+                                        "Vuoi attivarlo e procedere con il calcolo?")
+            if response:
+                # Seleziona la modalità "preciso"
+                self.dir_size_calculation.set("preciso")
+            else:
+                return
+        
+        # Aggiorna lo stato
+        self.dir_size_var.set("Calcolo in corso...")
+        self.status_label.config(text="Calcolo dimensione directory...")
+        
+        # Esegui il calcolo in un thread separato
+        threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True).start()
+
     # Funzione helper per formattare la dimensione del file
     def _format_size(self, size_bytes):
         """Formatta la dimensione del file in modo leggibile"""
@@ -3936,7 +3982,7 @@ class FileSearchApp:
         title_frame = ttk.Frame(header_frame)
         title_frame.pack(side=LEFT, expand=True)
 
-        title_label = ttk.Label(title_frame, text="File Search Tool.. Nucleo Perugia", 
+        title_label = ttk.Label(title_frame, text="File Search Tool.. Forensics G.di F.", 
                             font=("Helvetica", 14, "bold"))
         title_label.pack(anchor=CENTER)
 
@@ -3966,18 +4012,6 @@ class FileSearchApp:
         self.path_entry = ttk.Entry(path_frame, textvariable=self.search_path)
         self.path_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
         
-        placeholder = "Seleziona un percorso da ricercare..."
-        self.path_entry.insert(0, placeholder)
-        self.path_entry.config(foreground="gray")
-
-        self.path_entry.bind("<FocusIn>", lambda event: 
-            [self.path_entry.delete(0, "end"), self.path_entry.config(foreground="")] 
-            if self.path_entry.get() == placeholder else None)
-            
-        self.path_entry.bind("<FocusOut>", lambda event: 
-            [self.path_entry.insert(0, placeholder), self.path_entry.config(foreground="gray")] 
-            if self.path_entry.get() == "" else None)
-        
         self.browse_btn = ttk.Button(path_frame, text="Sfoglia", command=self.browse_directory, width=10)
         self.browse_btn.pack(side=LEFT)
         
@@ -3994,18 +4028,6 @@ class FileSearchApp:
         
         self.keyword_entry = ttk.Entry(keyword_frame, textvariable=self.keywords)
         self.keyword_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
-        
-        placeholder = "Scrivi la/e parola/e da ricercare..."
-        self.keyword_entry.insert(0, placeholder)
-        self.keyword_entry.config(foreground="gray")
-
-        self.keyword_entry.bind("<FocusIn>", lambda event: 
-            [self.keyword_entry.delete(0, "end"), self.keyword_entry.config(foreground="")] 
-            if self.keyword_entry.get() == placeholder else None)
-            
-        self.keyword_entry.bind("<FocusOut>", lambda event: 
-            [self.keyword_entry.insert(0, placeholder), self.keyword_entry.config(foreground="gray")] 
-            if self.keyword_entry.get() == "" else None)
 
         # ------------------------------------------------------
         # RIGA 3: Opzioni base di ricerca (checkbox)
@@ -4270,6 +4292,13 @@ class FileSearchApp:
         ttk.Label(disk_grid, text="Directory:").grid(row=0, column=0, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.dir_size_var, font=("", 9, "bold")).grid(row=0, column=1, sticky=W, padx=5)
 
+        # Pulsante per aggiornare dimensione directory - aggiunto sotto Directory
+        refresh_size_btn = ttk.Button(disk_grid, text="Aggiorna dimensioni", 
+                                command=self.refresh_directory_size,
+                                style="info.TButton", width=18)
+        refresh_size_btn.grid(row=1, column=0, columnspan=2, sticky=W, padx=5, pady=(2,0))
+        self.create_tooltip(refresh_size_btn, "Aggiorna manualmente il calcolo della dimensione della directory")
+
         ttk.Label(disk_grid, text="Disco:").grid(row=0, column=2, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.total_disk_var, font=("", 9, "bold")).grid(row=0, column=3, sticky=W, padx=5)
 
@@ -4278,6 +4307,7 @@ class FileSearchApp:
 
         ttk.Label(disk_grid, text="Libero:").grid(row=0, column=6, sticky=W, padx=5)
         ttk.Label(disk_grid, textvariable=self.free_disk_var, font=("", 9, "bold")).grid(row=0, column=7, sticky=W, padx=5)
+
         # ==========================================================
         # SEZIONE RISULTATI 
         # ==========================================================
@@ -4573,9 +4603,9 @@ def create_splash_screen(parent):
     frame = ttk.Frame(splash_win, padding=20)
     frame.pack(fill=tk.BOTH, expand=tk.YES)
     
-    ttk.Label(frame, text="File Search Tool V8.7.8", 
+    ttk.Label(frame, text="File Search Tool V8.7.9", 
             font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
-    ttk.Label(frame, text="Nucleo Perugia", 
+    ttk.Label(frame, text="Forensics G.di F.", 
             font=("Helvetica", 14)).pack(pady=(0, 20))
     ttk.Label(frame, text="Caricamento applicazione in corso...").pack()
     
