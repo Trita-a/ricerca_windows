@@ -1878,6 +1878,7 @@ class FileSearchApp:
             return True
                 
         return False
+    
     def log_skipped_file(self, filepath, skiptype, filename, skipreason):
         """Registra i file saltati in un file di log"""
         try:
@@ -1888,6 +1889,142 @@ class FileSearchApp:
                 log_file.write(log_entry)
         except Exception as e:
             self.log_debug(f"Errore durante la scrittura del log dei file saltati: {str(e)}")
+
+    def export_skipped_files_log(self):
+        """Esporta il log dei file saltati in un formato CSV"""
+        try:
+            # Verifica se il file di log esiste
+            if not os.path.exists(self.skipped_files_log_path):
+                messagebox.showinfo("Informazione", "Non ci sono file di log da esportare.")
+                return
+
+            # Chiedi all'utente dove salvare il file esportato
+            export_path = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                initialfile="file_esclusi_export.csv",
+                filetypes=[("CSV files", "*.csv"), ("Text files", "*.txt"), ("All files", "*.*")],
+                title="Salva il log dei file esclusi"
+            )
+            
+            if not export_path:  # L'utente ha annullato
+                return
+                
+            # Leggi il file di log originale
+            with open(self.skipped_files_log_path, 'r', encoding='utf-8') as log_file:
+                log_content = log_file.readlines()
+                
+            # Crea il file CSV
+            with open(export_path, 'w', newline='', encoding='utf-8') as csv_file:
+                csv_writer = csv.writer(csv_file, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                
+                # Intestazione
+                csv_writer.writerow(["Data e Ora", "Tipo", "Nome File", "Percorso Completo", "Motivo Esclusione"])
+                
+                # Analizza e scrive ogni riga del log
+                for log_line in log_content:
+                    try:
+                        # Formato tipico: 2023-01-01 12:34:56 - File di sistema - nomefile.exe - C:/percorso/nomefile.exe - File di sistema
+                        parts = log_line.strip().split(" - ", 4)
+                        if len(parts) >= 5:
+                            csv_writer.writerow(parts)
+                    except Exception as e:
+                        self.log_debug(f"Errore nell'elaborazione della riga di log: {str(e)}")
+                        
+                # Aggiunge statistiche alla fine
+                csv_writer.writerow([])
+                csv_writer.writerow([f"Totale file esclusi: {len(log_content)}"])
+                csv_writer.writerow([f"Esportazione eseguita il: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"])
+                csv_writer.writerow([f"Utente: {self.current_user}"])
+            
+            # Aggiungi un link per aprire il file esportato
+            open_export = messagebox.askyesno(
+                "Esportazione completata", 
+                f"Esportazione completata con successo!\n\nFile salvato in:\n{export_path}\n\nVuoi aprire il file?"
+            )
+            
+            if open_export:
+                try:
+                    if os.name == 'nt':  # Windows
+                        os.startfile(export_path)
+                    else:  # macOS o Linux
+                        subprocess.call(['xdg-open', export_path])
+                except Exception as e:
+                    self.log_debug(f"Errore nell'apertura del file esportato: {str(e)}")
+                    messagebox.showinfo("Informazione", f"Il file è stato salvato in:\n{export_path}")
+                    
+        except Exception as e:
+            messagebox.showerror("Errore", f"Si è verificato un errore durante l'esportazione: {str(e)}")
+            self.log_debug(f"Errore nell'esportazione del log: {str(e)}")
+
+    def view_skipped_files_log(self):
+        """Visualizza il log dei file saltati in una finestra separata"""
+        try:
+            # Verifica se il file di log esiste
+            if not os.path.exists(self.skipped_files_log_path):
+                messagebox.showinfo("Informazione", "Non ci sono file di log da visualizzare.")
+                return
+                
+            # Crea una nuova finestra
+            log_window = ttk.Toplevel(self.root)
+            log_window.title("Log dei file esclusi")
+            log_window.geometry("900x600")
+            log_window.transient(self.root)
+            
+            # Frame principale
+            main_frame = ttk.Frame(log_window, padding=10)
+            main_frame.pack(fill=BOTH, expand=YES)
+            
+            # Intestazione
+            ttk.Label(main_frame, text="File esclusi durante la ricerca", 
+                    font=("", 12, "bold")).pack(anchor=W, pady=(0, 10))
+            
+            # Area di testo per visualizzare i log
+            text_frame = ttk.Frame(main_frame)
+            text_frame.pack(fill=BOTH, expand=YES)
+            
+            scrollbar_y = ttk.Scrollbar(text_frame)
+            scrollbar_y.pack(side=RIGHT, fill=Y)
+            
+            scrollbar_x = ttk.Scrollbar(text_frame, orient="horizontal")
+            scrollbar_x.pack(side=BOTTOM, fill=X)
+            
+            log_text = tk.Text(text_frame, wrap="none", 
+                            xscrollcommand=scrollbar_x.set,
+                            yscrollcommand=scrollbar_y.set)
+            log_text.pack(fill=BOTH, expand=YES)
+            
+            scrollbar_y.config(command=log_text.yview)
+            scrollbar_x.config(command=log_text.xview)
+            
+            # Leggi e inserisci il contenuto del log
+            with open(self.skipped_files_log_path, 'r', encoding='utf-8') as log_file:
+                log_content = log_file.read()
+                log_text.insert("1.0", log_content)
+                
+            # Rendi il testo di sola lettura
+            log_text.config(state="disabled")
+            
+            # Pulsanti
+            btn_frame = ttk.Frame(main_frame)
+            btn_frame.pack(fill=X, pady=(10, 0))
+            
+            ttk.Button(btn_frame, text="Esporta CSV", 
+                    command=self.export_skipped_files_log).pack(side=LEFT)
+                    
+            ttk.Button(btn_frame, text="Chiudi", 
+                    command=log_window.destroy).pack(side=RIGHT)
+                    
+            # Centra la finestra
+            log_window.update_idletasks()
+            width = log_window.winfo_width()
+            height = log_window.winfo_height()
+            x = (log_window.winfo_screenwidth() // 2) - (width // 2)
+            y = (log_window.winfo_screenheight() // 2) - (height // 2)
+            log_window.geometry(f"{width}x{height}+{x}+{y}")
+            
+        except Exception as e:
+            messagebox.showerror("Errore", f"Si è verificato un errore durante la visualizzazione del log: {str(e)}")
+            self.log_debug(f"Errore nella visualizzazione del log: {str(e)}")
 
     def get_file_content(self, file_path):
         """Ottimizzato per caricare contenuto solo quando necessario"""
@@ -3860,6 +3997,14 @@ class FileSearchApp:
                                         style="TButton")
         self.compress_button.pack(side=LEFT, padx=5)
         self.create_tooltip(self.compress_button, "Comprimi i file selezionati in un archivio ZIP")
+
+
+
+        self.view_log_button = ttk.Button(action_frame, text="Visualizza file esclusi",
+                                        command=self.view_skipped_files_log,
+                                        style="secondary.TButton")
+        self.view_log_button.pack(side=LEFT, padx=5)
+        self.create_tooltip(self.view_log_button, "Visualizza il log dei file esclusi dalla ricerca")
 
         # TreeView con scrollbar
         treeview_container = ttk.Frame(results_container)
