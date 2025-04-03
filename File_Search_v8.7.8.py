@@ -1967,6 +1967,9 @@ class FileSearchApp:
     def view_skipped_files_log(self):
         """Visualizza il log dei file saltati in una finestra separata"""
         try:
+            if not hasattr(self, 'search_start_time') or self.search_start_time is None:
+                messagebox.showinfo("Informazione", "Non è stata ancora effettuata una ricerca per visualizzare i file esclusi.")
+                return
             # Verifica se il file di log esiste
             if not os.path.exists(self.skipped_files_log_path):
                 messagebox.showinfo("Informazione", "Non ci sono file di log da visualizzare.")
@@ -3527,12 +3530,14 @@ class FileSearchApp:
         min_size = ttk.Entry(size_frame, width=10)
         min_size.grid(row=0, column=1, padx=5, pady=5)
         min_size.insert(0, str(self.advanced_filters["size_min"] // 1024))
+        self.create_tooltip(min_size, "Quando viene imposto un valore maggiore di zero, solo i file con dimensione superiore a questo valore verranno inclusi nei risultati")
         
         ttk.Label(size_frame, text="Max (KB):").grid(row=0, column=2, padx=5, pady=5)
         max_size = ttk.Entry(size_frame, width=10)
         max_size.grid(row=0, column=3, padx=5, pady=5)
         max_size.insert(0, str(self.advanced_filters["size_max"] // 1024 if self.advanced_filters["size_max"] else 0))
-        
+        self.create_tooltip(max_size, "Quando viene imposto un valore maggiore di zero, solo i file con dimensione inferiore a questo valore verranno inclusi nei risultati")
+
         # Filtri data - FORMAT DD-MM-YYYY
         date_frame = ttk.LabelFrame(dialog, text="Data modifica (DD-MM-YYYY)")
         date_frame.pack(fill=X, padx=10, pady=5)
@@ -3719,10 +3724,7 @@ class FileSearchApp:
         
         self.keyword_entry = ttk.Entry(keyword_frame, textvariable=self.keywords)
         self.keyword_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
-        
-        info_label = ttk.Label(keyword_frame, text="Usa virgola per più termini", font=("", 8), foreground="gray")
-        info_label.pack(side=LEFT, padx=5)
-        
+                
         # ------------------------------------------------------
         # RIGA 3: Opzioni base di ricerca (checkbox)
         # ------------------------------------------------------
@@ -3826,7 +3828,8 @@ class FileSearchApp:
         ttk.Label(perf_row1, text="Max file MB:").pack(side=LEFT)
         max_size_spinbox = ttk.Spinbox(perf_row1, from_=1, to=1000, width=4, textvariable=self.max_file_size_mb)
         max_size_spinbox.pack(side=LEFT, padx=(0, 15))
-        self.create_tooltip(max_size_spinbox, "Dimensione massima in MB dei file di cui analizzare il contenuto")
+        self.create_tooltip(max_size_spinbox, "Dimensione massima in MB dei file di cui analizzare il contenuto\n"+
+            "Controlla la dimensione massima del file che il programma tenterà di analizzare per il contenuto durante le ricerche")
 
         # Max risultati
         ttk.Label(perf_row1, text="Max risultati:").pack(side=LEFT)
