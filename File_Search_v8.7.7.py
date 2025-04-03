@@ -43,8 +43,11 @@ class FileSearchApp:
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
         
-        # Inizializza le variabili (mantenuto il metodo originale)
-        self._init_variables()
+        # Aggiungi questa riga per inizializzare current_user
+        self.current_user = getpass.getuser()
+        
+        # Inizializza le variabili essenziali
+        self._init_essential_variables()
         
         # Crea prima l'interfaccia di base minima
         self.create_base_interface()
@@ -57,14 +60,7 @@ class FileSearchApp:
         # Frame principale
         main_frame = ttk.Frame(self.root)
         main_frame.pack(fill=BOTH, expand=YES)
-        
-        # Titolo
-        title_frame = ttk.Frame(main_frame, padding=10)
-        title_frame.pack(fill=X)
-        title_label = ttk.Label(title_frame, text="File Search Tool V8.7.6. Nucleo Perugia", 
-                            font=("Helvetica", 14, "bold"))
-        title_label.pack(anchor=CENTER)
-        
+               
         # Stato di caricamento
         status_frame = ttk.Frame(main_frame, padding=5)
         status_frame.pack(fill=X, padx=10)
@@ -88,6 +84,9 @@ class FileSearchApp:
             if hasattr(self, 'progress_bar'):
                 self.progress_bar.stop()
                 self.progress_bar.destroy()
+            
+            # Inizializza le variabili rimanenti
+            self._init_remaining_variables()
             
             # Crea l'interfaccia completa
             self.create_widgets()
@@ -798,7 +797,7 @@ class FileSearchApp:
 
     def update_datetime(self):
         current_time = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
-        self.datetime_var.set(f"Data: {current_time} | Utente: {self.current_user}")
+        self.datetime_var.set(f"Data: {current_time} | Utente: {self.user_var.get()}")
         self.root.after(1000, self.update_datetime)
 
     def browse_directory(self):
@@ -4122,3 +4121,26 @@ def main():
     root.after(1500, finish_startup)
     
     root.mainloop()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        with open("error_log.txt", "w", encoding="utf-8") as f:
+            f.write(f"Si è verificato un errore: {str(e)}\n")
+            f.write(traceback.format_exc())
+        print(f"Si è verificato un errore: {str(e)}")
+        
+        # Se stai usando tkinter, puoi anche mostrare un messaggio all'utente
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Errore durante l'avvio", 
+                f"Si è verificato un errore durante l'avvio dell'applicazione.\n\n"
+                f"Errore: {str(e)}\n\n"
+                f"I dettagli sono stati salvati nel file error_log.txt")
+        except:
+            pass  # Se anche la visualizzazione del messaggio fallisce, continua
