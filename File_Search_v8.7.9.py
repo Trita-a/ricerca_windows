@@ -144,7 +144,8 @@ class FileSearchApp:
         # Opzioni per la gestione dei permessi
         self.skip_permission_errors = BooleanVar(value=True)
         self.excluded_paths = []
-
+        self.load_settings_from_file()
+        
         # Directory problematiche da escludere automaticamente
         self.problematic_dirs = [
             "Client Active Directory Rights Management Services",
@@ -1891,6 +1892,29 @@ class FileSearchApp:
         # Seleziona il set di estensioni in base al livello di ricerca
         search_level = self.search_depth.get()
         
+        # Ottieni le estensioni personalizzate dell'utente
+        custom_extensions = self.get_extension_settings(search_level)
+        
+        # MODIFICA: Se ci sono estensioni personalizzate, usa solo quelle
+        if custom_extensions:
+            # Se l'estensione è nelle estensioni personalizzate, cerca nel contenuto
+            if ext in custom_extensions:
+                return True
+            
+            # MODIFICA: Verifica il supporto a formati specifici, ma solo se sono nelle estensioni personalizzate
+            if (ext == '.docx' and file_format_support["docx"] and '.docx' in custom_extensions) or \
+            (ext == '.pdf' and file_format_support["pdf"] and '.pdf' in custom_extensions) or \
+            (ext in {'.pptx', '.ppt'} and file_format_support["pptx"] and any(e in custom_extensions for e in ['.pptx', '.ppt'])) or \
+            (ext in {'.xls', '.xlsx'} and file_format_support["excel"] and any(e in custom_extensions for e in ['.xls', '.xlsx'])) or \
+            (ext == '.rtf' and file_format_support["rtf"] and '.rtf' in custom_extensions) or \
+            (ext == '.odt' and file_format_support["odt"] and '.odt' in custom_extensions):
+                return True
+            
+            # Se l'estensione non è tra quelle personalizzate, non cercare nel contenuto
+            return False
+        
+        # Se non ci sono estensioni personalizzate, usa le predefinite
+        # (il resto del codice rimane invariato)
         # Liste predefinite nel codice
         base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                         '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
@@ -1904,21 +1928,14 @@ class FileSearchApp:
         
         # Seleziona le estensioni predefinite in base al livello
         if search_level == "base":
-            predefined_extensions = base_extensions
+            allowed_extensions = base_extensions
         elif search_level == "avanzata":
-            predefined_extensions = advanced_extensions
+            allowed_extensions = advanced_extensions
         else:  # profonda
-            predefined_extensions = deep_extensions
-        
-        # Ottieni anche le estensioni personalizzate dell'utente
-        custom_extensions = self.get_extension_settings(search_level)
-        
-        # Combina le liste (usando un set per evitare duplicati)
-        allowed_extensions = set(predefined_extensions + custom_extensions)
-        
-        # In modalità profonda, cerca in tutti i file se esplicitamente configurato
-        if search_level == "profonda" and not custom_extensions:
-            return True
+            allowed_extensions = deep_extensions
+            # In modalità profonda, cerca in tutti i file se esplicitamente configurato
+            if search_level == "profonda":
+                return True
         
         # Verifica se l'estensione è supportata per il livello di ricerca scelto
         if ext in allowed_extensions:
@@ -4119,7 +4136,7 @@ class FileSearchApp:
             # Add checkboxes for each extension in this category
             for ext, desc in extensions:
                 # Check if this extension should be selected based on mode
-                is_selected = ext.lower() in default_extensions
+                is_selected = ext.lower() in current_settings
                 
                 # Create a variable for this checkbox
                 var = BooleanVar(value=is_selected)
@@ -4234,6 +4251,65 @@ class FileSearchApp:
         self.log_debug(f"Saved {len(normalized_extensions)} extensions for {mode} mode")
         self.log_debug(f"Extensions: {', '.join(normalized_extensions)}")
         
+        # Forza un aggiornamento dell'interfaccia se necessario
+        if hasattr(self, 'search_depth') and self.search_depth.get() == mode:
+            self.log_debug(f"Aggiornata UI per modalità {mode}")
+            
+        # Qui potresti aggiungere codice per salvare le impostazioni su file
+        self.save_settings_to_file()
+        
+    def save_settings_to_file(self):
+        """Salva le impostazioni delle estensioni su un file"""
+        try:
+            import json
+            import os
+            
+            # Cartella per le impostazioni
+            settings_dir = os.path.join(os.path.expanduser("~"), ".file_search_tool")
+            if not os.path.exists(settings_dir):
+                os.makedirs(settings_dir)
+                
+            # File per le impostazioni delle estensioni
+            settings_file = os.path.join(settings_dir, "extension_settings.json")
+            
+            # Salva le impostazioni
+            with open(settings_file, 'w') as f:
+                json.dump(self.extension_settings, f)
+                
+            self.log_debug(f"Impostazioni estensioni salvate in {settings_file}")
+        except Exception as e:
+            self.log_debug(f"Errore nel salvataggio delle impostazioni: {str(e)}")
+            
+    def load_settings_from_file(self):
+        """Carica le impostazioni delle estensioni da un file"""
+        try:
+            import json
+            import os
+            
+            # File per le impostazioni delle estensioni
+            settings_file = os.path.join(os.path.expanduser("~"), ".file_search_tool", "extension_settings.json")
+            
+            # Controlla se il file esiste
+            if os.path.exists(settings_file):
+                with open(settings_file, 'r') as f:
+                    self.extension_settings = json.load(f)
+                    self.log_debug(f"Impostazioni estensioni caricate da {settings_file}")
+            else:
+                # Inizializza con i valori predefiniti
+                self.extension_settings = {
+                    "base": self.get_default_extensions("base"),
+                    "avanzata": self.get_default_extensions("avanzata"),
+                    "profonda": self.get_default_extensions("profonda")
+                }
+        except Exception as e:
+            self.log_debug(f"Errore nel caricamento delle impostazioni: {str(e)}")
+            # Inizializza con i valori predefiniti
+            self.extension_settings = {
+                "base": self.get_default_extensions("base"),
+                "avanzata": self.get_default_extensions("avanzata"),
+                "profonda": self.get_default_extensions("profonda")
+            }
+
     def create_widgets(self):
         # Frame principale che conterrà tutto
         main_container = ttk.Frame(self.root)
