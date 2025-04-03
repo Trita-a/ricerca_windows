@@ -771,7 +771,7 @@ class FileSearchApp:
             self.root.after(1000, lambda: messagebox.showinfo("Librerie opzionali mancanti", message))
 
     def update_datetime(self):
-        current_time = datetime.now().strftime('%d-%m-%Y %H:%M:%S')
+        current_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         self.datetime_var.set(f"Data: {current_time} | Utente: {self.user_var.get()}")
         self.root.after(1000, self.update_datetime)
 
@@ -817,9 +817,22 @@ class FileSearchApp:
             
             return original_params
         return None
+    
     def show_optimization_tips(self, path):
-        """Mostra suggerimenti di ottimizzazione quando si cerca in un'unità di sistema"""
         if path.lower() in ["c:/", "c:\\", "d:/", "d:\\", "e:/", "e:\\"] or path in [os.path.abspath("/")]:
+            # Determina la lettera del disco corrente
+            if os.name == 'nt':  # Windows
+                if path.lower() in ["c:/", "c:\\"]:
+                    drive_letter = "C:"
+                elif path.lower() in ["d:/", "d:\\"]:
+                    drive_letter = "D:"
+                elif path.lower() in ["e:/", "e:\\"]:
+                    drive_letter = "E:"
+                else:
+                    drive_letter = path[:2] if len(path) >= 2 else "Disco"
+            else:
+                drive_letter = "Disco"  # Per sistemi non Windows
+            
             optimization_done = False
             
             # Verifica se l'utente ha già implementato le ottimizzazioni
@@ -835,7 +848,7 @@ class FileSearchApp:
             if not (optimization_done and depth_optimized):
                 response = messagebox.askyesno(
                     "Ottimizza la ricerca",
-                    "Stai per avviare una ricerca sull'intero disco C:\\\n\n"
+                    f"Stai per avviare una ricerca sull'intero disco {drive_letter}\\\n\n"
                     "Per migliorare notevolmente le prestazioni, è consigliato:\n\n"
                     "1. Escludere le cartelle di sistema (Windows, Program Files)\n"
                     "2. Escludere le cartelle di altri utenti\n"
@@ -1128,11 +1141,37 @@ class FileSearchApp:
         # Pulisci risultati precedenti
         for item in self.results_list.get_children():
             self.results_list.delete(item)
-    
-        if not self.search_path.get() or not self.keywords.get():
-            messagebox.showerror("Errore", "Inserisci directory e parole chiave")
+        
+        # Ottieni i valori direttamente dai widget
+        search_path = self.search_path.get().strip()
+        keywords = self.keyword_entry.get().strip()
+        
+        # Stampa di debug (puoi rimuoverla in produzione)
+        print(f"Debug - Percorso: '{search_path}', Parole chiave: '{keywords}'")
+        
+        # 1. Verifica il percorso
+        if not search_path:
+            messagebox.showerror("Errore", "Inserisci una directory di ricerca valida")
             return
         
+        if not os.path.exists(search_path):
+            messagebox.showerror("Errore", f"Il percorso specificato non esiste:\n{search_path}")
+            return
+        
+        # 2. Verifica le parole chiave
+        placeholder = "Scrivi la parola da ricercare..."
+        if not keywords or keywords == placeholder:
+            messagebox.showerror("Errore", "Inserisci le parole chiave da cercare")
+            return
+        
+        # 3. Verifica colore (controllo extra per il placeholder)
+        try:
+            if self.keyword_entry.cget("foreground") == "gray":
+                messagebox.showerror("Errore", "Inserisci le parole chiave da cercare")
+                return
+        except:
+            pass
+            
         # Mostra avviso se la ricerca nei contenuti è attivata
         if not self.show_content_search_warning():
             return  # Interrompi se l'utente annulla
@@ -3704,9 +3743,21 @@ class FileSearchApp:
         path_label = ttk.Label(path_frame, text="Directory:", width=12, anchor=W)
         path_label.pack(side=LEFT, padx=(0, 5))
         self.create_tooltip(path_label, "Seleziona la directory per effettuare la ricerca dei file")
-
+        
         self.path_entry = ttk.Entry(path_frame, textvariable=self.search_path)
         self.path_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
+        
+        placeholder = "Seleziona un percorso da ricercare..."
+        self.path_entry.insert(0, placeholder)
+        self.path_entry.config(foreground="gray")
+
+        self.path_entry.bind("<FocusIn>", lambda event: 
+            [self.path_entry.delete(0, "end"), self.path_entry.config(foreground="")] 
+            if self.path_entry.get() == placeholder else None)
+            
+        self.path_entry.bind("<FocusOut>", lambda event: 
+            [self.path_entry.insert(0, placeholder), self.path_entry.config(foreground="gray")] 
+            if self.path_entry.get() == "" else None)
         
         self.browse_btn = ttk.Button(path_frame, text="Sfoglia", command=self.browse_directory, width=10)
         self.browse_btn.pack(side=LEFT)
@@ -3724,7 +3775,19 @@ class FileSearchApp:
         
         self.keyword_entry = ttk.Entry(keyword_frame, textvariable=self.keywords)
         self.keyword_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
-                
+        
+        placeholder = "Scrivi la/e parola/e da ricercare..."
+        self.keyword_entry.insert(0, placeholder)
+        self.keyword_entry.config(foreground="gray")
+
+        self.keyword_entry.bind("<FocusIn>", lambda event: 
+            [self.keyword_entry.delete(0, "end"), self.keyword_entry.config(foreground="")] 
+            if self.keyword_entry.get() == placeholder else None)
+            
+        self.keyword_entry.bind("<FocusOut>", lambda event: 
+            [self.keyword_entry.insert(0, placeholder), self.keyword_entry.config(foreground="gray")] 
+            if self.keyword_entry.get() == "" else None)
+
         # ------------------------------------------------------
         # RIGA 3: Opzioni base di ricerca (checkbox)
         # ------------------------------------------------------
@@ -3812,11 +3875,19 @@ class FileSearchApp:
         # Timeout
         timeout_check = ttk.Checkbutton(perf_row1, text="Timeout ricerca", variable=self.timeout_enabled)
         timeout_check.pack(side=LEFT, padx=5)
-        self.create_tooltip(timeout_check, "Interrompe automaticamente la ricerca dopo il tempo specificato")
 
         ttk.Label(perf_row1, text="Secondi:").pack(side=LEFT)
         timeout_spinbox = ttk.Spinbox(perf_row1, from_=10, to=600, width=4, textvariable=self.timeout_seconds)
         timeout_spinbox.pack(side=LEFT, padx=(0, 15))
+        self.create_tooltip(timeout_spinbox, 
+            "Interrompe automaticamente la ricerca dopo il tempo specificato\n\n"
+            "Normale funzionamento:\n"
+            "• La ricerca si interrompe dopo il tempo indicato\n"
+            "• Vengono mostrati i risultati parziali trovati\n\n"
+            "Comportamento per ricerche di sistema (C:/, D:/):\n"
+            "• Per ricerche complete su disco, il timeout viene\n"
+            "  temporaneamente aumentato a 8 ore per permettere\n"
+            "  scansioni approfondite")
 
         # Thread
         ttk.Label(perf_row1, text="Thread:").pack(side=LEFT)
