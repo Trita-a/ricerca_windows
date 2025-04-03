@@ -1880,7 +1880,7 @@ class FileSearchApp:
         # Prima verifica le condizioni più veloci (principio fail-fast)
         if not self.search_content.get():
             return False
-                
+                    
         ext = os.path.splitext(file_path)[1].lower()
         
         # Blocca specificamente i file .doc per evitare blocchi
@@ -1888,26 +1888,36 @@ class FileSearchApp:
             self.log_debug(f"File .doc temporaneamente escluso dall'analisi: {file_path}")
             return False
         
-        # Definisci le estensioni per ciascun livello di ricerca
+        # Seleziona il set di estensioni in base al livello di ricerca
+        search_level = self.search_depth.get()
+        
+        # Liste predefinite nel codice
         base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                         '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
-        
-        advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.config', '.ini', '.reg']
-        
+                        
+        advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
+                                            '.vbs', '.js', '.config', '.ini', '.reg']
+                                            
         deep_extensions = advanced_extensions + ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', 
                                             '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
                                             '.7z', '.tar', '.gz', '.iso', '.psd', '.ai', '.svg']
         
-        # Seleziona il set di estensioni in base al livello di ricerca
-        search_level = self.search_depth.get()
-        
+        # Seleziona le estensioni predefinite in base al livello
         if search_level == "base":
-            allowed_extensions = base_extensions
+            predefined_extensions = base_extensions
         elif search_level == "avanzata":
-            allowed_extensions = advanced_extensions
+            predefined_extensions = advanced_extensions
         else:  # profonda
-            allowed_extensions = deep_extensions
-            # In modalità profonda, cerchiamo in tutti i file
+            predefined_extensions = deep_extensions
+        
+        # Ottieni anche le estensioni personalizzate dell'utente
+        custom_extensions = self.get_extension_settings(search_level)
+        
+        # Combina le liste (usando un set per evitare duplicati)
+        allowed_extensions = set(predefined_extensions + custom_extensions)
+        
+        # In modalità profonda, cerca in tutti i file se esplicitamente configurato
+        if search_level == "profonda" and not custom_extensions:
             return True
         
         # Verifica se l'estensione è supportata per il livello di ricerca scelto
@@ -1922,7 +1932,7 @@ class FileSearchApp:
         (ext == '.rtf' and file_format_support["rtf"]) or \
         (ext == '.odt' and file_format_support["odt"]):
             return True
-            
+                
         return False
 
     def should_skip_file(self, file_path):
@@ -3957,6 +3967,273 @@ class FileSearchApp:
         # Imposta una dimensione minima per la finestra
         dialog.minsize(500, 400)
 
+    def configure_extensions(self, mode="base"):
+        """Dialog to configure file extensions for different search modes"""
+        dialog = ttk.Toplevel(self.root)
+        dialog.title(f"Configura estensioni - Modalità {mode.capitalize()}")
+        dialog.geometry("800x500")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        main_frame = ttk.Frame(dialog, padding=15)
+        main_frame.pack(fill=BOTH, expand=YES)
+        
+        # Heading text
+        ttk.Label(main_frame, text=f"Seleziona le estensioni di file da includere nella ricerca per la modalità {mode}", 
+                font=("", 10)).pack(anchor=W, pady=(0, 15))
+        
+        # Category tabs
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=BOTH, expand=YES, pady=(0, 15))
+        
+        # Initialize dictionary to store checkbutton variables
+        ext_vars = {}
+        
+        # Define extensions by category
+        extension_categories = {
+            "Documenti": [
+                (".txt", "File di testo"),
+                (".doc", "Word vecchio"),
+                (".docx", "Word"),
+                (".pdf", "PDF"),
+                (".rtf", "Rich Text"),
+                (".odt", "OpenDoc"),
+                (".md", "Markdown"),
+                (".csv", "CSV"),
+                (".xml", "XML"),
+                (".html", "HTML"),
+                (".htm", "HTM"),
+                (".json", "JSON")
+            ],
+            "Fogli calcolo": [
+                (".xls", "Excel vecchio"),
+                (".xlsx", "Excel"),
+                (".ods", "OpenCalc"),
+                (".csv", "CSV"),
+                (".tsv", "TSV")
+            ],
+            "Presentazioni": [
+                (".ppt", "PowerPoint vecchio"),
+                (".pptx", "PowerPoint"),
+                (".odp", "OpenImpress"),
+                (".key", "Keynote")
+            ],
+            "Immagini": [
+                (".jpg", "JPEG"),
+                (".jpeg", "JPEG"),
+                (".png", "PNG"),
+                (".gif", "GIF"),
+                (".bmp", "Bitmap"),
+                (".tiff", "TIFF"),
+                (".svg", "SVG"),
+                (".webp", "WebP"),
+                (".ico", "Icon")
+            ],
+            "Audio": [
+                (".mp3", "MP3"),
+                (".wav", "WAV"),
+                (".ogg", "OGG"),
+                (".flac", "FLAC"),
+                (".aac", "AAC"),
+                (".m4a", "M4A"),
+                (".wma", "WMA")
+            ],
+            "Video": [
+                (".mp4", "MP4"),
+                (".avi", "AVI"),
+                (".mkv", "MKV"),
+                (".mov", "MOV"),
+                (".wmv", "WMV"),
+                (".flv", "FLV"),
+                (".webm", "WebM")
+            ],
+            "Archivi": [
+                (".zip", "ZIP"),
+                (".rar", "RAR"),
+                (".7z", "7-Zip"),
+                (".tar", "TAR"),
+                (".gz", "GZip"),
+                (".bz2", "BZip2"),
+                (".iso", "ISO")
+            ],
+            "Eseguibili": [
+                (".exe", "Eseguibile"),
+                (".dll", "Libreria"),
+                (".bat", "Batch"),
+                (".cmd", "Command"),
+                (".ps1", "PowerShell"),
+                (".vbs", "VBScript"),
+                (".sh", "Shell script"),
+                (".msi", "Installer")
+            ],
+            "Configurazione": [
+                (".ini", "INI"),
+                (".config", "Config"),
+                (".conf", "Config"),
+                (".reg", "Registry"),
+                (".cfg", "Config"),
+                (".properties", "Properties"),
+                (".yml", "YAML"),
+                (".yaml", "YAML"),
+                (".toml", "TOML")
+            ]
+        }
+        
+        # Load current settings (this would load from your saved settings)
+        current_settings = self.get_extension_settings(mode)
+        
+        # Extensions that should be included in each search level
+        base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
+                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
+                        
+        advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
+                                            '.vbs', '.js', '.config', '.ini', '.reg']
+                                            
+        deep_extensions = advanced_extensions + ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', 
+                                            '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
+                                            '.7z', '.tar', '.gz', '.iso', '.psd', '.ai', '.svg']
+        
+        # Determine which extensions should be selected based on mode
+        if mode == "base":
+            default_extensions = base_extensions
+        elif mode == "avanzata":
+            default_extensions = advanced_extensions
+        elif mode == "profonda":
+            # For deep mode, select ALL extensions automatically
+            default_extensions = []
+            for category_extensions in extension_categories.values():
+                for ext, _ in category_extensions:
+                    default_extensions.append(ext.lower())
+        else:
+            default_extensions = []
+        
+        # Create tabs for each category
+        for category, extensions in extension_categories.items():
+            # Create a frame for this category
+            category_frame = ttk.Frame(notebook, padding=10)
+            notebook.add(category_frame, text=category)
+            
+            # Create a grid layout
+            row, col = 0, 0
+            
+            # Add checkboxes for each extension in this category
+            for ext, desc in extensions:
+                # Check if this extension should be selected based on mode
+                is_selected = ext.lower() in default_extensions
+                
+                # Create a variable for this checkbox
+                var = BooleanVar(value=is_selected)
+                ext_vars[ext.lower()] = var
+                
+                # Create the checkbox
+                cb = ttk.Checkbutton(category_frame, text=f"{ext} ({desc})", variable=var)
+                cb.grid(row=row, column=col, sticky=W, padx=5, pady=3)
+                
+                # Update grid position
+                col += 1
+                if col > 2:  # 3 columns per row
+                    col = 0
+                    row += 1
+        
+        # Button frame
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=X, pady=(10, 0))
+        
+        # Helper functions
+        def select_all():
+            for var in ext_vars.values():
+                var.set(True)
+                
+        def deselect_all():
+            for var in ext_vars.values():
+                var.set(False)
+                
+        def restore_defaults():
+            # Reset to default extensions for this mode
+            for ext, var in ext_vars.items():
+                var.set(ext in default_extensions)
+        
+        def save_settings():
+            # Save the selected extensions
+            selected_extensions = [ext for ext, var in ext_vars.items() if var.get()]
+            self.save_extension_settings(mode, selected_extensions)
+            dialog.destroy()
+            
+            # Update the search_depth combo if needed
+            current_depth = self.search_depth.get()
+            if current_depth == mode:
+                # Refresh the UI to reflect the new settings
+                self.log_debug(f"Aggiornate le estensioni per la modalità {mode} ({len(selected_extensions)} estensioni)")
+        
+        # Buttons
+        ttk.Button(btn_frame, text="Seleziona tutti", command=select_all).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="Deseleziona tutti", command=deselect_all).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="Ripristina default", command=restore_defaults).pack(side=LEFT, padx=5)
+        
+        ttk.Button(btn_frame, text="Annulla", command=dialog.destroy).pack(side=RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Salva", command=save_settings).pack(side=RIGHT, padx=5)
+        
+        # Center the dialog on screen
+        dialog.update_idletasks()
+        width = dialog.winfo_width()
+        height = dialog.winfo_height()
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Initial focus
+        notebook.select(0)  # Focus first tab
+        
+    def get_default_extensions(self, mode="base"):
+        """Get default extensions for the specified search mode"""
+        if mode == "base":
+            return ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
+                    '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
+        elif mode == "avanzata":
+            return self.get_default_extensions("base") + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
+                                        '.vbs', '.js', '.config', '.ini', '.reg']
+        else:  # profonda
+            return self.get_default_extensions("avanzata") + ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', 
+                                        '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
+                                        '.7z', '.tar', '.gz', '.iso', '.psd', '.ai', '.svg']
+        
+    def get_extension_settings(self, mode="base"):
+        """Load saved extension settings for the specified search mode"""
+        if not hasattr(self, 'extension_settings'):
+            # Initialize with defaults
+            self.extension_settings = {
+                "base": ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
+                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc'],
+                "avanzata": ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
+                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc',
+                        '.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.config', '.ini', '.reg'],
+                "profonda": ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
+                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc',
+                        '.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.config', '.ini', '.reg',
+                        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', '.avi', '.mov', '.mkv', 
+                        '.wav', '.flac', '.zip', '.rar', '.7z', '.tar', '.gz', '.iso', '.psd', '.ai', '.svg']
+            }
+        return self.extension_settings.get(mode, [])
+        
+
+    def save_extension_settings(self, mode, extensions):
+        """Save extension settings for the specified search mode"""
+        if not hasattr(self, 'extension_settings'):
+            self.extension_settings = {}
+        
+        # Ensure all extensions have a leading dot and are lowercase
+        normalized_extensions = []
+        for ext in extensions:
+            if not ext.startswith('.'):
+                ext = '.' + ext
+            normalized_extensions.append(ext.lower())
+        
+        self.extension_settings[mode] = normalized_extensions
+        
+        # Log what was saved
+        self.log_debug(f"Saved {len(normalized_extensions)} extensions for {mode} mode")
+        self.log_debug(f"Extensions: {', '.join(normalized_extensions)}")
+        
     def create_widgets(self):
         # Frame principale che conterrà tutto
         main_container = ttk.Frame(self.root)
@@ -4059,6 +4336,11 @@ class FileSearchApp:
                                         width=10, state="readonly")
         search_depth_combo.pack(side=LEFT, padx=5)
         search_depth_combo.current(0)
+
+        extensions_btn = ttk.Button(options_frame, text="Configura estensioni", 
+                command=lambda: self.configure_extensions(self.search_depth.get()))
+        extensions_btn.pack(side=LEFT, padx=5)
+        self.create_tooltip(extensions_btn, "Configura quali estensioni di file includere nella ricerca")
 
         self.create_tooltip(search_depth_combo, 
             "Base: Solo documenti (txt, docx, pdf, ecc.)\n" +
