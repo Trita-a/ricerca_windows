@@ -59,7 +59,7 @@ class FileSearchApp:
         """Crea solo l'interfaccia essenziale per un avvio veloce"""
         # Frame principale
         main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=BOTH, expand=YES)
+        main_frame.pack(fill=BOTH, expand=YES, pady=0) 
                
         # Stato di caricamento
         status_frame = ttk.Frame(main_frame, padding=5)
@@ -245,16 +245,8 @@ class FileSearchApp:
         """Crea solo i componenti essenziali dell'interfaccia"""
         # Frame principale che conterrà tutto
         self.main_container = ttk.Frame(self.root)
-        self.main_container.pack(fill=BOTH, expand=YES)
-        
-        # Intestazione minima
-        header_frame = ttk.Frame(self.main_container, padding="10")
-        header_frame.pack(fill=X)
-        
-        title_label = ttk.Label(header_frame, text="File Search Tool V8.7.6. Nucleo Perugia",
-                            font=("Helvetica", 14, "bold"))
-        title_label.pack(anchor=CENTER)
-        
+        self.main_container.pack(fill=BOTH, expand=YES, pady=0)
+                
         # Controlli minimi per la ricerca
         self.controls_frame = ttk.LabelFrame(self.main_container, text="Parametri di ricerca", padding=10)
         self.controls_frame.pack(fill=X, padx=10, pady=5)
@@ -3506,10 +3498,10 @@ class FileSearchApp:
     def create_widgets(self):
         # Frame principale che conterrà tutto
         main_container = ttk.Frame(self.root)
-        main_container.pack(fill=BOTH, expand=YES)
+        main_container.pack(fill=BOTH, expand=YES, pady=0)  # Aggiungi pady=0
         
-        # Intestazione (titolo e informazioni)
-        header_frame = ttk.Frame(main_container, padding="10")
+        # Intestazione (titolo e informazioni) - elimina il padding superiore
+        header_frame = ttk.Frame(main_container, padding=(10, 0, 10, 5))  # (left, top, right, bottom)
         header_frame.pack(fill=X)
 
         # Layout a tre colonne in una singola riga
@@ -4070,7 +4062,7 @@ def main():
     def show_splash(root):
         splash_win = tk.Toplevel(root)
         splash_win.title("")
-        splash_win.overrideredirect(True)  # Rimuove bordi e barra del titolo
+        splash_win.overrideredirect(True)
         splash_win.attributes("-topmost", True)
         
         # Dimensioni splash
