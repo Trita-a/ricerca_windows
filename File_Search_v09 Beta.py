@@ -3951,10 +3951,10 @@ class FileSearchApp:
             self.log_debug(f"Errore nell'apertura del percorso: {str(e)}")
 
     def show_advanced_filters_dialog(self):
-        """Mostra la finestra di dialogo per i filtri di ricerca avanzati (senza filtro estensioni)"""
+        """Mostra la finestra di dialogo per i filtri di ricerca avanzati"""
         dialog = ttk.Toplevel(self.root)
         dialog.title("Filtri avanzati")
-        dialog.geometry("530x380")  # Ridotta l'altezza perché rimuoviamo una sezione
+        dialog.geometry("530x440")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -3990,6 +3990,18 @@ class FileSearchApp:
         min_date.entry.delete(0, "end")
         max_date.entry.delete(0, "end")
         
+        # Filtri estensione
+        ext_frame = ttk.LabelFrame(dialog, text="Estensioni file (separate da virgola)")
+        ext_frame.pack(fill=X, padx=10, pady=5)
+        example_label = ttk.Label(ext_frame, text="Inserisci una o più estensioni da ricercare. Esempio: .pdf, .dot", 
+                    font=("", 8), foreground="gray")
+        example_label.pack(anchor="w", padx=5)
+        
+        extensions = ttk.Entry(ext_frame)
+        extensions.pack(fill=X, padx=5, pady=5)
+        if self.advanced_filters["extensions"]:
+            extensions.insert(0, ", ".join(self.advanced_filters["extensions"]))
+        
         # Aggiungiamo un frame di debug per vedere i filtri correnti
         debug_frame = ttk.LabelFrame(dialog, text="Debug - Stato filtri correnti")
         debug_frame.pack(fill=X, padx=10, pady=5)
@@ -3998,77 +4010,8 @@ class FileSearchApp:
         debug_text.pack(fill=X, padx=5, pady=5)
         debug_text.insert("1.0", f"Data min: {self.advanced_filters['date_min']}\n")
         debug_text.insert("2.0", f"Data max: {self.advanced_filters['date_max']}\n")
+        debug_text.insert("3.0", f"Extensions: {self.advanced_filters['extensions']}")
         debug_text.config(state="disabled")
-        
-        # Definizione della funzione di salvataggio
-        def save_filters():
-            try:
-                # Analizza i filtri di dimensione
-                min_kb = int(min_size.get() or 0)
-                max_kb = int(max_size.get() or 0)
-                self.advanced_filters["size_min"] = min_kb * 1024
-                self.advanced_filters["size_max"] = max_kb * 1024
-                
-                # Ottieni le date nel formato DD-MM-YYYY
-                min_date_value = min_date.entry.get().strip()
-                max_date_value = max_date.entry.get().strip()
-                
-                # Validazione date
-                if min_date_value:
-                    try:
-                        # Verifica formato corretto
-                        datetime.strptime(min_date_value, "%d-%m-%Y")
-                    except ValueError:
-                        messagebox.showerror("Errore", "Formato data minima non valido. Usa DD-MM-YYYY")
-                        return
-                
-                if max_date_value:
-                    try:
-                        # Verifica formato corretto
-                        datetime.strptime(max_date_value, "%d-%m-%Y")
-                    except ValueError:
-                        messagebox.showerror("Errore", "Formato data massima non valido. Usa DD-MM-YYYY")
-                        return
-                
-                # Verifica che la data minima non sia successiva alla data massima
-                if min_date_value and max_date_value:
-                    min_date_obj = datetime.strptime(min_date_value, "%d-%m-%Y")
-                    max_date_obj = datetime.strptime(max_date_value, "%d-%m-%Y")
-                    
-                    if min_date_obj > max_date_obj:
-                        messagebox.showerror("Errore", 
-                                            "La data di inizio non può essere successiva alla data di fine")
-                        return
-                
-                # Salva le date validate
-                self.advanced_filters["date_min"] = min_date_value
-                self.advanced_filters["date_max"] = max_date_value
-                
-                # NON modifichiamo le estensioni qui, manteniamo quelle esistenti
-                
-                dialog.destroy()
-                
-            except ValueError:
-                messagebox.showerror("Errore", "Inserisci valori numerici validi per le dimensioni")
-        
-        # Creazione dei pulsanti in un frame
-        buttons_frame = ttk.Frame(dialog)
-        buttons_frame.pack(fill=X, pady=10, padx=10)
-        
-        # Pulsanti Annulla e Salva
-        ttk.Button(buttons_frame, text="Annulla", command=dialog.destroy).pack(side=RIGHT, padx=5)
-        ttk.Button(buttons_frame, text="Salva", command=save_filters).pack(side=RIGHT, padx=5)
-
-        # Dimensioni e posizione finestra
-        dialog.update_idletasks()
-        width = dialog.winfo_width()
-        height = dialog.winfo_height()
-        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
-        y = (dialog.winfo_screenheight() // 2) - (height // 2)
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # Imposta una dimensione minima per la finestra
-        dialog.minsize(500, 350)
         
         # Pulsante Salva
         def save_filters():
