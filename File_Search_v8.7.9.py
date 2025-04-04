@@ -1,4 +1,5 @@
 # Importazioni essenziali per l'avvio
+import io
 import os
 import tkinter as tk
 import ttkbootstrap as ttk
@@ -19,6 +20,7 @@ import mimetypes
 import signal
 import re
 import subprocess
+import odfdo
 
 # Dizionario per tracciare il supporto alle librerie - sarà popolato in seguito
 file_format_support = {
@@ -32,7 +34,7 @@ missing_libraries = []
 class FileSearchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V8.7.9 Forensics G.di F.")
+        self.root.title("File Search Tool V09 Beta Forensics G.di F.")
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
@@ -1889,19 +1891,23 @@ class FileSearchApp:
             self.log_debug(f"File .doc temporaneamente escluso dall'analisi: {file_path}")
             return False
         
-        # Seleziona il set di estensioni in base al livello di ricerca
+        # Seleziona il livello di ricerca attuale
         search_level = self.search_depth.get()
         
         # Ottieni le estensioni personalizzate dell'utente
         custom_extensions = self.get_extension_settings(search_level)
         
-        # Verifica prima se l'estensione è nelle estensioni personalizzate
+        # PRIORITÀ #1: Se l'estensione è stata aggiunta manualmente, cerca sempre il contenuto
         if ext in custom_extensions:
+            # Aggiungi log per debug
+            self.log_debug(f"Ricerca contenuto in file con estensione personalizzata: {ext} - {file_path}")
             return True
         
-        # Se non ci sono estensioni personalizzate o l'estensione non è tra quelle,
-        # usa le predefinite
-        # Liste predefinite nel codice
+        # PRIORITÀ #2: In modalità profonda senza estensioni personalizzate, cerca tutto
+        if search_level == "profonda" and not custom_extensions:
+            return True
+        
+        # Liste predefinite nel codice per ciascun livello
         base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                         '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
                         
@@ -1912,22 +1918,15 @@ class FileSearchApp:
                                             '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
                                             '.7z', '.tar', '.gz', '.iso', '.psd', '.ai', '.svg']
         
-        # Seleziona le estensioni predefinite in base al livello
-        if search_level == "base":
-            allowed_extensions = base_extensions
-        elif search_level == "avanzata":
-            allowed_extensions = advanced_extensions
-        else:  # profonda
-            allowed_extensions = deep_extensions
-            # In modalità profonda, cerca in tutti i file se non ci sono estensioni personalizzate
-            if search_level == "profonda" and not custom_extensions:
-                return True
-        
-        # Verifica se l'estensione è supportata per il livello di ricerca scelto
-        if ext in allowed_extensions:
+        # Verifica il livello predefinito se non è nelle estensioni personalizzate
+        if search_level == "base" and ext in base_extensions:
+            return True
+        elif search_level == "avanzata" and ext in advanced_extensions:
+            return True
+        elif search_level == "profonda" and ext in deep_extensions:
             return True
         
-        # Verifica il supporto a formati specifici
+        # Verifica supporto formati specifici
         if (ext == '.docx' and file_format_support["docx"]) or \
         (ext == '.pdf' and file_format_support["pdf"]) or \
         (ext in {'.pptx', '.ppt'} and file_format_support["pptx"]) or \
@@ -1944,9 +1943,16 @@ class FileSearchApp:
         skip_type = "File di sistema" if ext in self.system_file_extensions else "File"
         skip_filename = os.path.basename(file_path)
         
-        # Skip file types based on search level
+        # IMPORTANTE: Verifica se il file è nelle estensioni personalizzate
+        # Se è stato aggiunto manualmente, NON deve essere mai saltato
         search_level = self.search_depth.get()
-        script_files = ['.bat', '.cmd', '.ps1', '.vbs']
+        custom_extensions = self.get_extension_settings(search_level) 
+        
+        # Non saltare mai i file con estensioni aggiunte manualmente
+        if ext in custom_extensions:
+            # Aggiungi log per debug
+            self.log_debug(f"File NON saltato perché in estensioni personalizzate: {file_path}")
+            return False
         
         # Salta i file di Rights Management Services
         if "Rights Management Services" in file_path or "IRMProtectors" in file_path:
@@ -1961,11 +1967,13 @@ class FileSearchApp:
             self.log_skipped_file(file_path, skip_type, skip_filename, "Formato problematico")
             return True
 
-        # Salta file di sistema, ma con eccezione per script files in ricerca avanzata/profonda
+        # Salta file di sistema solo se non sono nelle estensioni personalizzate
         if self.exclude_system_files.get() and ext in self.system_file_extensions:
-            # Don't skip script files in advanced/deep search
+            # Non saltare script files in ricerca avanzata/profonda
+            script_files = ['.bat', '.cmd', '.ps1', '.vbs']
             if ext in script_files and search_level in ["avanzata", "profonda"]:
                 return False
+            
             self.log_debug(f"File di sistema escluso: {file_path}")
             self.log_skipped_file(file_path, skip_type, skip_filename, "File di sistema")
             return True
@@ -1986,9 +1994,7 @@ class FileSearchApp:
     def export_skipped_files_log(self):
         """Esporta il log dei file saltati in un formato CSV"""
         try:
-            # Importazione locale per sicurezza
-            import csv
-            
+               
             # Verifica se il file di log esiste
             if not os.path.exists(self.skipped_files_log_path):
                 messagebox.showinfo("Informazione", "Non ci sono file di log da esportare.")
@@ -2136,7 +2142,7 @@ class FileSearchApp:
             self.log_debug(f"Errore nella visualizzazione del log: {str(e)}")
 
     def get_file_content(self, file_path):
-        """Ottimizzato per caricare contenuto solo quando necessario, con supporto per livelli di ricerca"""
+        """Ottimizzato per caricare contenuto solo quando necessario, con supporto per livelli di ricerca e estensioni personalizzate"""
         try:
             # Controllo rapido se il file dovrebbe essere saltato
             if self.should_skip_file(file_path):
@@ -2144,6 +2150,9 @@ class FileSearchApp:
                     
             ext = os.path.splitext(file_path)[1].lower()
             search_level = self.search_depth.get()
+            
+            # Ottieni le estensioni personalizzate dell'utente per questo livello
+            custom_extensions = self.get_extension_settings(search_level)
             
             # Ottieni dimensione del file per controlli preliminari
             try:
@@ -2155,6 +2164,10 @@ class FileSearchApp:
                 self.log_debug(f"Errore nel controllo dimensione del file {file_path}: {str(e)}")
                 return ""
             
+            # NUOVO: Se l'estensione è nelle estensioni personalizzate, migliora il log
+            if ext in custom_extensions:
+                self.log_debug(f"Lettura contenuto per estensione personalizzata: {ext} - {file_path}")
+                
             # --- File di testo semplice (supportati in tutti i livelli) ---
             if ext in ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log']:
                 try:
@@ -2181,6 +2194,32 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore lettura file testo: {str(e)}")
                     return ""
+            
+            # --- NUOVO: File di configurazione e script (tutti i livelli se aggiunti manualmente) ---
+            elif ext in ['.ini', '.conf', '.cfg', '.reg', '.bat', '.cmd', '.ps1', '.vbs', '.sh', '.js', '.php', '.py', '.rb']:
+                try:
+                    # NUOVO: Per estensioni personalizzate, forza la lettura a prescindere dal livello
+                    if ext in custom_extensions:
+                        self.log_debug(f"Lettura contenuto script personalizzato: {ext} - {file_path}")
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read(min(file_size, 20480))  # Aumentiamo a 20KB per file di script
+                            return content
+                    # Altrimenti rispetta il livello di ricerca
+                    elif search_level in ["avanzata", "profonda"]:
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read(min(file_size, 10240))  # Leggi solo i primi 10KB
+                            return content
+                    else:
+                        return ""  # Non leggere se nel livello base (a meno che non sia stato aggiunto manualmente)
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura del file script {ext}: {str(e)}")
+                    try:
+                        # Fallback a lettura binaria con conversione a testo
+                        with open(file_path, 'rb') as f:
+                            binary_content = f.read(min(file_size, 10240))
+                            return binary_content.decode('utf-8', errors='ignore')
+                    except:
+                        return f"File {ext}: {os.path.basename(file_path)}"
             
             # --- Documenti Office (supportati in tutti i livelli) ---
             # Word (.docx)
@@ -2293,7 +2332,6 @@ class FileSearchApp:
             elif ext == '.odt' and file_format_support["odt"]:
                 try:
                     try:
-                        import odfdo
                         doc = odfdo.Document(file_path)
                         return doc.get_formatted_text()
                     except ImportError:
@@ -2305,8 +2343,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore ODT: {str(e)}")
                     return ""
             
-            # --- File multimediali (supportati solo in ricerca profonda) ---
-            elif search_level == "profonda" and ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']:
+            # --- File multimediali (supportati in ricerca profonda o se aggiunti manualmente) ---
+            elif (search_level == "profonda" or ext in custom_extensions) and ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']:
                 # Per file immagine, estrai metadati se possibile
                 try:
                     try:
@@ -2343,29 +2381,45 @@ class FileSearchApp:
                     return f"File immagine: {os.path.basename(file_path)}"
                     
             # File audio/video
-            elif search_level == "profonda" and ext in ['.mp3', '.wav', '.flac', '.ogg', '.mp4', '.avi', '.mov', '.mkv', '.wmv']:
+            elif (search_level == "profonda" or ext in custom_extensions) and ext in ['.mp3', '.wav', '.flac', '.ogg', '.mp4', '.avi', '.mov', '.mkv', '.wmv']:
                 try:
                     metadata = [f"File media: {os.path.basename(file_path)}"]
                     
-                    # Tenta di estrarre metadati usando librerie specializzate (se disponibili)
+                    # MIGLIORATO: Supporto mutagen per file audio
                     try:
                         if ext in ['.mp3', '.flac', '.wav', '.ogg']:
-                            # Tenta di usare mutagen se disponibile
-                            import mutagen
-                            audio = mutagen.File(file_path)
-                            
-                            if audio:
-                                metadata.append(f"Durata: {int(audio.info.length // 60)}:{int(audio.info.length % 60):02d}")
-                                if hasattr(audio.info, "bitrate"):
-                                    metadata.append(f"Bitrate: {audio.info.bitrate // 1000} kbps")
+                            try:
+                                import mutagen
+                                audio = mutagen.File(file_path)
+                                
+                                if audio:
+                                    metadata.append(f"Durata: {int(audio.info.length // 60)}:{int(audio.info.length % 60):02d}")
+                                    if hasattr(audio.info, "bitrate"):
+                                        metadata.append(f"Bitrate: {audio.info.bitrate // 1000} kbps")
+                                        
+                                    # Estrai tag più comuni
+                                    common_tags = [
+                                        ("title", "Titolo"),
+                                        ("artist", "Artista"),
+                                        ("album", "Album"),
+                                        ("genre", "Genere"),
+                                        ("date", "Data")
+                                    ]
                                     
-                                # Estrai tag se disponibili
-                                if hasattr(audio, "tags"):
-                                    for tag in ["title", "artist", "album", "genre"]:
-                                        if tag in audio:
-                                            metadata.append(f"{tag.capitalize()}: {audio[tag][0]}")
-                    except ImportError:
-                        metadata.append("Installa mutagen per metadati audio dettagliati")
+                                    # Loop attraverso i tag possibili
+                                    for tag_key, tag_name in common_tags:
+                                        try:
+                                            # Gestisci diversi tipi di oggetti mutagen (MP3, FLAC, ecc.)
+                                            if hasattr(audio, "tags") and audio.tags:
+                                                if tag_key in audio.tags:
+                                                    metadata.append(f"{tag_name}: {audio.tags[tag_key][0]}")
+                                            elif hasattr(audio, "__getitem__"):
+                                                if tag_key in audio:
+                                                    metadata.append(f"{tag_name}: {audio[tag_key][0]}")
+                                        except:
+                                            pass
+                            except ImportError:
+                                metadata.append("Installa mutagen per metadati audio dettagliati")
                     except Exception as e:
                         self.log_debug(f"Errore nell'estrazione metadati media: {str(e)}")
                     
@@ -2375,7 +2429,7 @@ class FileSearchApp:
                     return f"File media: {os.path.basename(file_path)}"
                     
             # Archivi
-            elif search_level == "profonda" and ext in ['.zip', '.rar', '.7z', '.tar', '.gz']:
+            elif (search_level == "profonda" or ext in custom_extensions) and ext in ['.zip', '.rar', '.7z', '.tar', '.gz']:
                 try:
                     if ext == '.zip':
                         import zipfile
@@ -2401,21 +2455,57 @@ class FileSearchApp:
                     elif ext == '.rar':
                         try:
                             import rarfile
+                            import tempfile
+                            
                             if rarfile.is_rarfile(file_path):
                                 with rarfile.RarFile(file_path) as rf:
                                     file_list = rf.namelist()
-                                    return f"Archivio RAR: {os.path.basename(file_path)}\nNumero file: {len(file_list)}"
+                                    
+                                    # Preparazione dell'output base
+                                    result = [f"Archivio RAR: {os.path.basename(file_path)}"]
+                                    result.append(f"Numero file: {len(file_list)}")
+                                    
+                                    # Aggiungi lista file (limitata)
+                                    if file_list:
+                                        result.append("\nContenuto:")
+                                        for i, name in enumerate(file_list[:20]):
+                                            result.append(f"- {name}")
+                                        if len(file_list) > 20:
+                                            result.append(f"[...e altri {len(file_list) - 20} file...]")
+                                    
+                                    # Per la ricerca di livello profondo, estrai e analizza i file di testo
+                                    if search_level == "profonda" and any(f.endswith(('.txt', '.log', '.md', '.csv')) for f in file_list):
+                                        # Crea directory temporanea
+                                        with tempfile.TemporaryDirectory() as tmpdir:
+                                            for f in file_list:
+                                                # Estrai solo file di testo piccoli
+                                                if any(f.endswith(ext) for ext in ['.txt', '.log', '.md', '.csv']):
+                                                    try:
+                                                        rf.extract(f, tmpdir)
+                                                        extracted_path = os.path.join(tmpdir, f)
+                                                        if os.path.getsize(extracted_path) < 1024 * 1024:  # Max 1MB
+                                                            with open(extracted_path, 'r', encoding='utf-8', errors='ignore') as txt:
+                                                                content = txt.read(1024)  # Leggi solo i primi 1024 caratteri
+                                                                result.append(f"\nAnteprima di {f}:\n{content}...")
+                                                    except:
+                                                        pass
+                                    
+                                    return "\n".join(result)
                         except ImportError:
                             return f"Archivio RAR: {os.path.basename(file_path)}\nInstalla rarfile per vedere il contenuto"
-                    else:
-                        return f"Archivio: {os.path.basename(file_path)}"
+                        except Exception as e:
+                            return f"Errore nell'analisi del file RAR: {str(e)}"
                 except Exception as e:
                     self.log_debug(f"Errore lettura archivio: {str(e)}")
                     return f"Archivio: {os.path.basename(file_path)}"
             
-            # File di sistema (supportati in avanzata e profonda)
-            elif search_level in ["avanzata", "profonda"] and ext in ['.exe', '.dll', '.sys', '.ini', '.conf', '.cfg', '.reg', '.bat', '.cmd', '.ps1', '.vbs']:
+            # --- MODIFICATO: File di sistema (supportati in avanzata e profonda o se aggiunti manualmente) ---
+            elif (search_level in ["avanzata", "profonda"] or ext in custom_extensions) and ext in ['.exe', '.dll', '.sys', '.ini', '.conf', '.cfg', '.reg', '.bat', '.cmd', '.ps1', '.vbs']:
                 try:
+                    # IMPORTANTE: Per estensioni personalizzate, forza la lettura a prescindere dal livello
+                    if ext in custom_extensions:
+                        self.log_debug(f"Lettura contenuto estensione personalizzata sistema: {ext}")
+                    
                     # Per file di configurazione/testo, tenta la lettura
                     if ext in ['.ini', '.conf', '.cfg', '.reg', '.bat', '.cmd', '.ps1', '.vbs']:
                         try:
@@ -2456,6 +2546,36 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore generale file di sistema: {str(e)}")
                     return f"File di sistema: {os.path.basename(file_path)}"
+            
+            # --- NUOVO: Gestione estensioni personalizzate sconosciute ---
+            elif ext in custom_extensions:
+                self.log_debug(f"Tentativo di lettura per estensione personalizzata non riconosciuta: {ext}")
+                try:
+                    # Prima prova lettura come testo
+                    try:
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read(min(file_size, 10240))
+                            if content.strip():
+                                return content
+                    except:
+                        pass
+                        
+                    # Se fallisce, prova lettura binaria
+                    with open(file_path, 'rb') as f:
+                        # Leggi solo i primi 10KB per evitare problemi di memoria
+                        content = f.read(10240)
+                        
+                        # Tenta la decodifica in UTF-8
+                        text = content.decode('utf-8', errors='ignore')
+                        # Mantieni solo le righe con contenuto significativo
+                        lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 3]
+                        if lines:
+                            return "\n".join(lines[:50])  # Limita a 50 righe
+                        else:
+                            return f"File binario personalizzato: {os.path.basename(file_path)}"
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura di estensione personalizzata {ext}: {str(e)}")
+                    return f"File personalizzato {ext}: {os.path.basename(file_path)}"
             
             # Per altri formati in ricerca profonda, tenta l'apertura come testo
             elif search_level == "profonda":
@@ -2911,8 +3031,7 @@ class FileSearchApp:
 
     def compress_selected(self):
         """Versione avanzata della compressione con opzioni aggiuntive e log completo dei file"""
-        import io
-        import csv 
+
 
         selected_items = self.results_list.selection()
         if not selected_items:
@@ -4205,18 +4324,15 @@ class FileSearchApp:
         if not hasattr(self, 'extension_settings'):
             # Initialize with defaults
             self.extension_settings = {
-                "base": ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
-                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc'],
-                "avanzata": ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
-                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc',
-                        '.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.config', '.ini', '.reg'],
-                "profonda": ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
-                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc',
-                        '.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', '.js', '.config', '.ini', '.reg',
-                        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', '.avi', '.mov', '.mkv', 
-                        '.wav', '.flac', '.zip', '.rar', '.7z', '.tar', '.gz', '.iso', '.psd', '.ai', '.svg']
+                "base": self.get_default_extensions("base"),
+                "avanzata": self.get_default_extensions("avanzata"),
+                "profonda": self.get_default_extensions("profonda")
             }
-        return self.extension_settings.get(mode, [])
+        
+        # Aggiungi log per verificare le estensioni quando si accede ad esse
+        extensions = self.extension_settings.get(mode, [])
+        self.log_debug(f"Estensioni caricate per modalità {mode}: {', '.join(extensions)}")
+        return extensions
         
 
     def save_extension_settings(self, mode, extensions):
@@ -4947,7 +5063,7 @@ def create_splash_screen(parent):
     frame = ttk.Frame(splash_win, padding=20)
     frame.pack(fill=tk.BOTH, expand=tk.YES)
     
-    ttk.Label(frame, text="File Search Tool V8.7.9", 
+    ttk.Label(frame, text="File Search Tool V09 Beta", 
             font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
     ttk.Label(frame, text="Forensics G.di F.", 
             font=("Helvetica", 14)).pack(pady=(0, 20))
