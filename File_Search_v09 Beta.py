@@ -1,4 +1,5 @@
 # Importazioni essenziali per l'avvio
+import io
 import os
 import tkinter as tk
 import ttkbootstrap as ttk
@@ -19,6 +20,7 @@ import mimetypes
 import signal
 import re
 import subprocess
+import odfdo
 
 # Dizionario per tracciare il supporto alle librerie - sarà popolato in seguito
 file_format_support = {
@@ -1992,9 +1994,7 @@ class FileSearchApp:
     def export_skipped_files_log(self):
         """Esporta il log dei file saltati in un formato CSV"""
         try:
-            # Importazione locale per sicurezza
-            import csv
-            
+               
             # Verifica se il file di log esiste
             if not os.path.exists(self.skipped_files_log_path):
                 messagebox.showinfo("Informazione", "Non ci sono file di log da esportare.")
@@ -2332,7 +2332,6 @@ class FileSearchApp:
             elif ext == '.odt' and file_format_support["odt"]:
                 try:
                     try:
-                        import odfdo
                         doc = odfdo.Document(file_path)
                         return doc.get_formatted_text()
                     except ImportError:
@@ -2456,14 +2455,46 @@ class FileSearchApp:
                     elif ext == '.rar':
                         try:
                             import rarfile
+                            import tempfile
+                            
                             if rarfile.is_rarfile(file_path):
                                 with rarfile.RarFile(file_path) as rf:
                                     file_list = rf.namelist()
-                                    return f"Archivio RAR: {os.path.basename(file_path)}\nNumero file: {len(file_list)}"
+                                    
+                                    # Preparazione dell'output base
+                                    result = [f"Archivio RAR: {os.path.basename(file_path)}"]
+                                    result.append(f"Numero file: {len(file_list)}")
+                                    
+                                    # Aggiungi lista file (limitata)
+                                    if file_list:
+                                        result.append("\nContenuto:")
+                                        for i, name in enumerate(file_list[:20]):
+                                            result.append(f"- {name}")
+                                        if len(file_list) > 20:
+                                            result.append(f"[...e altri {len(file_list) - 20} file...]")
+                                    
+                                    # Per la ricerca di livello profondo, estrai e analizza i file di testo
+                                    if search_level == "profonda" and any(f.endswith(('.txt', '.log', '.md', '.csv')) for f in file_list):
+                                        # Crea directory temporanea
+                                        with tempfile.TemporaryDirectory() as tmpdir:
+                                            for f in file_list:
+                                                # Estrai solo file di testo piccoli
+                                                if any(f.endswith(ext) for ext in ['.txt', '.log', '.md', '.csv']):
+                                                    try:
+                                                        rf.extract(f, tmpdir)
+                                                        extracted_path = os.path.join(tmpdir, f)
+                                                        if os.path.getsize(extracted_path) < 1024 * 1024:  # Max 1MB
+                                                            with open(extracted_path, 'r', encoding='utf-8', errors='ignore') as txt:
+                                                                content = txt.read(1024)  # Leggi solo i primi 1024 caratteri
+                                                                result.append(f"\nAnteprima di {f}:\n{content}...")
+                                                    except:
+                                                        pass
+                                    
+                                    return "\n".join(result)
                         except ImportError:
                             return f"Archivio RAR: {os.path.basename(file_path)}\nInstalla rarfile per vedere il contenuto"
-                    else:
-                        return f"Archivio: {os.path.basename(file_path)}"
+                        except Exception as e:
+                            return f"Errore nell'analisi del file RAR: {str(e)}"
                 except Exception as e:
                     self.log_debug(f"Errore lettura archivio: {str(e)}")
                     return f"Archivio: {os.path.basename(file_path)}"
@@ -3000,8 +3031,7 @@ class FileSearchApp:
 
     def compress_selected(self):
         """Versione avanzata della compressione con opzioni aggiuntive e log completo dei file"""
-        import io
-        import csv 
+
 
         selected_items = self.results_list.selection()
         if not selected_items:
@@ -3921,10 +3951,10 @@ class FileSearchApp:
             self.log_debug(f"Errore nell'apertura del percorso: {str(e)}")
 
     def show_advanced_filters_dialog(self):
-        """Mostra la finestra di dialogo per i filtri di ricerca avanzati"""
+        """Mostra la finestra di dialogo per i filtri di ricerca avanzati (senza filtro estensioni)"""
         dialog = ttk.Toplevel(self.root)
         dialog.title("Filtri avanzati")
-        dialog.geometry("530x440")
+        dialog.geometry("530x380")  # Ridotta l'altezza perché rimuoviamo una sezione
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -3960,18 +3990,6 @@ class FileSearchApp:
         min_date.entry.delete(0, "end")
         max_date.entry.delete(0, "end")
         
-        # Filtri estensione
-        ext_frame = ttk.LabelFrame(dialog, text="Estensioni file (separate da virgola)")
-        ext_frame.pack(fill=X, padx=10, pady=5)
-        example_label = ttk.Label(ext_frame, text="Inserisci una o più estensioni da ricercare. Esempio: .pdf, .dot", 
-                    font=("", 8), foreground="gray")
-        example_label.pack(anchor="w", padx=5)
-        
-        extensions = ttk.Entry(ext_frame)
-        extensions.pack(fill=X, padx=5, pady=5)
-        if self.advanced_filters["extensions"]:
-            extensions.insert(0, ", ".join(self.advanced_filters["extensions"]))
-        
         # Aggiungiamo un frame di debug per vedere i filtri correnti
         debug_frame = ttk.LabelFrame(dialog, text="Debug - Stato filtri correnti")
         debug_frame.pack(fill=X, padx=10, pady=5)
@@ -3980,8 +3998,77 @@ class FileSearchApp:
         debug_text.pack(fill=X, padx=5, pady=5)
         debug_text.insert("1.0", f"Data min: {self.advanced_filters['date_min']}\n")
         debug_text.insert("2.0", f"Data max: {self.advanced_filters['date_max']}\n")
-        debug_text.insert("3.0", f"Extensions: {self.advanced_filters['extensions']}")
         debug_text.config(state="disabled")
+        
+        # Definizione della funzione di salvataggio
+        def save_filters():
+            try:
+                # Analizza i filtri di dimensione
+                min_kb = int(min_size.get() or 0)
+                max_kb = int(max_size.get() or 0)
+                self.advanced_filters["size_min"] = min_kb * 1024
+                self.advanced_filters["size_max"] = max_kb * 1024
+                
+                # Ottieni le date nel formato DD-MM-YYYY
+                min_date_value = min_date.entry.get().strip()
+                max_date_value = max_date.entry.get().strip()
+                
+                # Validazione date
+                if min_date_value:
+                    try:
+                        # Verifica formato corretto
+                        datetime.strptime(min_date_value, "%d-%m-%Y")
+                    except ValueError:
+                        messagebox.showerror("Errore", "Formato data minima non valido. Usa DD-MM-YYYY")
+                        return
+                
+                if max_date_value:
+                    try:
+                        # Verifica formato corretto
+                        datetime.strptime(max_date_value, "%d-%m-%Y")
+                    except ValueError:
+                        messagebox.showerror("Errore", "Formato data massima non valido. Usa DD-MM-YYYY")
+                        return
+                
+                # Verifica che la data minima non sia successiva alla data massima
+                if min_date_value and max_date_value:
+                    min_date_obj = datetime.strptime(min_date_value, "%d-%m-%Y")
+                    max_date_obj = datetime.strptime(max_date_value, "%d-%m-%Y")
+                    
+                    if min_date_obj > max_date_obj:
+                        messagebox.showerror("Errore", 
+                                            "La data di inizio non può essere successiva alla data di fine")
+                        return
+                
+                # Salva le date validate
+                self.advanced_filters["date_min"] = min_date_value
+                self.advanced_filters["date_max"] = max_date_value
+                
+                # NON modifichiamo le estensioni qui, manteniamo quelle esistenti
+                
+                dialog.destroy()
+                
+            except ValueError:
+                messagebox.showerror("Errore", "Inserisci valori numerici validi per le dimensioni")
+        
+        # Creazione dei pulsanti in un frame
+        buttons_frame = ttk.Frame(dialog)
+        buttons_frame.pack(fill=X, pady=10, padx=10)
+        
+        # Pulsanti Annulla e Salva
+        ttk.Button(buttons_frame, text="Annulla", command=dialog.destroy).pack(side=RIGHT, padx=5)
+        ttk.Button(buttons_frame, text="Salva", command=save_filters).pack(side=RIGHT, padx=5)
+
+        # Dimensioni e posizione finestra
+        dialog.update_idletasks()
+        width = dialog.winfo_width()
+        height = dialog.winfo_height()
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Imposta una dimensione minima per la finestra
+        dialog.minsize(500, 350)
         
         # Pulsante Salva
         def save_filters():
@@ -4063,7 +4150,7 @@ class FileSearchApp:
         """Dialog to configure file extensions for different search modes"""
         dialog = ttk.Toplevel(self.root)
         dialog.title(f"Configura estensioni - Modalità {mode.capitalize()}")
-        dialog.geometry("800x500")
+        dialog.geometry("850x500")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -4081,7 +4168,7 @@ class FileSearchApp:
         # Initialize dictionary to store checkbutton variables
         ext_vars = {}
         
-        # Define extensions by category
+        # Define extensions by category - EXPANDED with more extensions
         extension_categories = {
             "Documenti": [
                 (".txt", "File di testo"),
@@ -4089,26 +4176,43 @@ class FileSearchApp:
                 (".docx", "Word"),
                 (".pdf", "PDF"),
                 (".rtf", "Rich Text"),
-                (".odt", "OpenDoc"),
+                (".odt", "OpenDoc Text"),
                 (".md", "Markdown"),
                 (".csv", "CSV"),
                 (".xml", "XML"),
                 (".html", "HTML"),
                 (".htm", "HTM"),
-                (".json", "JSON")
+                (".json", "JSON"),
+                (".log", "Log file"),
+                (".tex", "LaTeX"),
+                (".rst", "reStructuredText"),
+                (".epub", "E-book EPUB"),
+                (".mobi", "E-book Mobi")
             ],
             "Fogli calcolo": [
                 (".xls", "Excel vecchio"),
                 (".xlsx", "Excel"),
                 (".ods", "OpenCalc"),
                 (".csv", "CSV"),
-                (".tsv", "TSV")
+                (".tsv", "TSV"),
+                (".dbf", "Database File"),
+                (".dif", "Data Interchange Format")
             ],
             "Presentazioni": [
                 (".ppt", "PowerPoint vecchio"),
                 (".pptx", "PowerPoint"),
                 (".odp", "OpenImpress"),
-                (".key", "Keynote")
+                (".key", "Keynote"),
+                (".pps", "PowerPoint Show")
+            ],
+            "Database": [
+                (".db", "Database generico"),
+                (".sqlite", "SQLite"),
+                (".sqlite3", "SQLite3"),
+                (".mdb", "Access DB"),
+                (".accdb", "Access DB nuovo"),
+                (".odb", "OpenOffice DB"),
+                (".sql", "SQL script")
             ],
             "Immagini": [
                 (".jpg", "JPEG"),
@@ -4117,9 +4221,16 @@ class FileSearchApp:
                 (".gif", "GIF"),
                 (".bmp", "Bitmap"),
                 (".tiff", "TIFF"),
+                (".tif", "TIF"),
                 (".svg", "SVG"),
                 (".webp", "WebP"),
-                (".ico", "Icon")
+                (".ico", "Icon"),
+                (".raw", "Raw"),
+                (".psd", "Photoshop"),
+                (".ai", "Illustrator"),
+                (".odg", "OpenOffice Draw"),
+                (".xcf", "GIMP"),
+                (".heic", "HEIC")
             ],
             "Audio": [
                 (".mp3", "MP3"),
@@ -4128,7 +4239,11 @@ class FileSearchApp:
                 (".flac", "FLAC"),
                 (".aac", "AAC"),
                 (".m4a", "M4A"),
-                (".wma", "WMA")
+                (".wma", "WMA"),
+                (".mid", "MIDI"),
+                (".midi", "MIDI"),
+                (".aiff", "AIFF"),
+                (".opus", "Opus")
             ],
             "Video": [
                 (".mp4", "MP4"),
@@ -4137,7 +4252,13 @@ class FileSearchApp:
                 (".mov", "MOV"),
                 (".wmv", "WMV"),
                 (".flv", "FLV"),
-                (".webm", "WebM")
+                (".webm", "WebM"),
+                (".m4v", "M4V"),
+                (".mpg", "MPEG"),
+                (".mpeg", "MPEG"),
+                (".3gp", "3GP"),
+                (".ogv", "OGV"),
+                (".ts", "TS")
             ],
             "Archivi": [
                 (".zip", "ZIP"),
@@ -4146,7 +4267,11 @@ class FileSearchApp:
                 (".tar", "TAR"),
                 (".gz", "GZip"),
                 (".bz2", "BZip2"),
-                (".iso", "ISO")
+                (".iso", "ISO"),
+                (".tgz", "Tar GZipped"),
+                (".xz", "XZ"),
+                (".cab", "Cabinet"),
+                (".jar", "Java Archive")
             ],
             "Eseguibili": [
                 (".exe", "Eseguibile"),
@@ -4156,7 +4281,11 @@ class FileSearchApp:
                 (".ps1", "PowerShell"),
                 (".vbs", "VBScript"),
                 (".sh", "Shell script"),
-                (".msi", "Installer")
+                (".msi", "Installer Windows"),
+                (".app", "Applicazione macOS"),
+                (".deb", "Pacchetto Debian"),
+                (".rpm", "Red Hat Package"),
+                (".apk", "Android Package")
             ],
             "Configurazione": [
                 (".ini", "INI"),
@@ -4167,9 +4296,41 @@ class FileSearchApp:
                 (".properties", "Properties"),
                 (".yml", "YAML"),
                 (".yaml", "YAML"),
-                (".toml", "TOML")
+                (".json", "JSON Config"),
+                (".toml", "TOML"),
+                (".env", "Environment"),
+                (".htaccess", "Apache Config"),
+                (".plist", "macOS Property List")
+            ],
+            "Programmazione": [
+                (".c", "C"),
+                (".cpp", "C++"),
+                (".cs", "C#"),
+                (".java", "Java"),
+                (".py", "Python"),
+                (".js", "JavaScript"),
+                (".php", "PHP"),
+                (".rb", "Ruby"),
+                (".go", "Golang"),
+                (".rs", "Rust"),
+                (".swift", "Swift"),
+                (".pl", "Perl"),
+                (".lua", "Lua"),
+                (".h", "Header C"),
+                (".hpp", "Header C++"),
+                (".vb", "Visual Basic"),
+                (".ts", "TypeScript"),
+                (".scala", "Scala"),
+                (".groovy", "Groovy"),
+                (".kt", "Kotlin")
             ]
         }
+        
+        # Create a list of all extensions for "profonda" mode
+        all_extensions = []
+        for category_extensions in extension_categories.values():
+            for ext, _ in category_extensions:
+                all_extensions.append(ext.lower())
         
         # Load current settings (this would load from your saved settings)
         current_settings = self.get_extension_settings(mode)
@@ -4180,24 +4341,11 @@ class FileSearchApp:
                         
         advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
                                             '.vbs', '.js', '.config', '.ini', '.reg']
-                                            
-        deep_extensions = advanced_extensions + ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', 
-                                            '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
-                                            '.7z', '.tar', '.gz', '.iso', '.psd', '.ai', '.svg']
         
-        # Determine which extensions should be selected based on mode
-        if mode == "base":
-            default_extensions = base_extensions
-        elif mode == "avanzata":
-            default_extensions = advanced_extensions
-        elif mode == "profonda":
-            # For deep mode, select ALL extensions automatically
-            default_extensions = []
-            for category_extensions in extension_categories.values():
-                for ext, _ in category_extensions:
-                    default_extensions.append(ext.lower())
-        else:
-            default_extensions = []
+        # Per modalità profonda, usa tutte le estensioni definite
+        if mode == "profonda":
+            # Sovrascrive le impostazioni correnti per far sì che tutte le estensioni siano selezionate
+            current_settings = all_extensions
         
         # Create tabs for each category
         for category, extensions in extension_categories.items():
@@ -4241,9 +4389,16 @@ class FileSearchApp:
                 var.set(False)
                 
         def restore_defaults():
-            # Reset to default extensions for this mode
-            for ext, var in ext_vars.items():
-                var.set(ext in default_extensions)
+            # Modified restore_defaults function
+            if mode == "profonda":
+                # For deep mode, select ALL extensions
+                for var in ext_vars.values():
+                    var.set(True)
+            else:
+                # Reset to default extensions for base/avanzata modes
+                default_list = base_extensions if mode == "base" else advanced_extensions
+                for ext, var in ext_vars.items():
+                    var.set(ext in default_list)
         
         def save_settings():
             # Save the selected extensions
@@ -4282,12 +4437,38 @@ class FileSearchApp:
             return ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                     '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
         elif mode == "avanzata":
-            return self.get_default_extensions("base") + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
-                                        '.vbs', '.js', '.config', '.ini', '.reg']
-        else:  # profonda
-            return self.get_default_extensions("avanzata") + ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', 
-                                        '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
-                                        '.7z', '.tar', '.gz', '.iso', '.psd', '.ai', '.svg']
+            # Prima ottieni le estensioni base
+            base_exts = self.get_default_extensions("base")
+            
+            # Poi aggiungi estensioni avanzate (senza duplicati)
+            advanced_only = [
+                # File di sistema e script
+                '.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', 
+                '.config', '.ini', '.reg',
+                
+                # File di programmazione comuni
+                '.py', '.java', '.php', '.cs', '.cpp', '.c', '.h', '.rb', '.js',
+                
+                # File di database semplici
+                '.db', '.sqlite', '.sqlite3',
+                
+                # File di configurazione aggiuntivi
+                '.env', '.yml', '.yaml', '.toml', '.json5',
+                
+                # File di backup e temporanei
+                '.bak', '.old', '.tmp', '.temp',
+                
+                # Formati di documento meno comuni
+                '.epub', '.tex', '.rst',
+                
+                # File web
+                '.css', '.less', '.scss', '.jsp', '.asp', '.aspx'
+            ]
+            
+            # Combina le liste evitando duplicati
+            return base_exts + [ext for ext in advanced_only if ext not in base_exts]
+        else:  # profonda - usa un metodo diverso per ottenere tutte le estensioni
+            return []  # Il valore effettivo viene determinato in configure_extensions
         
     def get_extension_settings(self, mode="base"):
         """Load saved extension settings for the specified search mode"""
@@ -4725,7 +4906,7 @@ class FileSearchApp:
         # Pulsante per aggiornare dimensione directory - aggiunto sotto Directory
         refresh_size_btn = ttk.Button(disk_grid, text="Aggiorna dimensioni", 
                                 command=self.refresh_directory_size,
-                                style="info.TButton", width=18)
+                                style="info.TButton", width=20)
         refresh_size_btn.grid(row=1, column=0, columnspan=2, sticky=W, padx=5, pady=(2,0))
         self.create_tooltip(refresh_size_btn, "Aggiorna manualmente il calcolo della dimensione della directory")
 
