@@ -55,3 +55,5 @@ Miglioramento dell'aspetto dell'interfaccia utente
 Agiunta libreria psutil È uno strumento di monitoraggio e diagnostica molto potente
 8.7.5
 miglioramenti nelle funzioni
+09.1 Beta
+agginta nella compressione la creazione dell'alberatura dei file trovati con l'opzione di creazione della struttura e log di file non compressi per qualche ragione
