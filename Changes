@@ -56,4 +56,5 @@ Agiunta libreria psutil È uno strumento di monitoraggio e diagnostica molto pot
 8.7.5
 miglioramenti nelle funzioni
 09.1 Beta
-agginta nella compressione la creazione dell'alberatura dei file trovati con l'opzione di creazione della struttura e log di file non compressi per qualche ragione
+Agginta nella compressione la creazione dell'alberatura dei file trovati con l'opzione di creazione della struttura
+Aggiunto log dei file non compressi per qualche ragione come permessi negati
