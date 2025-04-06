@@ -1232,7 +1232,12 @@ class FileSearchApp:
         
         # Aggiorna il valore della profondità massima
         try:
-            self.max_depth = int(self.depth_spinbox.get())
+            if hasattr(self, 'depth_spinbox'):
+                self.max_depth = int(self.depth_spinbox.get())
+            else:
+                # Se depth_spinbox non esiste, usa il valore predefinito 
+                # memorizzato nella variabile self.max_depth
+                pass  # Mantiene il valore self.max_depth esistente
         except ValueError:
             self.max_depth = 0  # Valore predefinito se non valido
         
