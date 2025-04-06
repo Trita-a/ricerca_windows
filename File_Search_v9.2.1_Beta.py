@@ -660,7 +660,8 @@ class FileSearchApp:
         # Combobox e spinbox
         if hasattr(self, 'theme_combobox'):
             self.theme_combobox["state"] = "readonly"
-        self.depth_spinbox["state"] = "normal"
+        if hasattr(self, 'depth_spinbox'):
+            self.depth_spinbox["state"] = "normal"
         
         # Pulsanti principali
         self.search_button["state"] = "normal"
@@ -4912,20 +4913,34 @@ class FileSearchApp:
 
         # Impostazione delle intestazioni delle colonne
         self.results_list.heading("type", text="Tipo")
-        self.results_list.heading("author", text="Nome")  # Rinominato da "Autore" a "Nome"
         self.results_list.heading("size", text="Dimensione")
         self.results_list.heading("modified", text="Modificato")
         self.results_list.heading("created", text="Creato")
+        self.results_list.heading("author", text="Nome")  # Rinominato da "Autore" a "Nome"
         self.results_list.heading("path", text="Percorso")
 
-        # Impostazione delle larghezze delle colonne
-        self.results_list.column("type", width=100, minwidth=50, stretch=NO)
-        self.results_list.column("author", width=150, minwidth=80, stretch=NO)
-        self.results_list.column("size", width=100, minwidth=80, stretch=NO) 
-        self.results_list.column("modified", width=150, minwidth=120, stretch=NO)
-        self.results_list.column("created", width=150, minwidth=120, stretch=NO)
-        self.results_list.column("path", width=800, minwidth=200, stretch=YES)  # stretch=YES per utilizzare lo spazio disponibile
-        
+        # Impostazione delle intestazioni delle colonne con funzione di ordinamento
+        self.results_list.heading("type", text="Tipo", 
+                            command=lambda: self.treeview_sort_column(self.results_list, "type", False))
+        self.results_list.heading("size", text="Dimensione", 
+                            command=lambda: self.treeview_sort_column(self.results_list, "size", False))
+        self.results_list.heading("modified", text="Modificato", 
+                            command=lambda: self.treeview_sort_column(self.results_list, "modified", False))
+        self.results_list.heading("created", text="Creato", 
+                            command=lambda: self.treeview_sort_column(self.results_list, "created", False))
+        self.results_list.heading("author", text="Nome", 
+                            command=lambda: self.treeview_sort_column(self.results_list, "author", False))
+        self.results_list.heading("path", text="Percorso", 
+                            command=lambda: self.treeview_sort_column(self.results_list, "path", False))
+
+        # Impostazione delle larghezze fisse delle colonne
+        self.results_list.column("type", width=120, minwidth=50, stretch=NO, anchor="center")
+        self.results_list.column("size", width=100, minwidth=80, stretch=NO, anchor="center")
+        self.results_list.column("modified", width=150, minwidth=120, stretch=NO, anchor="center")
+        self.results_list.column("created", width=150, minwidth=120, stretch=NO, anchor="center")
+        self.results_list.column("author", width=180, minwidth=80, stretch=NO, anchor="w")
+        self.results_list.column("path", width=600, minwidth=200, stretch=YES, anchor="w")  # Solo questa colonna si espande
+
         # Aggiungi binding per l'evento di doppio clic
         self.results_list.bind("<Double-1>", self.open_file_location)
 
@@ -5365,7 +5380,69 @@ class FileSearchApp:
         to_select = set(all_items) - set(selected_items)
         for item in to_select:
             self.results_list.selection_add(item)
+            
+    def treeview_sort_column(self, tv, col, reverse):
+        """Ordina il TreeView in base alla colonna cliccata"""
+        # Ottieni la lista di item con i loro valori
+        l = [(tv.set(k, col), k) for k in tv.get_children('')]
+        
+        # Determina il tipo di ordinamento in base alla colonna
+        try:
+            if col == "size":
+                # Gestione speciale per le dimensioni (KB, MB, GB)
+                def extract_size(size_str):
+                    if not size_str:
+                        return 0
+                    try:
+                        # Estrai il valore numerico e converti tutto in byte per confrontare correttamente
+                        value = float(size_str.split()[0])
+                        if "KB" in size_str:
+                            return value * 1024
+                        elif "MB" in size_str:
+                            return value * 1024 * 1024
+                        elif "GB" in size_str:
+                            return value * 1024 * 1024 * 1024
+                        else:
+                            return value  # Assumiamo che sia in byte
+                    except:
+                        return 0
+                        
+                l.sort(key=lambda x: extract_size(x[0]), reverse=reverse)
+            elif col in ("modified", "created"):
+                # Gestione per le date (assumendo formato DD/MM/YYYY HH:MM)
+                from datetime import datetime
+                def parse_date(date_str):
+                    try:
+                        if date_str and date_str != "N/A":
+                            return datetime.strptime(date_str, "%d/%m/%Y %H:%M")
+                        return datetime(1900, 1, 1)  # Data di default per valori vuoti
+                    except:
+                        return datetime(1900, 1, 1)
+                        
+                l.sort(key=lambda x: parse_date(x[0]), reverse=reverse)
+            else:
+                # Ordinamento standard alfanumerico
+                l.sort(reverse=reverse)
+        except Exception as e:
+            self.log_debug(f"Errore durante l'ordinamento: {str(e)}")
+            # Fallback all'ordinamento alfanumerico semplice
+            l.sort(reverse=reverse)
+            
+        # Riorganizza gli elementi nel TreeView
+        for index, (val, k) in enumerate(l):
+            tv.move(k, '', index)
 
+        # Memorizza la colonna ordinata e la direzione per il prossimo click
+        tv.heading(col, command=lambda _col=col: self.treeview_sort_column(tv, _col, not reverse))
+        
+        # Aggiorna l'indicatore visivo di ordinamento (aggiunge freccia all'intestazione)
+        for c in tv["columns"]:
+            if c == col:
+                tv.heading(c, text=f"{tv.heading(c, 'text').split(' ')[0]} {'▼' if reverse else '▲'}")
+            else:
+                # Rimuovi eventuali indicatori di ordinamento da altre colonne
+                tv.heading(c, text=tv.heading(c, 'text').split(' ')[0])
+                
 # Funzione principale per eseguire l'applicazione
 def main():
     import sys
