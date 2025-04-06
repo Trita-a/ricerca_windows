@@ -3564,61 +3564,6 @@ class FileSearchApp:
             base_path = self.search_path.get()
         
         return base_path
-
-    def _find_common_base_path(self, selected_items):
-        """Trova il percorso base comune a tutti i file selezionati"""
-        if not selected_items:
-            return ""
-        
-        paths = []
-        
-        # Raccogli tutti i percorsi
-        for item in selected_items:
-            values = self.results_list.item(item)['values']
-            paths.append(values[5])  # Il percorso è nella sesta colonna
-        
-        # Trova il percorso comune più lungo
-        def common_path(paths):
-            if not paths:
-                return ""
-            
-            # Normalizza i percorsi per gestire i diversi separatori di directory
-            paths = [os.path.normpath(p) for p in paths]
-            
-            # Dividi ogni percorso in componenti
-            components = [p.split(os.path.sep) for p in paths]
-            
-            # Se ci sono percorsi di unità diverse (es. C:\ e D:\) su Windows
-            if os.name == 'nt' and len(set(c[0] for c in components if c)) > 1:
-                return ""  # Non c'è un percorso comune tra unità diverse
-            
-            common = []
-            for i in range(min(len(c) for c in components)):
-                if len(set(c[i] for c in components)) == 1:
-                    common.append(components[0][i])
-                else:
-                    break
-            
-            # Se non c'è un elemento comune, restituisci la radice/unità
-            if not common and os.name == 'nt' and components and components[0]:
-                return components[0][0] + os.path.sep  # es. "C:\"
-            elif not common:
-                return os.path.sep  # radice Unix "/"
-                
-            return os.path.sep.join(common)
-        
-        base_path = common_path(paths)
-        
-        # Se il percorso base finisce con un separatore, va bene
-        # altrimenti dobbiamo aggiungere il separatore se base_path non è vuoto
-        if base_path and not base_path.endswith(os.path.sep):
-            base_path = os.path.dirname(base_path)
-        
-        # Se non abbiamo trovato un percorso comune, usa il percorso di ricerca corrente
-        if not base_path and hasattr(self, 'search_path'):
-            base_path = self.search_path.get()
-        
-        return base_path
             
     def get_directory_size(self, path):
         """Calculate the total size of a directory"""
@@ -4954,7 +4899,7 @@ class FileSearchApp:
         """Mostra una finestra di dialogo unificata per tutte le opzioni avanzate"""
         dialog = ttk.Toplevel(self.root)
         dialog.title("Impostazioni avanzate")
-        dialog.geometry("800x900")
+        dialog.geometry("800x550")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -5049,7 +4994,7 @@ class FileSearchApp:
         
         # Lista dei percorsi esclusi
         list_frame = ttk.Frame(exclusions_frame)
-        list_frame.pack(fill=BOTH, expand=YES, pady=5)
+        list_frame.pack(fill=BOTH, expand=NO, pady=5)
         
         scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side=RIGHT, fill=Y)
@@ -5135,28 +5080,30 @@ class FileSearchApp:
         # ================= Scheda 5: Performance =================
         performance_frame = ttk.Frame(notebook, padding=15)
         notebook.add(performance_frame, text="Performance")
-        
+
         # Timeout e limiti
         timeout_frame = ttk.LabelFrame(performance_frame, text="Timeout e limiti", padding=10)
         timeout_frame.pack(fill=X, pady=10)
-        
-        timeout_check = ttk.Checkbutton(timeout_frame, text="Attiva timeout ricerca", variable=self.timeout_enabled)
-        timeout_check.pack(anchor=W, pady=2)
-        
+
+        # Rimuoviamo il posizionamento separato del checkbox e lo inseriamo direttamente nella griglia
         timeout_grid = ttk.Frame(timeout_frame)
         timeout_grid.pack(fill=X, pady=5)
-        
-        ttk.Label(timeout_grid, text="Secondi:").grid(row=0, column=0, sticky=W, padx=5, pady=2)
+
+        # Riga 0: Checkbox e secondi nella stessa riga
+        timeout_check = ttk.Checkbutton(timeout_grid, text="Attiva timeout ricerca", variable=self.timeout_enabled)
+        timeout_check.grid(row=0, column=0, sticky=W, padx=5, pady=2)
+
+        ttk.Label(timeout_grid, text="Secondi:").grid(row=0, column=1, sticky=W, padx=(55, 5), pady=2)
         timeout_spin = ttk.Spinbox(timeout_grid, from_=10, to=3600, width=5, textvariable=self.timeout_seconds)
-        timeout_spin.grid(row=0, column=1, padx=5, pady=2, sticky=W)
+        timeout_spin.grid(row=0, column=2, padx=5, pady=2, sticky=W)
         
         ttk.Label(timeout_grid, text="Max file da controllare:").grid(row=1, column=0, sticky=W, padx=5, pady=5)
         max_files = ttk.Spinbox(timeout_grid, from_=1000, to=10000000, width=8, textvariable=self.max_files_to_check)
         max_files.grid(row=1, column=1, padx=5, pady=5, sticky=W)
         
-        ttk.Label(timeout_grid, text="Max risultati:").grid(row=2, column=0, sticky=W, padx=5, pady=5)
+        ttk.Label(timeout_grid, text="Max risultati:").grid(row=1, column=2, sticky=W, padx=5, pady=5)
         max_results = ttk.Spinbox(timeout_grid, from_=500, to=100000, width=8, textvariable=self.max_results)
-        max_results.grid(row=2, column=1, padx=5, pady=5, sticky=W)
+        max_results.grid(row=1, column=3, padx=5, pady=5, sticky=W)
         
         # Processamento
         process_frame = ttk.LabelFrame(performance_frame, text="Processamento", padding=10)
@@ -5169,9 +5116,9 @@ class FileSearchApp:
         threads = ttk.Spinbox(process_grid, from_=1, to=16, width=3, textvariable=self.worker_threads)
         threads.grid(row=0, column=1, padx=5, pady=5, sticky=W)
         
-        ttk.Label(process_grid, text="Dimensione max file (MB):").grid(row=1, column=0, sticky=W, padx=5, pady=5)
+        ttk.Label(process_grid, text="Dimensione max file (MB):").grid(row=0, column=2, sticky=W, padx=5, pady=5)
         max_size = ttk.Spinbox(process_grid, from_=1, to=1000, width=5, textvariable=self.max_file_size_mb)
-        max_size.grid(row=1, column=1, padx=5, pady=5, sticky=W)
+        max_size.grid(row=0, column=3, padx=5, pady=5, sticky=W)
         
         # Calcolo dimensioni
         calc_frame = ttk.LabelFrame(performance_frame, text="Calcolo dimensioni", padding=10)
