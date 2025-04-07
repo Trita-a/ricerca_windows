@@ -10,7 +10,6 @@ import queue
 from datetime import datetime
 import getpass
 import csv
-# Importazioni che erano nel metodo import_non_essential_modules
 import shutil
 import zipfile
 import traceback
@@ -20,7 +19,6 @@ import mimetypes
 import signal
 import re
 import subprocess
-import odfdo  # Verified as installed by patch
 
 # Dizionario per tracciare il supporto alle librerie - sarà popolato in seguito
 file_format_support = {
@@ -34,7 +32,7 @@ missing_libraries = []
 class FileSearchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V9.2 Beta Forensics G.di F.")
+        self.root.title("File Search Tool V9.2.2 Beta Forensics G.di F.")
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
@@ -362,33 +360,47 @@ class FileSearchApp:
         check_module("pptx", "pptx", "python-pptx")
         check_module("openpyxl", "excel", "openpyxl")
         check_module("striprtf.striprtf", "rtf", "striprtf")
-        check_module("win32com.client", "doc", "pywin32")
-        check_module("win32com.client", "xls", "pywin32")
-        check_module("xlrd", "xls_native", "xlrd")
         
-        # Controlla supporto ODT con gestione di alternative
-        try:
-            import importlib
-            importlib.import_module("odfdo")
-            file_format_support["odt"] = True
-            self.log_debug("Supporto ODT attivato (libreria odfdo)")
-        except ImportError:
+        # Controlla win32com (per i formati legacy di Office)
+        if os.name == 'nt':  # Solo su Windows
             try:
-                from odf import opendocument
-                file_format_support["odt"] = True
-                self.log_debug("Supporto ODT attivato (libreria odf)")
+                import win32com.client
+                file_format_support["doc"] = True
+                file_format_support["xls"] = True
+                self.log_debug("Supporto formati legacy Office attivato (win32com)")
             except ImportError:
-                missing_libraries.append("odfdo")
-                self.log_debug("Supporto ODT non disponibile")
+                missing_libraries.append("pywin32")
+                self.log_debug("Supporto formati legacy Office non disponibile (manca pywin32)")
         
-        # Mostra notifica dopo un ritardo più lungo per non disturbare l'avvio
+        # Controlla xlrd come alternativa per i file XLS
+        try:
+            import xlrd
+            file_format_support["xls_native"] = True
+            if not file_format_support.get("xls", False):
+                file_format_support["xls"] = True
+            self.log_debug("Supporto XLS attivato (xlrd)")
+        except ImportError:
+            if not file_format_support.get("xls", False):
+                missing_libraries.append("xlrd")
+                self.log_debug("Supporto XLS via xlrd non disponibile")
+        
+        # Controlla supporto ODT con librerie alternative
+        try:
+            from odf import opendocument
+            file_format_support["odt"] = True
+            self.log_debug("Supporto ODT attivato (libreria odf)")
+        except ImportError:
+            missing_libraries.append("odf")
+            self.log_debug("Supporto ODT non disponibile")
+        
+        # Mostra notifica dopo un ritardo
         if missing_libraries:
             self.root.after(2000, self.check_and_notify_missing_libraries)
 
     def process_file(self, file_path, keywords, search_content=True):
         if self.stop_search:
             return None
-            
+                
         # Salta direttamente i file problematici
         if self.should_skip_file(file_path):
             return None
@@ -409,17 +421,18 @@ class FileSearchApp:
             worker_thread.start()
             
             # Attendi il completamento del thread con timeout ridotto
-            if os.path.splitext(file_path)[1].lower() in ['.doc', '.xls']:
-                # Timeout ridotto per file problematici
-                timeout_seconds = 5
-                self.log_debug(f"Utilizzo timeout ridotto (5s) per il file: {file_path}")
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext.lower() in ['.doc', '.xls', '.ppt']:
+                # Timeout maggiore per file legacy Office (potrebbero richiedere più tempo)
+                timeout_seconds = 15
+                self.log_debug(f"Utilizzo timeout esteso (15s) per il file Office legacy: {file_path}")
             else:
-                timeout_seconds = 20
+                timeout_seconds = 10
             worker_thread.join(timeout_seconds)
             
             # Verifica se il thread è ancora in esecuzione (timeout raggiunto)
             if not processing_completed[0]:
-                self.log_debug(f"Timeout nella elaborazione del file {file_path}")
+                self.log_debug(f"TIMEOUT nella elaborazione del file {file_path}")
                 # Non attendere più il thread, continua semplicemente
                 return None
                 
@@ -752,6 +765,22 @@ class FileSearchApp:
         if self.debug_mode:
             print(f"[DEBUG] {message}")
 
+    def log_file_processing(self, file_path, content_length=0, found=False, error=None):
+        """Log dettagliato dell'elaborazione dei file per debug"""
+        ext = os.path.splitext(file_path)[1].lower()
+        message = f"Elaborazione {ext}: {os.path.basename(file_path)}"
+        
+        if error:
+            message += f" | ERRORE: {str(error)}"
+        elif content_length > 0:
+            message += f" | Contenuto estratto: {content_length} caratteri"
+            if found:
+                message += " | TROVATO"
+        else:
+            message += " | Nessun contenuto estratto"
+            
+        self.log_debug(message)
+
     def check_and_notify_missing_libraries(self):
         """Verifica e notifica l'utente di eventuali librerie mancanti"""
         missing = []
@@ -766,9 +795,6 @@ class FileSearchApp:
             missing.append("openpyxl (per file Excel)")
         if not file_format_support["rtf"]:
             missing.append("striprtf (per file RTF)")
-        if not file_format_support["odt"]:
-            missing.append("odfdo (per file OpenDocument)")
-        
         if missing:
             message = "Alcune funzionalità di ricerca nei contenuti sono disabilitate.\n\n"
             message += "Per abilitare il supporto completo ai vari formati di file, installa le seguenti librerie:\n\n"
@@ -1886,13 +1912,10 @@ class FileSearchApp:
                     
         ext = os.path.splitext(file_path)[1].lower()
         
-        # .doc files are now enabled for search
-        if ext == '.doc' and file_format_support["doc"]:
-            self.log_debug(f"Analisi abilitata per file .doc: {file_path}")
+        # Attiva sempre la ricerca nei file Office, indipendentemente dal livello di ricerca
+        if ext in ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']:
+            self.log_debug(f"Analisi contenuto attivata per file Office: {os.path.basename(file_path)} ({ext})")
             return True
-        elif ext == '.doc' and not file_format_support["doc"]:
-            self.log_debug(f"File .doc non può essere analizzato: libreria win32com mancante")
-            return False
         
         # Seleziona il livello di ricerca attuale
         search_level = self.search_depth.get()
@@ -1902,8 +1925,7 @@ class FileSearchApp:
         
         # PRIORITÀ #1: Se l'estensione è stata aggiunta manualmente, cerca sempre il contenuto
         if ext in custom_extensions:
-            # Aggiungi log per debug
-            self.log_debug(f"Ricerca contenuto in file con estensione personalizzata: {ext} - {file_path}")
+            self.log_debug(f"Ricerca contenuto in file con estensione personalizzata: {ext}")
             return True
         
         # PRIORITÀ #2: In modalità profonda senza estensioni personalizzate, cerca tutto
@@ -1929,15 +1951,6 @@ class FileSearchApp:
         elif search_level == "profonda" and ext in deep_extensions:
             return True
         
-        # Verifica supporto formati specifici
-        if (ext == '.docx' and file_format_support["docx"]) or \
-        (ext == '.pdf' and file_format_support["pdf"]) or \
-        (ext in {'.pptx', '.ppt'} and file_format_support["pptx"]) or \
-        (ext in {'.xls', '.xlsx'} and file_format_support["excel"]) or \
-        (ext == '.rtf' and file_format_support["rtf"]) or \
-        (ext == '.odt' and file_format_support["odt"]):
-            return True
-                
         return False
 
     def should_skip_file(self, file_path):
@@ -2145,19 +2158,18 @@ class FileSearchApp:
             self.log_debug(f"Errore nella visualizzazione del log: {str(e)}")
 
     def get_file_content(self, file_path):
-        """Versione migliorata per caricare contenuti, inclusi file all'interno di archivi"""
+        """Estrae il contenuto testuale dai vari formati di file - versione migliorata"""
         try:
-            # Controlli preliminari (codice esistente)
+            # Controlli preliminari
             if self.should_skip_file(file_path):
                 return ""
                     
             ext = os.path.splitext(file_path)[1].lower()
-            search_level = self.search_depth.get()
             
-            # Ottieni le estensioni personalizzate dell'utente per questo livello
-            custom_extensions = self.get_extension_settings(search_level)
+            # Log per debug
+            self.log_debug(f"Tentativo estrazione contenuto da: {os.path.basename(file_path)} ({ext})")
             
-            # Gestione dimensione file (codice esistente)
+            # Controllo dimensione file
             try:
                 file_size = os.path.getsize(file_path)
                 if file_size > self.max_file_size_mb.get() * 1024 * 1024:
@@ -2167,178 +2179,407 @@ class FileSearchApp:
                 self.log_debug(f"Errore nel controllo dimensione del file {file_path}: {str(e)}")
                 return ""
             
-            # --- MIGLIORAMENTO: Gestione archivi per ricerca nei contenuti ---
-            if (search_level == "profonda" or ext in custom_extensions) and ext in ['.zip', '.rar', '.7z', '.tar', '.gz']:
-                all_content = []
-                found_data = False
-                
-                # Gestione archivi ZIP
-                if ext == '.zip':
-                    try:
-                        import zipfile
-                        import tempfile
-                        
-                        if not zipfile.is_zipfile(file_path):
-                            return f"File non valido: {os.path.basename(file_path)}"
-                        
-                        # Prepara le informazioni di base
-                        all_content.append(f"Archivio ZIP: {os.path.basename(file_path)}")
-                        
-                        # Crea una directory temporanea per l'estrazione
-                        with tempfile.TemporaryDirectory() as temp_dir:
-                            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                                # Includi solo i file che possiamo effettivamente analizzare
-                                supported_files = []
-                                for file_info in zip_ref.infolist():
-                                    # Salta directory e file troppo grandi
-                                    if file_info.filename.endswith('/') or file_info.file_size > 10 * 1024 * 1024:
-                                        continue
-                                    
-                                    # Estrai estensione
-                                    file_ext = os.path.splitext(file_info.filename)[1].lower()
-                                    
-                                    # Include il file se l'estensione è supportata o se è una ricerca profonda
-                                    if search_level == "profonda" or file_ext in custom_extensions:
-                                        supported_files.append(file_info)
-                                    elif file_ext in self.get_default_extensions(search_level):
-                                        supported_files.append(file_info)
-                                
-                                # Se ci sono troppi file, limita l'analisi
-                                if len(supported_files) > 20:
-                                    all_content.append(f"Archivio contiene {len(zip_ref.namelist())} file, analizzando i primi 20 per contenuto.")
-                                    supported_files = supported_files[:20]
-                                else:
-                                    all_content.append(f"Analisi del contenuto di {len(supported_files)} file supportati all'interno dell'archivio.")
-                                
-                                # Estrai e analizza i file supportati
-                                for file_info in supported_files:
-                                    try:
-                                        # Estrai solo questo file
-                                        zip_ref.extract(file_info.filename, temp_dir)
-                                        extracted_path = os.path.join(temp_dir, file_info.filename)
-                                        
-                                        # Verifica se il file esiste e non è una directory
-                                        if os.path.exists(extracted_path) and os.path.isfile(extracted_path):
-                                            # Leggi il contenuto del file estratto (usa funzioni esistenti)
-                                            file_ext = os.path.splitext(file_info.filename)[1].lower()
-                                            if file_ext in ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log']:
-                                                # Leggi il file di testo
-                                                try:
-                                                    with open(extracted_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                                        content = f.read(5000)  # Limita a 5000 caratteri
-                                                        if content.strip():
-                                                            all_content.append(f"File: {file_info.filename}")
-                                                            all_content.append(content[:1000] + "..." if len(content) > 1000 else content)
-                                                            found_data = True
-                                                except Exception as e:
-                                                    self.log_debug(f"Impossibile leggere {file_info.filename}: {str(e)}")
-                                            
-                                            # Per file docx/pdf/office dentro l'archivio
-                                            elif file_ext in ['.docx', '.pdf', '.xlsx', '.pptx'] and any(file_format_support[fmt] for fmt in ["docx", "pdf", "excel", "pptx"]):
-                                                # Usa il metodo appropriato per il tipo di file
-                                                doc_content = self._extract_specific_file_content(extracted_path)
-                                                if doc_content:
-                                                    all_content.append(f"File: {file_info.filename}")
-                                                    all_content.append(doc_content[:1000] + "..." if len(doc_content) > 1000 else doc_content)
-                                                    found_data = True
-                                            
-                                    except Exception as e:
-                                        self.log_debug(f"Errore nell'estrazione o lettura di {file_info.filename}: {str(e)}")
-                        
-                        # Se non è stato trovato nessun contenuto significativo, includi almeno la lista dei file
-                        if not found_data:
-                            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                                all_content.append(f"Lista dei file nell'archivio:")
-                                for name in zip_ref.namelist()[:30]:  # Limita a 30 nomi di file
-                                    all_content.append(f"- {name}")
-                        
-                        return "\n".join(all_content)
-                    except Exception as e:
-                        self.log_debug(f"Errore nell'analisi dell'archivio ZIP {file_path}: {str(e)}")
-                        return f"Errore nell'analisi dell'archivio: {os.path.basename(file_path)}"
-                
-                # Gestione archivi RAR con supporto contenuto
-                elif ext == '.rar':
-                    try:
-                        import rarfile
-                        import tempfile
-                        
-                        if not rarfile.is_rarfile(file_path):
-                            return f"File RAR non valido: {os.path.basename(file_path)}"
-                        
-                        all_content.append(f"Archivio RAR: {os.path.basename(file_path)}")
-                        
-                        with tempfile.TemporaryDirectory() as temp_dir:
-                            with rarfile.RarFile(file_path) as rf:
-                                # Filtra i file supportati
-                                supported_files = []
-                                for info in rf.infolist():
-                                    if info.isdir():
-                                        continue
-                                        
-                                    # Controlla l'estensione
-                                    file_ext = os.path.splitext(info.filename)[1].lower()
-                                    if search_level == "profonda" or file_ext in custom_extensions:
-                                        supported_files.append(info)
-                                    elif file_ext in self.get_default_extensions(search_level):
-                                        supported_files.append(info)
-                                
-                                # Limita il numero di file da estrarre
-                                if len(supported_files) > 20:
-                                    all_content.append(f"Archivio contiene {len(rf.infolist())} file, analizzando i primi 20 per contenuto.")
-                                    supported_files = supported_files[:20]
-                                
-                                # Estrai e analizza i file supportati
-                                for info in supported_files:
-                                    try:
-                                        rf.extract(info.filename, path=temp_dir)
-                                        extracted_path = os.path.join(temp_dir, info.filename)
-                                        
-                                        if os.path.exists(extracted_path) and os.path.isfile(extracted_path):
-                                            # Leggi il contenuto del file estratto
-                                            file_ext = os.path.splitext(info.filename)[1].lower()
-                                            if file_ext in ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log']:
-                                                with open(extracted_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                                    content = f.read(5000)
-                                                    if content.strip():
-                                                        all_content.append(f"File: {info.filename}")
-                                                        all_content.append(content[:1000] + "..." if len(content) > 1000 else content)
-                                                        found_data = True
-                                            
-                                            # Per file docx/pdf/office
-                                            elif file_ext in ['.docx', '.pdf', '.xlsx', '.pptx']:
-                                                doc_content = self._extract_specific_file_content(extracted_path)
-                                                if doc_content:
-                                                    all_content.append(f"File: {info.filename}")
-                                                    all_content.append(doc_content[:1000] + "..." if len(doc_content) > 1000 else doc_content)
-                                                    found_data = True
-                                    except Exception as e:
-                                        self.log_debug(f"Errore nell'estrazione o lettura di {info.filename}: {str(e)}")
-                                
-                                # Se non è stato trovato nessun contenuto, includi la lista dei file
-                                if not found_data:
-                                    all_content.append(f"Lista dei file nell'archivio:")
-                                    for name in [info.filename for info in rf.infolist()][:30]:
-                                        all_content.append(f"- {name}")
-                        
-                        return "\n".join(all_content)
+            # Word DOCX
+            if ext == '.docx':
+                try:
+                    import docx
+                    self.log_debug(f"Processando file DOCX: {file_path}")
+                    doc = docx.Document(file_path)
+                    content = []
+                    for paragraph in doc.paragraphs:
+                        if paragraph.text.strip():
+                            content.append(paragraph.text)
                     
+                    # Estrai anche il testo dalle tabelle
+                    for table in doc.tables:
+                        for row in table.rows:
+                            row_text = []
+                            for cell in row.cells:
+                                if cell.text.strip():
+                                    row_text.append(cell.text.strip())
+                            if row_text:
+                                content.append(" | ".join(row_text))
+                    
+                    result = '\n'.join(content)
+                    self.log_debug(f"Estratti {len(result)} caratteri da DOCX")
+                    return result
+                except ImportError:
+                    self.log_debug("Libreria python-docx non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file DOCX {file_path}: {str(e)}")
+                    return ""
+            
+            # Word DOC (vecchio formato)
+            elif ext == '.doc':
+                try:
+                    # Prova prima con pywin32 (solo Windows)
+                    if os.name == 'nt':
+                        self.log_debug("Tentativo di estrazione da DOC con win32com...")
+                        try:
+                            import win32com.client
+                            import pythoncom
+                            
+                            # Inizializzazione necessaria per i thread
+                            pythoncom.CoInitialize()
+                            
+                            try:
+                                word = win32com.client.Dispatch("Word.Application")
+                                word.Visible = False
+                                word.DisplayAlerts = False
+                                
+                                # Apri il documento in modalità sola lettura
+                                doc = word.Documents.Open(os.path.abspath(file_path), ReadOnly=True)
+                                text = doc.Content.Text
+                                doc.Close(SaveChanges=False)
+                                word.Quit()
+                                
+                                pythoncom.CoUninitialize()
+                                
+                                if text:
+                                    self.log_debug(f"Estratti {len(text)} caratteri da DOC")
+                                    return text
+                                else:
+                                    self.log_debug("Nessun testo estratto dal file DOC")
+                                    return ""
+                            except Exception as e:
+                                self.log_debug(f"Errore nell'apertura del DOC con win32com: {str(e)}")
+                                # Cleanup in caso di errore
+                                try:
+                                    if 'doc' in locals() and doc:
+                                        doc.Close(SaveChanges=False)
+                                    if 'word' in locals() and word:
+                                        word.Quit()
+                                except:
+                                    pass
+                                
+                                pythoncom.CoUninitialize()
+                                return ""
+                        except ImportError:
+                            self.log_debug("win32com non disponibile per i file DOC")
+                            return ""
+                    else:
+                        self.log_debug("Estrazione da DOC non supportata su questa piattaforma")
+                        return ""
+                except Exception as e:
+                    self.log_debug(f"Errore generale nell'elaborazione del file DOC {file_path}: {str(e)}")
+                    return ""
+            
+            # Excel XLSX
+            elif ext == '.xlsx':
+                try:
+                    import openpyxl
+                    self.log_debug(f"Processando file XLSX: {file_path}")
+                    
+                    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+                    texts = []
+                    
+                    for sheet_name in wb.sheetnames:
+                        sheet = wb[sheet_name]
+                        sheet_texts = []
+                        
+                        # Prima verifica il range utilizzato
+                        max_row = min(sheet.max_row, 500) if sheet.max_row else 0
+                        max_col = min(sheet.max_column, 50) if sheet.max_column else 0
+                        
+                        if max_row > 0 and max_col > 0:
+                            # Utilizza openpyxl 2.6+ con la sintassi più efficiente
+                            try:
+                                # Estrazione di righe specifiche
+                                for row_idx in range(1, max_row + 1):
+                                    row_values = []
+                                    for col_idx in range(1, max_col + 1):
+                                        cell = sheet.cell(row=row_idx, column=col_idx)
+                                        if cell.value:
+                                            row_values.append(str(cell.value))
+                                    
+                                    if row_values:
+                                        sheet_texts.append(" ".join(row_values))
+                            except Exception as e:
+                                self.log_debug(f"Errore nell'iterazione del foglio {sheet_name}: {str(e)}")
+                        
+                        if sheet_texts:
+                            texts.append(f"--- Foglio: {sheet_name} ---")
+                            texts.append("\n".join(sheet_texts))
+                    
+                    result = "\n".join(texts)
+                    self.log_debug(f"Estratti {len(result)} caratteri da XLSX")
+                    return result
+                    
+                except ImportError:
+                    self.log_debug("Libreria openpyxl non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file XLSX {file_path}: {str(e)}")
+                    return ""
+            
+            # Excel XLS (vecchio formato)
+            elif ext == '.xls':
+                try:
+                    # Prima prova con xlrd
+                    try:
+                        import xlrd
+                        self.log_debug(f"Processando file XLS con xlrd: {file_path}")
+                        
+                        book = xlrd.open_workbook(file_path, on_demand=True)
+                        texts = []
+                        
+                        for sheet_idx in range(book.nsheets):
+                            sheet = book.sheet_by_index(sheet_idx)
+                            sheet_texts = []
+                            
+                            # Limite a 500 righe per prestazioni
+                            for row_idx in range(min(sheet.nrows, 500)):
+                                row_values = sheet.row_values(row_idx)
+                                row_texts = [str(value) for value in row_values if value]
+                                if row_texts:
+                                    sheet_texts.append(" ".join(row_texts))
+                            
+                            if sheet_texts:
+                                texts.append(f"--- Foglio: {sheet.name} ---")
+                                texts.append("\n".join(sheet_texts))
+                        
+                        book.release_resources()
+                        result = "\n".join(texts)
+                        self.log_debug(f"Estratti {len(result)} caratteri da XLS")
+                        return result
+                        
                     except ImportError:
-                        return f"Archivio RAR: {os.path.basename(file_path)}\nInstalla rarfile per vedere il contenuto"
-                    except Exception as e:
-                        self.log_debug(f"Errore nell'analisi dell'archivio RAR: {str(e)}")
-                        return f"Errore nell'analisi dell'archivio RAR: {os.path.basename(file_path)}"
-                
-                # Altri tipi di archivi supportati (7z, tar, gz, ecc.)
+                        # Fallback a pywin32 se disponibile e su Windows
+                        if os.name == 'nt':
+                            try:
+                                import win32com.client
+                                import pythoncom
+                                
+                                # Inizializzazione necessaria per i thread
+                                pythoncom.CoInitialize()
+                                
+                                self.log_debug("Processando file XLS con win32com")
+                                
+                                try:
+                                    excel = win32com.client.Dispatch("Excel.Application")
+                                    excel.Visible = False
+                                    excel.DisplayAlerts = False
+                                    
+                                    workbook = excel.Workbooks.Open(os.path.abspath(file_path), ReadOnly=True)
+                                    texts = []
+                                    
+                                    for i in range(1, workbook.Sheets.Count + 1):
+                                        sheet = workbook.Sheets(i)
+                                        texts.append(f"--- Foglio: {sheet.Name} ---")
+                                        
+                                        # Verifica se c'è un range utilizzato
+                                        if sheet.UsedRange and sheet.UsedRange.Cells.Count > 0:
+                                            used_range = sheet.UsedRange
+                                            row_count = min(used_range.Rows.Count, 500)
+                                            col_count = min(used_range.Columns.Count, 50)
+                                            
+                                            for row_idx in range(1, row_count + 1):
+                                                row_texts = []
+                                                for col_idx in range(1, col_count + 1):
+                                                    cell_value = used_range.Cells(row_idx, col_idx).Value
+                                                    if cell_value:
+                                                        row_texts.append(str(cell_value))
+                                                
+                                                if row_texts:
+                                                    texts.append(" ".join(row_texts))
+                                    
+                                    workbook.Close(False)
+                                    excel.Quit()
+                                    
+                                    pythoncom.CoUninitialize()
+                                    
+                                    result = "\n".join(texts)
+                                    self.log_debug(f"Estratti {len(result)} caratteri da XLS con win32com")
+                                    return result
+                                    
+                                except Exception as e:
+                                    self.log_debug(f"Errore nell'apertura dell'XLS con win32com: {str(e)}")
+                                    
+                                    # Cleanup in caso di errore
+                                    try:
+                                        if 'workbook' in locals() and workbook:
+                                            workbook.Close(False)
+                                        if 'excel' in locals() and excel:
+                                            excel.Quit()
+                                    except:
+                                        pass
+                                    
+                                    pythoncom.CoUninitialize()
+                                    return ""
+                                    
+                            except ImportError:
+                                self.log_debug("Nessuna libreria disponibile per i file XLS")
+                                return ""
+                        else:
+                            self.log_debug("Nessuna libreria disponibile per i file XLS su questa piattaforma")
+                            return ""
+                            
+                except Exception as e:
+                    self.log_debug(f"Errore generale nell'elaborazione del file XLS {file_path}: {str(e)}")
+                    return ""
+            
+            # PowerPoint PPTX
+            elif ext == '.pptx':
+                try:
+                    import pptx
+                    self.log_debug(f"Processando file PPTX: {file_path}")
+                    
+                    presentation = pptx.Presentation(file_path)
+                    texts = []
+                    
+                    for i, slide in enumerate(presentation.slides):
+                        slide_text = []
+                        texts.append(f"--- Diapositiva {i+1} ---")
+                        
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text") and shape.text:
+                                slide_text.append(shape.text)
+                        
+                        if slide_text:
+                            texts.append("\n".join(slide_text))
+                    
+                    result = "\n".join(texts)
+                    self.log_debug(f"Estratti {len(result)} caratteri da PPTX")
+                    return result
+                    
+                except ImportError:
+                    self.log_debug("Libreria python-pptx non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file PPTX {file_path}: {str(e)}")
+                    return ""
+            
+            # PowerPoint PPT (vecchio formato)
+            elif ext == '.ppt':
+                # Su Windows, prova con pywin32
+                if os.name == 'nt':
+                    try:
+                        import win32com.client
+                        import pythoncom
+                        
+                        # Inizializzazione necessaria per i thread
+                        pythoncom.CoInitialize()
+                        
+                        self.log_debug(f"Processando file PPT: {file_path}")
+                        
+                        try:
+                            powerpoint = win32com.client.Dispatch("PowerPoint.Application")
+                            powerpoint.Visible = False
+                            
+                            presentation = powerpoint.Presentations.Open(os.path.abspath(file_path), WithWindow=False)
+                            texts = []
+                            
+                            for slide_idx in range(1, presentation.Slides.Count + 1):
+                                slide = presentation.Slides.Item(slide_idx)
+                                texts.append(f"--- Diapositiva {slide_idx} ---")
+                                slide_text = []
+                                
+                                for shape_idx in range(1, slide.Shapes.Count + 1):
+                                    shape = slide.Shapes.Item(shape_idx)
+                                    if shape.HasTextFrame:
+                                        if shape.TextFrame.HasText:
+                                            slide_text.append(shape.TextFrame.TextRange.Text)
+                                
+                                if slide_text:
+                                    texts.append("\n".join(slide_text))
+                            
+                            presentation.Close()
+                            powerpoint.Quit()
+                            
+                            pythoncom.CoUninitialize()
+                            
+                            result = "\n".join(texts)
+                            self.log_debug(f"Estratti {len(result)} caratteri da PPT")
+                            return result
+                            
+                        except Exception as e:
+                            self.log_debug(f"Errore nell'apertura del PPT con win32com: {str(e)}")
+                            
+                            # Cleanup in caso di errore
+                            try:
+                                if 'presentation' in locals() and presentation:
+                                    presentation.Close()
+                                if 'powerpoint' in locals() and powerpoint:
+                                    powerpoint.Quit()
+                            except:
+                                pass
+                            
+                            pythoncom.CoUninitialize()
+                            return ""
+                            
+                    except ImportError:
+                        self.log_debug("win32com non disponibile per i file PPT")
+                        return ""
                 else:
-                    # Per ora mostra solo le informazioni base
-                    return f"Archivio {ext}: {os.path.basename(file_path)}\nL'analisi del contenuto non è ancora disponibile per questo formato"
+                    self.log_debug("Estrazione di testo dai file PPT non supportata su questa piattaforma")
+                    return ""
             
-            # --- Il resto del codice esistente per altri tipi di file --- 
-            # Mantieni tutto il resto del metodo come è
+            # Testo semplice
+            elif ext in ['.txt', '.csv', '.log', '.ini', '.xml', '.json', '.md', '.html', '.htm']:
+                try:
+                    # Apri con diverse codifiche per essere robusto
+                    encodings = ['utf-8', 'latin-1', 'windows-1252']
+                    content = ""
+                    
+                    for encoding in encodings:
+                        try:
+                            with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                                content = f.read(1024*1024)  # Leggi al massimo 1 MB
+                                break
+                        except UnicodeDecodeError:
+                            continue
+                        except Exception as e:
+                            self.log_debug(f"Errore con codifica {encoding}: {str(e)}")
+                    
+                    if content:
+                        self.log_debug(f"Estratti {len(content)} caratteri da file di testo")
+                        return content
+                    else:
+                        self.log_debug("Nessun contenuto estratto dal file di testo")
+                        return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura del file di testo {file_path}: {str(e)}")
+                    return ""
             
-            return ""  # Formato non supportato o livello di ricerca insufficiente
-                
+            # PDF (aggiunto per completezza)
+            elif ext == '.pdf':
+                try:
+                    import PyPDF2
+                    self.log_debug(f"Processando file PDF: {file_path}")
+                    
+                    content = []
+                    with open(file_path, 'rb') as f:
+                        try:
+                            reader = PyPDF2.PdfReader(f)
+                            num_pages = min(len(reader.pages), 50)  # Limita a 50 pagine
+                            
+                            for page_num in range(num_pages):
+                                try:
+                                    page_text = reader.pages[page_num].extract_text()
+                                    if page_text and page_text.strip():
+                                        content.append(f"--- Pagina {page_num+1} ---")
+                                        content.append(page_text)
+                                except Exception as e:
+                                    self.log_debug(f"Errore nell'estrazione testo pagina {page_num}: {str(e)}")
+                        except Exception as e:
+                            self.log_debug(f"Errore nell'apertura del PDF: {str(e)}")
+                    
+                    result = "\n".join(content)
+                    self.log_debug(f"Estratti {len(result)} caratteri da PDF")
+                    return result
+                    
+                except ImportError:
+                    self.log_debug("Libreria PyPDF2 non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nella lettura del file PDF: {str(e)}")
+                    return ""
+            
+            # Formato non supportato o non gestito
+            self.log_debug(f"Formato {ext} non supportato per estrazione contenuto")
+            return ""
+            
         except Exception as e:
             self.log_debug(f"Errore generale nella lettura del file {file_path}: {str(e)}")
             return ""
@@ -4483,8 +4724,11 @@ class FileSearchApp:
     def get_default_extensions(self, mode="base"):
         """Get default extensions for the specified search mode"""
         if mode == "base":
-            return ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
-                    '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
+            return [
+                '.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
+                '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls', 
+                '.rtf', '.odt', '.ods', '.odp'  # Aggiunte più estensioni Office e OpenDocument
+            ]
         elif mode == "avanzata":
             # Prima ottieni le estensioni base
             base_exts = self.get_default_extensions("base")
@@ -4511,12 +4755,15 @@ class FileSearchApp:
                 '.epub', '.tex', '.rst',
                 
                 # File web
-                '.css', '.less', '.scss', '.jsp', '.asp', '.aspx'
+                '.css', '.less', '.scss', '.jsp', '.asp', '.aspx',
+                
+                # Altri formati Office meno comuni
+                '.dot', '.dotx', '.xlt', '.xltx', '.pot', '.potx', '.ppsx'
             ]
             
             # Combina le liste evitando duplicati
             return base_exts + [ext for ext in advanced_only if ext not in base_exts]
-        else:  # profonda - usa un metodo diverso per ottenere tutte le estensioni
+        else:  # profonda
             return []  # Il valore effettivo viene determinato in configure_extensions
         
     def get_extension_settings(self, mode="base"):
@@ -4636,6 +4883,27 @@ class FileSearchApp:
         # 2. Titolo al centro
         title_frame = ttk.Frame(header_frame)
         title_frame.pack(side=LEFT, expand=True)
+
+        try:
+            # Usa PIL per il supporto di più formati e il ridimensionamento
+            from PIL import Image, ImageTk
+            
+            # Sostituisci 'logo.png' con il percorso della tua immagine
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            image_path = os.path.join(current_dir, "logo.png")
+            
+            # Carica e ridimensiona l'immagine (modifica le dimensioni secondo necessità)
+            original_image = Image.open(image_path)
+            resized_image = original_image.resize((64, 64))  # Ridimensiona a 32x32 pixel
+            self.logo_image = ImageTk.PhotoImage(resized_image)
+            
+            # Crea un label per l'immagine
+            logo_label = ttk.Label(title_frame, image=self.logo_image)
+            logo_label.pack(side=LEFT, padx=(0, 10))  # Aggiunge spazio a destra dell'immagine
+        except Exception as e:
+            # Gestisce il caso in cui l'immagine non possa essere caricata
+            self.log_debug(f"Impossibile caricare l'immagine del logo: {str(e)}")
+            logo_label = None
 
         title_label = ttk.Label(title_frame, text="File Search Tool.. Forensics G.di F.", 
                             font=("Helvetica", 14, "bold"))
@@ -5501,7 +5769,7 @@ def create_splash_screen(parent):
     frame = ttk.Frame(splash_win, padding=20)
     frame.pack(fill=tk.BOTH, expand=tk.YES)
     
-    ttk.Label(frame, text="File Search Tool V9.2 Beta", 
+    ttk.Label(frame, text="File Search Tool V9.2.2 Beta", 
             font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
     ttk.Label(frame, text="Forensics G.di F.", 
             font=("Helvetica", 14)).pack(pady=(0, 20))
@@ -5512,6 +5780,7 @@ def create_splash_screen(parent):
     progress.start(10)
     
     return splash_win
+
 if __name__ == "__main__":
     try:
         main()
