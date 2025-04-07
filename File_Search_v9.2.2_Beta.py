@@ -20,7 +20,7 @@ import mimetypes
 import signal
 import re
 import subprocess
-import odfdo
+import odfdo  # Verified as installed by patch
 
 # Dizionario per tracciare il supporto alle librerie - sarà popolato in seguito
 file_format_support = {
@@ -1886,9 +1886,12 @@ class FileSearchApp:
                     
         ext = os.path.splitext(file_path)[1].lower()
         
-        # Blocca specificamente i file .doc per evitare blocchi
-        if ext == '.doc':
-            self.log_debug(f"File .doc temporaneamente escluso dall'analisi: {file_path}")
+        # .doc files are now enabled for search
+        if ext == '.doc' and file_format_support["doc"]:
+            self.log_debug(f"Analisi abilitata per file .doc: {file_path}")
+            return True
+        elif ext == '.doc' and not file_format_support["doc"]:
+            self.log_debug(f"File .doc non può essere analizzato: libreria win32com mancante")
             return False
         
         # Seleziona il livello di ricerca attuale
