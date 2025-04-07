@@ -3283,7 +3283,7 @@ class FileSearchApp:
 
         ttk.Label(frame, text="Scegli il tipo di compressione:").pack(anchor=tk.W, pady=(0,10))
 
-        comp_var = tk.StringVar(value="standard")
+        comp_var = tk.StringVar(value="nessuna")
         preserve_var = tk.BooleanVar(value=True)  # Nuova opzione per preservare la struttura
 
         ttk.Radiobutton(frame, text="Nessuna (solo archiviazione)", 
