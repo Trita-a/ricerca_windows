@@ -56,11 +56,11 @@ Agiunta libreria psutil È uno strumento di monitoraggio e diagnostica molto pot
 8.7.5
 miglioramenti nelle funzioni
 9.1 Beta
-Agginta nella compressione la creazione dell'alberatura dei file trovati con l'opzione di creazione della struttura
-Aggiunto log dei file non compressi per qualche ragione come permessi negati
+Aggiunta nella compressione la creazione dell'alberatura dei file trovati con l'opzione di creazione della struttura
+Aggiunto i log dei file non compressi per qualche ragione, es. permessi negati
 9.2 Beta
 Corretto errore ricerca negli archivi
 Opzioni di performance spostati dentro una finetra con pulsante dedicato
 9.2.1
-Modifica dell'interfaccia Utente
-Inserio ordinamento delle colonne dopo la ricerca nella treeview
+Modifica dell'interfaccia Utente per renderla più fruibile
+Inserito l'ordinamento delle colonne dopo la ricerca nella treeview
