@@ -3295,7 +3295,24 @@ class FileSearchApp:
         ttk.Radiobutton(frame, text="Massima (compressione ottimale, più lenta) Liv.9", 
                     variable=comp_var, value="massima").pack(anchor=tk.W)
 
+        # Frame per le opzioni di hash
+        hash_frame = ttk.LabelFrame(frame, text="Calcolo hash del file ZIP")
+        hash_frame.pack(fill=tk.X, pady=(10,5))
+
+        ttk.Label(hash_frame, text="Seleziona gli algoritmi di hash da calcolare sul file compresso:").pack(anchor=tk.W, pady=(5,5))
+
+        # Variabili per gli algoritmi di hash
+        hash_md5 = tk.BooleanVar(value=True)
+        hash_sha1 = tk.BooleanVar(value=False)
+        hash_sha256 = tk.BooleanVar(value=False)
+
+        # Checkbox per gli algoritmi
+        ttk.Checkbutton(hash_frame, text="MD5 (più veloce)", variable=hash_md5).pack(anchor=tk.W, padx=20)
+        ttk.Checkbutton(hash_frame, text="SHA1", variable=hash_sha1).pack(anchor=tk.W, padx=20)
+        ttk.Checkbutton(hash_frame, text="SHA256 (più sicuro)", variable=hash_sha256).pack(anchor=tk.W, padx=20)
+
         ttk.Label(frame, text="\nOpzioni struttura:", font=("", 9, "bold")).pack(anchor=tk.W, pady=(10,5))
+
         ttk.Checkbutton(frame, text="Preserva la struttura delle directory", 
                     variable=preserve_var).pack(anchor=tk.W)
         ttk.Label(frame, text="Se attivato, mantiene l'alberatura originale delle cartelle", 
@@ -3320,6 +3337,16 @@ class FileSearchApp:
             result["option"] = comp_var.get()
             result["chunks"] = use_chunks.get()
             result["preserve"] = preserve_var.get()
+            
+            # Aggiungi gli algoritmi selezionati
+            result["hash_algorithms"] = []
+            if hash_md5.get():
+                result["hash_algorithms"].append("md5")
+            if hash_sha1.get():
+                result["hash_algorithms"].append("sha1")
+            if hash_sha256.get():
+                result["hash_algorithms"].append("sha256")
+                
             compression_dialog.destroy()
 
         ttk.Button(btn_frame, text="Annulla", command=on_cancel).pack(side=tk.LEFT)
@@ -3750,12 +3777,52 @@ class FileSearchApp:
                     # Aggiungi il file CSV degli omonimi all'archivio
                     zipf.writestr("omonimi_log.csv", omonimi_csv_data)
 
+            # Verifica se ci sono algoritmi di hash selezionati
+            hash_algorithms = result.get("hash_algorithms", [])
+            hash_results = {}
+            hash_success = False
+
+            # Calcola gli hash del file ZIP se richiesto
+            if hash_algorithms:
+                try:
+                    self.status_label["text"] = f"Calcolo hash del file ZIP..."
+                    self.root.update_idletasks()
+                    
+                    # Calcola gli hash sul file ZIP
+                    hash_results = self.calculate_file_hash(zip_path, hash_algorithms)
+                    hash_success = True
+                    
+                    # Crea un file di report per gli hash
+                    hash_report_path = os.path.splitext(zip_path)[0] + "_hash.txt"
+                    with open(hash_report_path, 'w', encoding='utf-8') as hash_file:
+                        hash_file.write(f"REPORT HASH PER IL FILE: {os.path.basename(zip_path)}\n")
+                        hash_file.write(f"Data e ora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
+                        hash_file.write(f"Utente: {self.current_user}\n\n")
+                        
+                        for algorithm in hash_algorithms:
+                            hash_value = hash_results.get(algorithm, "Errore")
+                            hash_file.write(f"{algorithm.upper()}: {hash_value}\n")
+                
+                except Exception as e:
+                    self.log_debug(f"Errore nel calcolo hash del file ZIP: {str(e)}")
+
             # Prepara il messaggio di completamento
             skipped_files = len(single_files) - len(filtered_single_files)
             message = f"Compressione completata!\nFile salvato in: {zip_path}\n"
             message += f"File organizzati nella cartella '{main_folder_name}'\n"
             message += f"Tipo di compressione utilizzata: {compression_text}\n"
             
+            # Aggiungi informazioni sugli hash calcolati
+            if hash_algorithms:
+                if hash_success:
+                    message += f"\nHash calcolati sul file ZIP:\n"
+                    for algorithm in hash_algorithms:
+                        hash_value = hash_results.get(algorithm, "Errore")
+                        message += f"{algorithm.upper()}: {hash_value}\n"
+                    message += f"\nI dettagli sono stati salvati in: {os.path.basename(hash_report_path)}"
+                else:
+                    message += f"\nErrore nel calcolo degli hash richiesti."
+
             if result["preserve"]:
                 message += f"Struttura delle directory originali: Preservata\n"
             else:
@@ -4128,6 +4195,46 @@ class FileSearchApp:
             return f"{size_bytes / (1024 * 1024):.2f} MB"
         else:
             return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+    
+    def calculate_file_hash(self, file_path, algorithms=None):
+        """Calcola gli hash di un file usando gli algoritmi specificati :param file_path: Percorso del file
+        :param algorithms: Lista degli algoritmi da usare ('md5', 'sha1', 'sha256'):return: Dizionario con gli hash calcolati"""
+        import hashlib
+        
+        if algorithms is None:
+            algorithms = ['md5']
+        
+        results = {}
+        
+        try:
+            for algorithm in algorithms:
+                if algorithm == 'md5':
+                    hash_obj = hashlib.md5()
+                elif algorithm == 'sha1':
+                    hash_obj = hashlib.sha1()
+                elif algorithm == 'sha256':
+                    hash_obj = hashlib.sha256()
+                else:
+                    continue
+                    
+                # Leggi il file in blocchi per gestire file di grandi dimensioni
+                with open(file_path, 'rb') as f:
+                    for chunk in iter(lambda: f.read(4096), b''):
+                        hash_obj.update(chunk)
+                    
+                results[algorithm] = hash_obj.hexdigest()
+                
+                # Log per debug
+                self.log_debug(f"Calcolato {algorithm} per {os.path.basename(file_path)}: {results[algorithm]}")
+                
+        except Exception as e:
+            self.log_debug(f"Errore nel calcolo hash {algorithm} per {file_path}: {str(e)}")
+            # In caso di errore, restituisci None per quell'algoritmo
+            for algorithm in algorithms:
+                if algorithm not in results:
+                    results[algorithm] = "Errore"
+        
+        return results
 
     # Funzione helper per determinare il tipo di file
     def _get_file_type(self, file_path):
@@ -4894,7 +5001,7 @@ class FileSearchApp:
             
             # Carica e ridimensiona l'immagine (modifica le dimensioni secondo necessità)
             original_image = Image.open(image_path)
-            resized_image = original_image.resize((64, 64))  # Ridimensiona a 32x32 pixel
+            resized_image = original_image.resize((128, 128))  # Ridimensiona a 32x32 pixel
             self.logo_image = ImageTk.PhotoImage(resized_image)
             
             # Crea un label per l'immagine
