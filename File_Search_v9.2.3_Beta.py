@@ -1187,10 +1187,14 @@ class FileSearchApp:
         return directories
 
     def start_search(self):
+        # Reset the total files size label at the start of a new search
+        if hasattr(self, 'total_files_size_label'):
+            self.total_files_size_label.config(text="Dimensione totale: 0 B (0 file)")
+        
         # Pulisci risultati precedenti
         for item in self.results_list.get_children():
             self.results_list.delete(item)
-    
+        
         # Ottieni i valori direttamente dai widget
         search_path = self.search_path.get().strip()
         keywords = self.keyword_entry.get().strip()
@@ -3050,7 +3054,9 @@ class FileSearchApp:
             # Testo semplice
             elif ext in ['.txt', '.csv', '.log', '.ini', '.xml', '.json', '.md', '.html', '.htm',
                         '.py', '.js', '.java', '.cpp', '.c', '.cs', '.php', '.rb', '.go', '.swift', 
-                        '.sql', '.sh', '.bat', '.ps1', '.vbs', '.pl', '.ts', '.kt', '.scala']:
+                        '.sql', '.sh', '.bat', '.ps1', '.vbs', '.pl', '.ts', '.kt', '.scala',
+                        '.h', '.hpp', '.vb', '.lua', '.rs', '.groovy', '.yml', '.yaml', '.toml',
+                        '.properties', '.conf', '.config', '.cfg', '.reg']:
                 try:
                     # Apri con diverse codifiche per essere robusto
                     encodings = ['utf-8', 'latin-1', 'windows-1252']
@@ -3108,6 +3114,301 @@ class FileSearchApp:
                     return ""
                 except Exception as e:
                     self.log_debug(f"Errore nella lettura del file PDF: {str(e)}")
+                    return ""
+            
+            # ===== EMAIL E CALENDARIO =====
+            # File Email (.eml)
+            elif ext == '.eml':
+                try:
+                    self.log_debug(f"Processando file Email: {file_path}")
+                    import email
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        msg = email.message_from_file(f)
+                        content_parts = []
+                        
+                        # Estrai intestazioni
+                        for header in ['From', 'To', 'Subject', 'Date']:
+                            if msg[header]:
+                                content_parts.append(f"{header}: {msg[header]}")
+                        
+                        # Estrai corpo del messaggio
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                content_type = part.get_content_type()
+                                if content_type == "text/plain":
+                                    payload = part.get_payload(decode=True)
+                                    if payload:
+                                        content_parts.append(payload.decode('utf-8', errors='replace'))
+                        else:
+                            payload = msg.get_payload(decode=True)
+                            if payload:
+                                content_parts.append(payload.decode('utf-8', errors='replace'))
+                        
+                        content = "\n".join(content_parts)
+                        self.log_debug(f"Estratti {len(content)} caratteri da EML")
+                        return content
+                except ImportError:
+                    self.log_debug("Modulo email non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file EML {file_path}: {str(e)}")
+                    return ""
+
+            # File vCard (.vcf)
+            elif ext == '.vcf':
+                try:
+                    self.log_debug(f"Processando file vCard: {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        # Estrai campi più importanti per la ricerca
+                        processed_content = []
+                        for line in content.splitlines():
+                            if line.startswith(('FN:', 'N:', 'EMAIL:', 'TEL:', 'ADR:', 'ORG:', 'TITLE:', 'NOTE:')):
+                                processed_content.append(line)
+                        
+                        result = "\n".join(processed_content)
+                        self.log_debug(f"Estratti {len(result)} caratteri da vCard")
+                        return result
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file vCard {file_path}: {str(e)}")
+                    return ""
+
+            # File iCalendar (.ics)
+            elif ext == '.ics':
+                try:
+                    self.log_debug(f"Processando file iCalendar: {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        # Estrai campi più importanti per la ricerca
+                        processed_content = []
+                        current_event = []
+                        in_event = False
+                        
+                        for line in content.splitlines():
+                            line = line.strip()
+                            if line == "BEGIN:VEVENT":
+                                in_event = True
+                                current_event = []
+                            elif line == "END:VEVENT":
+                                in_event = False
+                                processed_content.append("\n".join(current_event))
+                                processed_content.append("---")
+                            elif in_event and line.startswith(('SUMMARY:', 'DESCRIPTION:', 'LOCATION:', 
+                                                            'ORGANIZER:', 'ATTENDEE:', 'DTSTART:', 
+                                                            'DTEND:', 'CATEGORIES:')):
+                                current_event.append(line)
+                        
+                        result = "\n".join(processed_content)
+                        self.log_debug(f"Estratti {len(result)} caratteri da iCalendar")
+                        return result
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file iCalendar {file_path}: {str(e)}")
+                    return ""
+
+            # ===== PRESENTAZIONI =====
+            # File PowerPoint Show (.pps)
+            elif ext == '.pps':
+                try:
+                    # Utilizziamo la stessa implementazione di PPT dato che hanno lo stesso formato
+                    if os.name == 'nt':
+                        import win32com.client
+                        import pythoncom
+                        
+                        # Inizializzazione necessaria per i thread
+                        pythoncom.CoInitialize()
+                        
+                        self.log_debug(f"Processando file PowerPoint Show: {file_path}")
+                        
+                        try:
+                            powerpoint = win32com.client.Dispatch("PowerPoint.Application")
+                            powerpoint.Visible = False
+                            
+                            presentation = powerpoint.Presentations.Open(os.path.abspath(file_path), WithWindow=False)
+                            texts = []
+                            
+                            for slide_idx in range(1, presentation.Slides.Count + 1):
+                                slide = presentation.Slides.Item(slide_idx)
+                                texts.append(f"--- Diapositiva {slide_idx} ---")
+                                slide_text = []
+                                
+                                for shape_idx in range(1, slide.Shapes.Count + 1):
+                                    shape = slide.Shapes.Item(shape_idx)
+                                    if shape.HasTextFrame:
+                                        if shape.TextFrame.HasText:
+                                            slide_text.append(shape.TextFrame.TextRange.Text)
+                                
+                                if slide_text:
+                                    texts.append("\n".join(slide_text))
+                            
+                            presentation.Close()
+                            powerpoint.Quit()
+                            
+                            pythoncom.CoUninitialize()
+                            
+                            result = "\n".join(texts)
+                            self.log_debug(f"Estratti {len(result)} caratteri da PPS")
+                            return result
+                            
+                        except Exception as e:
+                            self.log_debug(f"Errore nell'apertura del PPS con win32com: {str(e)}")
+                            
+                            # Cleanup in caso di errore
+                            try:
+                                if 'presentation' in locals() and presentation:
+                                    presentation.Close()
+                                if 'powerpoint' in locals() and powerpoint:
+                                    powerpoint.Quit()
+                            except:
+                                pass
+                            
+                            pythoncom.CoUninitialize()
+                            return ""
+                    else:
+                        self.log_debug("Estrazione di testo dai file PPS non supportata su questa piattaforma")
+                        return ""
+                except ImportError:
+                    self.log_debug("win32com non disponibile per i file PPS")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore generale nell'elaborazione del file PPS {file_path}: {str(e)}")
+                    return ""
+
+            # File Keynote (.key)
+            elif ext == '.key':
+                try:
+                    self.log_debug(f"Processando file Keynote: {file_path}")
+                    # Keynote è essenzialmente un pacchetto compresso con file XML all'interno
+                    if not zipfile.is_zipfile(file_path):
+                        self.log_debug(f"File Keynote non valido (non è un file zip): {file_path}")
+                        return ""
+                        
+                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                        content_parts = []
+                        
+                        # Cerca file di testo nel pacchetto Keynote
+                        for file_info in zip_ref.infolist():
+                            if file_info.filename.endswith(('.xml', '.txt')):
+                                try:
+                                    with zip_ref.open(file_info) as content_file:
+                                        content = content_file.read().decode('utf-8', errors='replace')
+                                        # Estrai solo il testo dalle presentazioni, rimuovendo i tag
+                                        import re
+                                        text_content = re.sub(r'<[^>]+>', ' ', content)
+                                        text_content = re.sub(r'\s+', ' ', text_content).strip()
+                                        if text_content:
+                                            content_parts.append(text_content)
+                                except:
+                                    continue
+                                    
+                        result = "\n".join(content_parts)
+                        self.log_debug(f"Estratti {len(result)} caratteri da Keynote")
+                        return result
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file Keynote {file_path}: {str(e)}")
+                    return ""
+
+            # ===== FILE DI CONFIGURAZIONE =====
+            # File YAML (.yml, .yaml)
+            elif ext in ['.yml', '.yaml']:
+                try:
+                    self.log_debug(f"Processando file YAML: {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        self.log_debug(f"Estratti {len(content)} caratteri da YAML")
+                        return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file YAML {file_path}: {str(e)}")
+                    return ""
+
+            # File TOML (.toml)
+            elif ext == '.toml':
+                try:
+                    self.log_debug(f"Processando file TOML: {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        self.log_debug(f"Estratti {len(content)} caratteri da TOML")
+                        return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file TOML {file_path}: {str(e)}")
+                    return ""
+
+            # File Registry Windows (.reg)
+            elif ext == '.reg':
+                try:
+                    self.log_debug(f"Processando file Registry: {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        self.log_debug(f"Estratti {len(content)} caratteri da Registry")
+                        return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file Registry {file_path}: {str(e)}")
+                    return ""
+
+            # File plist (.plist)
+            elif ext == '.plist':
+                try:
+                    self.log_debug(f"Processando file Property List: {file_path}")
+                    # Prova a leggere come XML
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        # Rimuovi i tag XML per estrarre solo il testo
+                        import re
+                        text_content = re.sub(r'<[^>]+>', ' ', content)
+                        text_content = re.sub(r'\s+', ' ', text_content).strip()
+                        self.log_debug(f"Estratti {len(text_content)} caratteri da plist")
+                        return text_content
+                except UnicodeDecodeError:
+                    try:
+                        # Potrebbe essere un file plist binario
+                        self.log_debug("Tentativo di lettura come plist binario")
+                        with open(file_path, 'rb') as f:
+                            content = f.read().decode('latin-1', errors='replace')
+                            # Estrai stringhe leggibili
+                            printable = ''.join(c for c in content if c.isprintable() and len(c.strip()) > 0)
+                            self.log_debug(f"Estratti {len(printable)} caratteri da plist binario")
+                            return printable
+                    except Exception as inner_e:
+                        self.log_debug(f"Errore nella lettura del plist binario: {str(inner_e)}")
+                        return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file plist {file_path}: {str(e)}")
+                    return ""
+
+            # File Properties (.properties)
+            elif ext == '.properties':
+                try:
+                    self.log_debug(f"Processando file Properties: {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        self.log_debug(f"Estratti {len(content)} caratteri da Properties")
+                        return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file Properties {file_path}: {str(e)}")
+                    return ""
+
+            # File htaccess (.htaccess)
+            elif file_path.endswith('.htaccess'):
+                try:
+                    self.log_debug(f"Processando file htaccess: {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        self.log_debug(f"Estratti {len(content)} caratteri da htaccess")
+                        return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file htaccess {file_path}: {str(e)}")
+                    return ""
+
+            # ===== LINGUAGGI DI PROGRAMMAZIONE =====
+            # I vari linguaggi di programmazione possono usare lo stesso parser di testo
+            elif ext in ['.h', '.hpp', '.vb', '.lua', '.rs', '.groovy']:
+                try:
+                    self.log_debug(f"Processando file di codice {ext}: {file_path}")
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        self.log_debug(f"Estratti {len(content)} caratteri da file {ext}")
+                        return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file {ext} {file_path}: {str(e)}")
                     return ""
             
             # Formato non supportato o non gestito
@@ -3172,6 +3473,9 @@ class FileSearchApp:
                             # Aggiorna la lista dei risultati
                             self.update_results_list()
                             
+                            # Aggiorna esplicitamente la dimensione totale dei file trovati
+                            self.update_total_files_size()
+
                             # Aggiorna l'orario di fine e il tempo totale
                             current_time = datetime.now().strftime('%H:%M')
                             if hasattr(self, 'end_time_label') and self.end_time_label.winfo_exists():
@@ -3277,6 +3581,9 @@ class FileSearchApp:
         self.end_time_label.config(text=current_time)
         self.update_total_time()
         
+         # Assicurati che la dimensione totale sia aggiornata
+        self.update_total_files_size()
+
         # Chiusura più decisa dell'executor
         if hasattr(self, 'search_executor') and self.search_executor:
             try:
@@ -3344,41 +3651,55 @@ class FileSearchApp:
         # Aggiorna la dimensione totale dei file trovati
         self.update_total_files_size()
 
-        def update_total_files_size(self):
-            """Calcola e aggiorna la dimensione totale dei file trovati"""
+       
+    def update_total_files_size(self):
+        """Calcola e aggiorna la dimensione totale dei file trovati"""
+        try:
             total_size = 0
             file_count = 0
             
+            # Output debug info
+            self.log_debug(f"Calculating total size for {len(self.search_results)} results")
+            
             # Calcola la dimensione totale dai risultati
             for result in self.search_results:
-                item_type, _, size_str, _, _, _ = result
-                
-                # Conta solo i file, non le directory
-                if item_type != "Directory":
-                    file_count += 1
+                try:
+                    item_type, _, size_str, _, _, _ = result
                     
-                    # Estrai il valore numerico dalla stringa della dimensione
-                    try:
-                        if 'KB' in size_str:
-                            size_value = float(size_str.split()[0]) * 1024
-                        elif 'MB' in size_str:
-                            size_value = float(size_str.split()[0]) * 1024 * 1024
-                        elif 'GB' in size_str:
-                            size_value = float(size_str.split()[0]) * 1024 * 1024 * 1024
-                        else:
-                            # Assume B or other unit
-                            size_value = float(size_str.split()[0])
+                    # Conta solo i file, non le directory
+                    if item_type != "Directory":
+                        file_count += 1
                         
-                        total_size += size_value
-                    except:
-                        # Skip if can't parse the size
-                        pass
+                        # Estrai il valore numerico dalla stringa della dimensione
+                        if size_str and isinstance(size_str, str):
+                            if 'KB' in size_str:
+                                size_value = float(size_str.split()[0]) * 1024
+                            elif 'MB' in size_str:
+                                size_value = float(size_str.split()[0]) * 1024 * 1024
+                            elif 'GB' in size_str:
+                                size_value = float(size_str.split()[0]) * 1024 * 1024 * 1024
+                            else:
+                                # Assume B or other unit
+                                size_value = float(size_str.split()[0])
+                            
+                            total_size += size_value
+                except Exception as e:
+                    self.log_debug(f"Error processing file size: {str(e)}")
+                    continue
             
             # Formatta la dimensione totale
             formatted_size = self._format_size(total_size)
             
             # Aggiorna il label con la dimensione totale e il numero di file
-            self.total_files_size_label.config(text=f"Dimensione totale: {formatted_size} ({file_count} file)")
+            if hasattr(self, 'total_files_size_label') and self.total_files_size_label.winfo_exists():
+                new_text = f"Dimensione totale: {formatted_size} ({file_count} file)"
+                self.log_debug(f"Updating size label to: {new_text}")
+                self.total_files_size_label.config(text=new_text)
+                
+                # Forza aggiornamento dell'interfaccia
+                self.root.update_idletasks()
+        except Exception as e:
+            self.log_debug(f"Error in update_total_files_size: {str(e)}")
 
     def update_theme_colors(self, theme="light"):
         """Aggiorna i colori del tema per evidenziare cartelle e file"""
