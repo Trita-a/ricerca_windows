@@ -3701,6 +3701,44 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Error in update_total_files_size: {str(e)}")
 
+    def update_selected_files_size(self, event=None):
+        """Calcola e visualizza la dimensione totale dei file selezionati"""
+        selected_items = self.results_list.selection()
+        
+        total_size = 0
+        file_count = 0
+        
+        for item in selected_items:
+            values = self.results_list.item(item)['values']
+            # Verifica che sia un file (non una directory)
+            if values and values[0] != "Directory":
+                file_count += 1
+                size_str = values[2]  # La dimensione è nella terza colonna (indice 2)
+                
+                # Estrai il valore numerico dalla stringa della dimensione
+                if size_str and isinstance(size_str, str):
+                    try:
+                        if 'KB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024
+                        elif 'MB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024 * 1024
+                        elif 'GB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024 * 1024 * 1024
+                        else:
+                            # Assume B o altra unità
+                            size_value = float(size_str.split()[0])
+                        
+                        total_size += size_value
+                    except:
+                        pass  # Ignora errori di parsing
+        
+        # Formatta la dimensione e aggiorna l'etichetta
+        if file_count > 0:
+            formatted_size = self._format_size(total_size)
+            self.selected_files_size_label.config(text=f"Selezionati: {formatted_size} ({file_count} file)")
+        else:
+            self.selected_files_size_label.config(text="Selezionati: 0 (0 file)")
+
     def update_theme_colors(self, theme="light"):
         """Aggiorna i colori del tema per evidenziare cartelle e file"""
         style = ttk.Style()
@@ -6091,9 +6129,21 @@ class FileSearchApp:
         deselect_all_btn.pack(side=LEFT, padx=2)
         self.create_tooltip(deselect_all_btn, "Deseleziona tutti i risultati")
 
-        # Nuovo label per mostrare la dimensione totale dei file trovati (sostituisce il pulsante "Inverti selezione")
-        self.total_files_size_label = ttk.Label(selection_frame, text="Dimensione totale: 0 B", font=("", 9, "bold"))
+        # Crea frame centrale che si espande per riempire lo spazio disponibile
+        center_frame = ttk.Frame(actions_frame)
+        center_frame.pack(side=LEFT, fill=X, expand=YES)
+
+        # Creiamo un sotto-frame per contenere entrambi i label affiancati
+        labels_frame = ttk.Frame(center_frame)
+        labels_frame.pack(anchor=CENTER)
+
+        # Label per la dimensione totale (esistente)
+        self.total_files_size_label = ttk.Label(labels_frame, text="Dimensione totale: 0  (0 file)", font=("", 9, "bold"))
         self.total_files_size_label.pack(side=LEFT, padx=10)
+
+        # NUOVO: Label per la dimensione dei file selezionati
+        self.selected_files_size_label = ttk.Label(labels_frame, text="Selezionati: 0  (0 file)", font=("", 9, "bold"))
+        self.selected_files_size_label.pack(side=LEFT, padx=10)
 
         # Pulsanti per le azioni
         action_frame = ttk.Frame(actions_frame)
@@ -6174,6 +6224,9 @@ class FileSearchApp:
 
         # Aggiungi binding per l'evento di doppio clic
         self.results_list.bind("<Double-1>", self.open_file_location)
+
+        # Aggiungi binding per l'evento di selezione
+        self.results_list.bind("<<TreeviewSelect>>", self.update_selected_files_size)
 
         # Applica stili alle righe
         self.update_theme_colors()
