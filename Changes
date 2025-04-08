@@ -68,3 +68,22 @@ Inserito l'ordinamento delle colonne dopo la ricerca nella treeview
 Aggiunto logo
 Eliminata libreria odfdo e migliorata la ricerca dei file base
 Aggiunto calcolo algoritmo forense MD5, SHA1, SHA256
+Estensioni supportate alla ricerca
+File Office moderni: .docx, .xlsx, .pptx
+File Office legacy: .doc, .xls, .ppt (tramite win32com su Windows)
+File PDF: .pdf (tramite PyPDF2)
+File di testo: .txt, .csv, .log, .ini, .xml, .json, .md, .html, .htm
+.rtf (Rich Text Format)
+.odt (OpenDocument Text)
+.ods (OpenDocument Spreadsheet)
+.odp (OpenDocument Presentation)
+.epub
+.mobi
+.tex (LaTeX)
+.rst (reStructuredText)
+.db, .sqlite, .sqlite3
+.mdb, .accdb (Access)
+.odb (OpenOffice Database)
+.tsv (Tab-Separated Values)
+.dbf (dBase format)
+.dif (Data Interchange Format)
