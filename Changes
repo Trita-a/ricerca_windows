@@ -78,6 +78,9 @@ Estensioni supportate alla ricerca
 .rst - reStructuredText (estrazione con regex)
 .epub - E-book EPUB (tramite ebooklib e BeautifulSoup)
 .mobi - E-book Mobi (tramite libreria mobi)
+.vcf
+.ics
+.eml - processa anche i file allegati
 2. Fogli di Calcolo 
 .xlsx - Excel moderno (tramite openpyxl)
 .xls - Excel vecchio formato (tramite xlrd o win32com.client)
