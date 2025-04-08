@@ -3075,7 +3075,277 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nella lettura del file di testo {file_path}: {str(e)}")
                     return ""
-            
+                
+            # vCard (.vcf)
+            elif ext == '.vcf':
+                try:
+                    self.log_debug(f"Processando file vCard: {file_path}")
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        
+                    # Estrazione dei campi principali di vCard
+                    vcf_data = []
+                    
+                    # Estrazione dei campi comuni
+                    import re
+                    name_match = re.search(r'FN:(.*?)(?:\r\n|\n)', content)
+                    if name_match:
+                        vcf_data.append(f"Nome completo: {name_match.group(1)}")
+                        
+                    org_match = re.search(r'ORG:(.*?)(?:\r\n|\n)', content)
+                    if org_match:
+                        vcf_data.append(f"Organizzazione: {org_match.group(1)}")
+                        
+                    title_match = re.search(r'TITLE:(.*?)(?:\r\n|\n)', content)
+                    if title_match:
+                        vcf_data.append(f"Titolo: {title_match.group(1)}")
+                        
+                    # Estrai email
+                    email_matches = re.findall(r'EMAIL[^:]*:(.*?)(?:\r\n|\n)', content)
+                    for i, email in enumerate(email_matches):
+                        vcf_data.append(f"Email {i+1}: {email}")
+                        
+                    # Estrai telefono
+                    tel_matches = re.findall(r'TEL[^:]*:(.*?)(?:\r\n|\n)', content)
+                    for i, tel in enumerate(tel_matches):
+                        vcf_data.append(f"Telefono {i+1}: {tel}")
+                        
+                    # Estrai indirizzi
+                    adr_matches = re.findall(r'ADR[^:]*:(.*?)(?:\r\n|\n)', content)
+                    for i, adr in enumerate(adr_matches):
+                        vcf_data.append(f"Indirizzo {i+1}: {adr}")
+                        
+                    # Aggiungi anche il contenuto grezzo per la ricerca di testo completa
+                    result = "\n".join(vcf_data) + "\n\nContenuto completo:\n" + content
+                    self.log_debug(f"Estratti {len(result)} caratteri da vCard")
+                    return result
+                    
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file vCard {file_path}: {str(e)}")
+                    return ""
+
+            # iCalendar (.ics)
+            elif ext == '.ics':
+                try:
+                    self.log_debug(f"Processando file iCalendar: {file_path}")
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        
+                    # Estrazione delle informazioni dagli eventi calendario
+                    import re
+                    events = []
+                    
+                    # Trova tutti gli eventi
+                    event_blocks = re.findall(r'BEGIN:VEVENT(.*?)END:VEVENT', content, re.DOTALL)
+                    
+                    for event_block in event_blocks:
+                        event_data = []
+                        
+                        # Estrai il sommario/titolo
+                        summary_match = re.search(r'SUMMARY:(.*?)(?:\r\n|\n)', event_block)
+                        if summary_match:
+                            event_data.append(f"Titolo: {summary_match.group(1)}")
+                            
+                        # Estrai la location
+                        location_match = re.search(r'LOCATION:(.*?)(?:\r\n|\n)', event_block)
+                        if location_match:
+                            event_data.append(f"Luogo: {location_match.group(1)}")
+                            
+                        # Estrai le date
+                        start_match = re.search(r'DTSTART[^:]*:(.*?)(?:\r\n|\n)', event_block)
+                        if start_match:
+                            event_data.append(f"Inizio: {start_match.group(1)}")
+                            
+                        end_match = re.search(r'DTEND[^:]*:(.*?)(?:\r\n|\n)', event_block)
+                        if end_match:
+                            event_data.append(f"Fine: {end_match.group(1)}")
+                            
+                        # Estrai la descrizione
+                        description_match = re.search(r'DESCRIPTION:(.*?)(?:(?:\r\n|\n)(?:[^ ]|$))', event_block, re.DOTALL)
+                        if description_match:
+                            desc = description_match.group(1).replace('\\n', '\n').replace('\\,', ',')
+                            event_data.append(f"Descrizione: {desc}")
+                        
+                        if event_data:
+                            events.append("--- Evento ---\n" + "\n".join(event_data))
+                    
+                    # Combina tutti i dati degli eventi e aggiungi il contenuto completo
+                    result = "\n\n".join(events) + "\n\nContenuto completo:\n" + content
+                    self.log_debug(f"Estratti {len(result)} caratteri da iCalendar con {len(events)} eventi")
+                    return result
+                    
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file iCalendar {file_path}: {str(e)}")
+                    return ""
+
+            # Email (.eml)
+            elif ext == '.eml':
+                try:
+                    self.log_debug(f"Processando file Email: {file_path}")
+                    
+                    import email
+                    from email.header import decode_header
+                    
+                    with open(file_path, 'rb') as f:
+                        msg = email.message_from_binary_file(f)
+                    
+                    # Funzione per decodificare correttamente l'intestazione
+                    def decode_header_part(header):
+                        if header is None:
+                            return ""
+                        decoded_parts = decode_header(header)
+                        result = ""
+                        for part, encoding in decoded_parts:
+                            if isinstance(part, bytes):
+                                try:
+                                    if encoding is not None:
+                                        result += part.decode(encoding)
+                                    else:
+                                        result += part.decode('utf-8', errors='replace')
+                                except:
+                                    result += part.decode('latin-1', errors='replace')
+                            else:
+                                result += part
+                        return result
+                    
+                    # Estrai le intestazioni principali
+                    email_data = []
+                    email_data.append(f"Da: {decode_header_part(msg.get('From'))}")
+                    email_data.append(f"A: {decode_header_part(msg.get('To'))}")
+                    email_data.append(f"Oggetto: {decode_header_part(msg.get('Subject'))}")
+                    email_data.append(f"Data: {decode_header_part(msg.get('Date'))}")
+                    
+                    # Estrai il corpo dell'email
+                    body = ""
+                    
+                    if msg.is_multipart():
+                        # Se l'email è multipart, cerchiamo il testo
+                        for part in msg.walk():
+                            content_type = part.get_content_type()
+                            content_disposition = str(part.get("Content-Disposition"))
+                            
+                            # Estrai solo le parti di testo, non gli allegati
+                            if content_type == "text/plain" and "attachment" not in content_disposition:
+                                payload = part.get_payload(decode=True)
+                                charset = part.get_content_charset()
+                                
+                                if charset:
+                                    try:
+                                        body += payload.decode(charset)
+                                    except:
+                                        body += payload.decode('utf-8', errors='replace')
+                                else:
+                                    body += payload.decode('utf-8', errors='replace')
+                                    
+                            elif content_type == "text/html" and not body and "attachment" not in content_disposition:
+                                # Se non abbiamo trovato testo plaintext, usiamo l'HTML
+                                payload = part.get_payload(decode=True)
+                                charset = part.get_content_charset()
+                                
+                                if charset:
+                                    try:
+                                        html_body = payload.decode(charset)
+                                    except:
+                                        html_body = payload.decode('utf-8', errors='replace')
+                                else:
+                                    html_body = payload.decode('utf-8', errors='replace')
+                                
+                                # Estrai solo il testo dall'HTML se possibile
+                                try:
+                                    from bs4 import BeautifulSoup
+                                    soup = BeautifulSoup(html_body, 'html.parser')
+                                    body += soup.get_text()
+                                except:
+                                    # Se BeautifulSoup non è disponibile, usa il contenuto HTML
+                                    body += html_body
+                    else:
+                        # Email non multipart
+                        payload = msg.get_payload(decode=True)
+                        charset = msg.get_content_charset()
+                        
+                        if charset:
+                            try:
+                                body = payload.decode(charset)
+                            except:
+                                body = payload.decode('utf-8', errors='replace')
+                        else:
+                            body = payload.decode('utf-8', errors='replace')
+                    
+                    email_data.append("\n--- Contenuto Email ---\n")
+                    email_data.append(body)
+                
+                    # Aggiunta di questa sezione per processare gli allegati
+                    email_data.append("\n--- Allegati ---\n")
+                    
+                    import tempfile
+                    import os
+
+                    # Cartella temporanea per gli allegati
+                    temp_dir = tempfile.mkdtemp()
+                    attachment_texts = []
+
+                    try:
+                        # Conta gli allegati processati
+                        attachments_count = 0
+                        
+                        # Cerca gli allegati
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                if part.get_content_maintype() == 'multipart':
+                                    continue
+                                    
+                                # Controlla se è un allegato
+                                if part.get('Content-Disposition') and 'attachment' in part.get('Content-Disposition'):
+                                    filename = part.get_filename()
+                                    if not filename:
+                                        # Se non c'è nome file, usa un nome generico
+                                        filename = f"allegato_{attachments_count}"
+                                    
+                                    # Percorso temporaneo del file
+                                    temp_path = os.path.join(temp_dir, filename)
+                                    
+                                    # Salva l'allegato
+                                    with open(temp_path, 'wb') as tmp:
+                                        tmp.write(part.get_payload(decode=True))
+                                    
+                                    # Verifica se l'estensione è supportata
+                                    ext = os.path.splitext(filename)[1].lower()
+                                    attachment_texts.append(f"Allegato: {filename}")
+                                    
+                                    # Estrai testo se l'estensione è supportata
+                                    attachment_content = self.get_file_content(temp_path)
+                                    if attachment_content:
+                                        # Limita la dimensione del contenuto estratto per evitare risultati troppo grandi
+                                        if len(attachment_content) > 1000:
+                                            short_content = attachment_content[:1000] + "... [contenuto troncato]"
+                                        else:
+                                            short_content = attachment_content
+                                        
+                                        attachment_texts.append(short_content)
+                                        attachments_count += 1
+                        
+                        # Aggiungi i testi estratti dagli allegati
+                        if attachment_texts:
+                            email_data.append("\n".join(attachment_texts))
+                        else:
+                            email_data.append("Nessun allegato processabile trovato")
+                        
+                    finally:
+                        # Pulizia: elimina i file temporanei
+                        import shutil
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    # FINE DEL CODICE PER GLI ALLEGATI
+                    
+                    result = "\n".join(email_data)
+                    self.log_debug(f"Estratti {len(result)} caratteri da Email")
+                    return result
+                    
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file Email {file_path}: {str(e)}")
+                    return ""
+
             # PDF (aggiunto per completezza)
             elif ext == '.pdf':
                 try:
@@ -3509,7 +3779,70 @@ class FileSearchApp:
             
         # Aggiorna lo stato
         self.status_label["text"] = f"Trovati {len(self.search_results)} risultati"
+
+        # Aggiorna la dimensione totale dei file trovati
+        self.update_total_files_size()
+
+    def update_results_list(self):
+        """Aggiorna la lista dei risultati con i risultati trovati"""
+        # Pulisci la lista attuale
+        for item in self.results_list.get_children():
+            self.results_list.delete(item)
+            
+        # Aggiungi i risultati alla lista
+        for result in self.search_results:
+            item_type, name, size, modified, created, path = result
+            
+            # Applica stile in base al tipo di elemento
+            if item_type == "Directory":
+                tags = ("directory",)
+            else:
+                tags = ("file",)
+                
+            self.results_list.insert("", "end", values=result, tags=tags)
+            
+        # Aggiorna lo stato
+        self.status_label["text"] = f"Trovati {len(self.search_results)} risultati"
         
+        # Aggiorna la dimensione totale dei file trovati
+        self.update_total_files_size()
+
+        def update_total_files_size(self):
+            """Calcola e aggiorna la dimensione totale dei file trovati"""
+            total_size = 0
+            file_count = 0
+            
+            # Calcola la dimensione totale dai risultati
+            for result in self.search_results:
+                item_type, _, size_str, _, _, _ = result
+                
+                # Conta solo i file, non le directory
+                if item_type != "Directory":
+                    file_count += 1
+                    
+                    # Estrai il valore numerico dalla stringa della dimensione
+                    try:
+                        if 'KB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024
+                        elif 'MB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024 * 1024
+                        elif 'GB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024 * 1024 * 1024
+                        else:
+                            # Assume B or other unit
+                            size_value = float(size_str.split()[0])
+                        
+                        total_size += size_value
+                    except:
+                        # Skip if can't parse the size
+                        pass
+            
+            # Formatta la dimensione totale
+            formatted_size = self._format_size(total_size)
+            
+            # Aggiorna il label con la dimensione totale e il numero di file
+            self.total_files_size_label.config(text=f"Dimensione totale: {formatted_size} ({file_count} file)")
+
     def update_theme_colors(self, theme="light"):
         """Aggiorna i colori del tema per evidenziare cartelle e file"""
         style = ttk.Style()
@@ -5208,7 +5541,10 @@ class FileSearchApp:
                 (".tex", "LaTeX"),
                 (".rst", "reStructuredText"),
                 (".epub", "E-book EPUB"),
-                (".mobi", "E-book Mobi")
+                (".mobi", "E-book Mobi"),
+                (".vcf", "vCard"),
+                (".ics", "iCalendar"),
+                (".eml", "Email")
             ],
             "Fogli calcolo": [
                 (".xls", "Excel vecchio"),
@@ -5491,7 +5827,7 @@ class FileSearchApp:
             return [
                 '.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                 '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls', 
-                '.rtf', '.odt', '.ods', '.odp'  # Aggiunte più estensioni Office e OpenDocument
+                '.rtf', '.odt', '.ods', '.odp', '.vcf', '.ics', '.eml'   # Aggiunte più estensioni Office e OpenDocument
             ]
         elif mode == "avanzata":
             # Prima ottieni le estensioni base
@@ -5633,20 +5969,9 @@ class FileSearchApp:
         header_frame.pack(fill=X)
 
         # Layout a tre colonne in una singola riga
-        # 1. Tema a sinistra
-        theme_frame = ttk.Frame(header_frame)
-        theme_frame.pack(side=LEFT, fill=Y)
-
-        ttk.Label(theme_frame, text="Tema:").pack(side=LEFT)
-        themes = ttk.Style().theme_names()
-        self.theme_combobox = ttk.Combobox(theme_frame, values=themes, width=15)
-        self.theme_combobox.pack(side=LEFT, padx=5)
-        self.theme_combobox.current(themes.index("darkly"))
-        self.theme_combobox.bind("<<ComboboxSelected>>", lambda e: [ttk.Style().theme_use(self.theme_combobox.get()),self.update_theme_colors()])
-
-        # 2. Titolo al centro
+        # 1. Titolo e icona a sinistra
         title_frame = ttk.Frame(header_frame)
-        title_frame.pack(side=LEFT, expand=True)
+        title_frame.pack(side=LEFT, fill=Y)
 
         try:
             # Usa PIL per il supporto di più formati e il ridimensionamento
@@ -5656,24 +5981,43 @@ class FileSearchApp:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             image_path = os.path.join(current_dir, "logo.png")
             
-            # Carica e ridimensiona l'immagine (modifica le dimensioni secondo necessità)
+            # Carica e ridimensiona l'immagine
             original_image = Image.open(image_path)
-            resized_image = original_image.resize((84, 84))  # Ridimensiona a 32x32 pixel
+            resized_image = original_image.resize((84, 84))
             self.logo_image = ImageTk.PhotoImage(resized_image)
             
             # Crea un label per l'immagine
             logo_label = ttk.Label(title_frame, image=self.logo_image)
-            logo_label.pack(side=LEFT, padx=(0, 10))  # Aggiunge spazio a destra dell'immagine
+            logo_label.pack(side=LEFT, padx=(0, 10))
         except Exception as e:
-            # Gestisce il caso in cui l'immagine non possa essere caricata
             self.log_debug(f"Impossibile caricare l'immagine del logo: {str(e)}")
             logo_label = None
 
-        title_label = ttk.Label(title_frame, text="File Search Tool.. Forensics G.di F.", 
-                            font=("Helvetica", 14, "bold"))
-        title_label.pack(anchor=CENTER)
+        # Container per titolo e nome impilati verticalmente
+        title_text_container = ttk.Frame(title_frame)
+        title_text_container.pack(side=LEFT)
 
-        # 3. Data/ora e utente a destra
+        title_label = ttk.Label(title_text_container, text="File Search Tool.. Forensics G.di F.", 
+                            font=("Helvetica", 14, "bold"))
+        title_label.pack(anchor=W)
+
+        # Aggiunta del testo "Antonino" sotto il titolo
+        antonino_label = ttk.Label(title_text_container, text="Aps Sc QS Antonino Tessio", 
+                            font=("Helvetica", 12))
+        antonino_label.pack(anchor=W)
+
+        # 2. Tema al centro
+        theme_frame = ttk.Frame(header_frame)
+        theme_frame.pack(side=LEFT, expand=True, fill=Y)
+
+        ttk.Label(theme_frame, text="Tema:").pack(side=LEFT)
+        themes = ttk.Style().theme_names()
+        self.theme_combobox = ttk.Combobox(theme_frame, values=themes, width=15)
+        self.theme_combobox.pack(side=LEFT, padx=5)
+        self.theme_combobox.current(themes.index("darkly"))
+        self.theme_combobox.bind("<<ComboboxSelected>>", lambda e: [ttk.Style().theme_use(self.theme_combobox.get()),self.update_theme_colors()])
+
+        # 3. Data/ora e utente a destra - rimane invariato
         datetime_frame = ttk.Frame(header_frame)
         datetime_frame.pack(side=RIGHT, fill=Y)
 
@@ -5721,60 +6065,62 @@ class FileSearchApp:
         # ------------------------------------------------------
         options_frame = ttk.Frame(controls_frame)
         options_frame.pack(fill=X, pady=5)
-                  
-        ttk.Label(options_frame, text="Livelli di ricerca:").pack(side=LEFT, padx=(0, 5))
-        search_depth_combo = ttk.Combobox(options_frame, textvariable=self.search_depth, 
+
+        # Prima parte: Livelli di ricerca
+        search_options = ttk.Frame(options_frame)
+        search_options.pack(side=LEFT, fill=Y)
+
+        ttk.Label(search_options, text="Livelli di ricerca:").pack(side=LEFT, padx=(0, 5))
+        search_depth_combo = ttk.Combobox(search_options, textvariable=self.search_depth, 
                                         values=["base", "avanzata", "profonda"], 
                                         width=10, state="readonly")
         search_depth_combo.pack(side=LEFT, padx=5)
         search_depth_combo.current(0)
 
-        extensions_btn = ttk.Button(options_frame, text="Configura estensioni", 
-                    command=lambda: self.configure_extensions(self.search_depth.get()))
+        extensions_btn = ttk.Button(search_options, text="Configura estensioni", 
+                            command=lambda: self.configure_extensions(self.search_depth.get()))
         extensions_btn.pack(side=LEFT, padx=5)
         self.create_tooltip(extensions_btn, "Configura quali estensioni di file includere nella ricerca")
-        
-        # NUOVO: pulsante impostazioni avanzate che apre una finestra con tutte le opzioni
-        advanced_options_btn = ttk.Button(options_frame, text="Impostazioni avanzate", 
-                                    command=self.show_advanced_options)
+
+        # Pulsante impostazioni avanzate
+        advanced_options_btn = ttk.Button(search_options, text="Impostazioni avanzate", 
+                                        command=self.show_advanced_options)
         advanced_options_btn.pack(side=LEFT, padx=10)
         self.create_tooltip(advanced_options_btn, "Configura tutte le impostazioni avanzate (profondità, filtri, esclusioni, performance)")
-        
-        # ------------------------------------------------------
-        # RIGA 4: Pulsanti di azione
-        # ------------------------------------------------------
-        button_frame = ttk.Frame(controls_frame)
-        button_frame.pack(fill=X, pady=(10, 5))
-        
-        # Frame per centrare i pulsanti
-        center_frame = ttk.Frame(button_frame)
-        center_frame.pack(side=TOP)
-        
+
+        # Separatore per creare più spazio
+        separator = ttk.Frame(options_frame, width=30)
+        separator.pack(side=LEFT)
+
+        # Pulsanti di azione (spostati qui dopo lo spazio)
+        action_buttons = ttk.Frame(options_frame)
+        action_buttons.pack(side=LEFT, fill=Y)
+
         # Pulsante di ricerca (principale)
-        self.search_button = ttk.Button(center_frame, text="CERCA", 
+        self.search_button = ttk.Button(action_buttons, text="CERCA", 
                                     command=self.start_search, 
                                     style="primary.TButton", width=15)
         self.search_button.pack(side=LEFT, padx=10)
         self.create_tooltip(self.search_button, "Avvia la ricerca con i criteri specificati")
-        
+
         # Pulsante per interrompere la ricerca
-        self.stop_button = ttk.Button(center_frame, text="Interrompi ricerca",
+        self.stop_button = ttk.Button(action_buttons, text="Interrompi ricerca",
                                     command=self.stop_search_process,
                                     style="danger.TButton", width=20,
                                     state="disabled")
         self.stop_button.pack(side=LEFT, padx=10)
         self.create_tooltip(self.stop_button, "Ferma immediatamente la ricerca in corso")
-        
+
         # Pulsante per pulire i campi di ricerca
-        self.clear_btn = ttk.Button(center_frame, text="Pulisci campi", 
+        self.clear_btn = ttk.Button(action_buttons, text="Pulisci campi", 
                     command=lambda: [self.search_path.set(""), self.keywords.set("")],
                     style="secondary.Outline.TButton", width=15)
         self.clear_btn.pack(side=LEFT, padx=10)
         self.create_tooltip(self.clear_btn, "Cancella i campi di ricerca")
-        
+
         # Pulsante admin solo su Windows
         if os.name == 'nt':
-            self.admin_button = ttk.Button(center_frame, text="Avvia come Admin", 
+            self.admin_button = ttk.Button(action_buttons, text="Avvia come Admin", 
                                     command=self.restart_as_admin,
                                     style="info.Outline.TButton", width=20)
             self.admin_button.pack(side=LEFT, padx=10)
@@ -5874,23 +6220,23 @@ class FileSearchApp:
         # Frame per i pulsanti di azione sui risultati
         actions_frame = ttk.Frame(results_container)
         actions_frame.pack(fill=X, pady=(0, 5))
-        
+
         # Pulsanti per la selezione
         selection_frame = ttk.Frame(actions_frame)
         selection_frame.pack(side=LEFT)
-        
+
         select_all_btn = ttk.Button(selection_frame, text="Seleziona tutto", command=self.select_all)
         select_all_btn.pack(side=LEFT, padx=2)
         self.create_tooltip(select_all_btn, "Seleziona tutti i risultati nella lista")
-        
+
         deselect_all_btn = ttk.Button(selection_frame, text="Deseleziona tutto", command=self.deselect_all)
         deselect_all_btn.pack(side=LEFT, padx=2)
         self.create_tooltip(deselect_all_btn, "Deseleziona tutti i risultati")
-        
-        invert_sel_btn = ttk.Button(selection_frame, text="Inverti selezione", command=self.invert_selection)
-        invert_sel_btn.pack(side=LEFT, padx=2)
-        self.create_tooltip(invert_sel_btn, "Inverte la selezione corrente")
-        
+
+        # Nuovo label per mostrare la dimensione totale dei file trovati (sostituisce il pulsante "Inverti selezione")
+        self.total_files_size_label = ttk.Label(selection_frame, text="Dimensione totale: 0 B", font=("", 9, "bold"))
+        self.total_files_size_label.pack(side=LEFT, padx=10)
+
         # Pulsanti per le azioni
         action_frame = ttk.Frame(actions_frame)
         action_frame.pack(side=RIGHT)
@@ -5900,7 +6246,7 @@ class FileSearchApp:
                                     style="TButton")
         self.copy_button.pack(side=LEFT, padx=5)
         self.create_tooltip(self.copy_button, "Copia i file selezionati nella directory specificata")
-        
+
         self.compress_button = ttk.Button(action_frame, text="Comprimi selezionati",
                                         command=self.compress_selected,
                                         style="TButton")
