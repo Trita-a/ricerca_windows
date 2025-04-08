@@ -67,3 +67,4 @@ Inserito l'ordinamento delle colonne dopo la ricerca nella treeview
 9.2.2
 Aggiunto logo
 Eliminata libreria odfdo e migliorata la ricerca dei file base
+Aggiunto calcolo algoritmo forense MD5, SHA1, SHA256
