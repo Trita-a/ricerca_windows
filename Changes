@@ -69,21 +69,67 @@ Aggiunto logo
 Eliminata libreria odfdo e migliorata la ricerca dei file base
 Aggiunto calcolo algoritmo forense MD5, SHA1, SHA256
 Estensioni supportate alla ricerca
-File Office moderni: .docx, .xlsx, .pptx
-File Office legacy: .doc, .xls, .ppt (tramite win32com su Windows)
-File PDF: .pdf (tramite PyPDF2)
-File di testo: .txt, .csv, .log, .ini, .xml, .json, .md, .html, .htm
-.rtf (Rich Text Format)
-.odt (OpenDocument Text)
-.ods (OpenDocument Spreadsheet)
-.odp (OpenDocument Presentation)
-.epub
-.mobi
-.tex (LaTeX)
-.rst (reStructuredText)
-.db, .sqlite, .sqlite3
-.mdb, .accdb (Access)
-.odb (OpenOffice Database)
-.tsv (Tab-Separated Values)
-.dbf (dBase format)
-.dif (Data Interchange Format)
+1. Documenti di Testo
+.docx - Documenti Word moderni (tramite libreria python-docx)
+.doc - Documenti Word vecchio formato (tramite win32com.client, solo su Windows)
+.rtf - Rich Text Format (tramite libreria striprtf)
+.odt - OpenDocument Text (tramite libreria odf)
+.tex - File LaTeX (estrazione con regex)
+.rst - reStructuredText (estrazione con regex)
+.epub - E-book EPUB (tramite ebooklib e BeautifulSoup)
+.mobi - E-book Mobi (tramite libreria mobi)
+2. Fogli di Calcolo 
+.xlsx - Excel moderno (tramite openpyxl)
+.xls - Excel vecchio formato (tramite xlrd o win32com.client)
+.ods - OpenDocument Spreadsheet (tramite odf)
+.tsv - File a valori separati da tab (tramite modulo csv)
+.dif - Data Interchange Format (implementazione personalizzata)
+3. Presentazioni 
+.pptx - PowerPoint moderno (tramite python-pptx)
+.ppt - PowerPoint vecchio formato (tramite win32com.client, solo su Windows)
+.odp - OpenDocument Presentation (tramite odf)
+4. Database 
+.db - Database generico (tramite sqlite3)
+.sqlite - SQLite (tramite sqlite3)
+.sqlite3 - SQLite3 (tramite sqlite3)
+.mdb - Access Database (tramite pyodbc, solo su Windows)
+.accdb - Access Database moderno (tramite pyodbc, solo su Windows)
+.odb - OpenDocument Database (tramite zipfile e parsing XML)
+.dbf - dBase format (tramite dbfread)
+5. Documenti PDF 
+.pdf - Portable Document Format (tramite PyPDF2)
+6. File di Testo Semplice
+.txt - File di testo
+.csv - Valori separati da virgole
+.log - File di log
+.ini - File di configurazione
+.xml - XML
+.json - JSON
+.md - Markdown
+.html, .htm - HTML
+File di configurazione: .config, .conf, .cfg, ecc.
+7. File di Programmazione 
+.py - Python
+.js - JavaScript
+.java - Java
+.cpp, .c, .h - C/C++
+.cs - C#
+.php - PHP
+.rb - Ruby
+.go - Go
+.swift - Swift
+.sql - SQL
+.sh - Shell script
+.bat, .cmd - Batch Windows
+.ps1 - PowerShell
+.vbs - VBScript
+.pl - Perl
+.ts - TypeScript
+.kt - Kotlin
+.scala - Scala
+E altri linguaggi di programmazione
+8. File Eseguibili (4 formati)
+.exe - Eseguibili Windows
+.dll - Librerie dinamiche Windows
+.so - Librerie condivise Linux
+.dylib - Librerie dinamiche macOS 
