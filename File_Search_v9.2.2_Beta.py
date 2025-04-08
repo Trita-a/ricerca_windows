@@ -3046,7 +3046,9 @@ class FileSearchApp:
                     return ""
             
             # Testo semplice
-            elif ext in ['.txt', '.csv', '.log', '.ini', '.xml', '.json', '.md', '.html', '.htm']:
+            elif ext in ['.txt', '.csv', '.log', '.ini', '.xml', '.json', '.md', '.html', '.htm',
+                        '.py', '.js', '.java', '.cpp', '.c', '.cs', '.php', '.rb', '.go', '.swift', 
+                        '.sql', '.sh', '.bat', '.ps1', '.vbs', '.pl', '.ts', '.kt', '.scala']:
                 try:
                     # Apri con diverse codifiche per essere robusto
                     encodings = ['utf-8', 'latin-1', 'windows-1252']
