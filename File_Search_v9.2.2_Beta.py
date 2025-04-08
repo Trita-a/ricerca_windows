@@ -3176,7 +3176,9 @@ class FileSearchApp:
                 return ""
         
         # File di testo semplice
-        elif ext in ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log']:
+        elif ext in ['.txt', '.csv', '.log', '.ini', '.xml', '.json', '.md', '.html', '.htm',
+                        '.py', '.js', '.java', '.cpp', '.c', '.cs', '.php', '.rb', '.go', '.swift', 
+                        '.sql', '.sh', '.bat', '.ps1', '.vbs', '.pl', '.ts', '.kt', '.scala']:
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     return f.read(5000)  # Limita a 5000 caratteri
