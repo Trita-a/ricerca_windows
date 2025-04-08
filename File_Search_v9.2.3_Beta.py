@@ -5723,7 +5723,7 @@ class FileSearchApp:
             return [
                 '.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                 '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls', 
-                '.rtf', '.odt', '.ods', '.odp', '.vcf', '.ics', '.eml'   # Aggiunte più estensioni Office e OpenDocument
+                '.rtf', '.odt', '.ods', '.odp', '.vcf', '.ics', '.eml' 
             ]
         elif mode == "avanzata":
             # Prima ottieni le estensioni base
