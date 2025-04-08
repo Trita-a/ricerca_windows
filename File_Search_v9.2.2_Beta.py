@@ -23,7 +23,10 @@ import subprocess
 # Dizionario per tracciare il supporto alle librerie - sarà popolato in seguito
 file_format_support = {
     "docx": False, "pdf": False, "pptx": False, "excel": False,
-    "odt": False, "rtf": False, "xls": False, "doc": False
+    "odt": False, "rtf": False, "xls": False, "doc": False,
+    "ods": False, "odp": False, "epub": False, "mobi": False, 
+    "tex": True, "rst": True, "sqlite": True, "mdb": False,
+    "odb": True, "tsv": True, "dbf": False, "dif": True
 }
 
 # Elenco di librerie da installare se mancanti
@@ -360,6 +363,12 @@ class FileSearchApp:
         check_module("pptx", "pptx", "python-pptx")
         check_module("openpyxl", "excel", "openpyxl")
         check_module("striprtf.striprtf", "rtf", "striprtf")
+        check_module("odf", "odt", "odfpy")
+        check_module("ebooklib", "epub", "ebooklib")
+        check_module("mobi", "mobi", "mobi")
+        check_module("dbfread", "dbf", "dbfread")
+        check_module("pyodbc", "mdb", "pyodbc")
+        check_module("bs4", "epub_html", "beautifulsoup4")
         
         # Controlla win32com (per i formati legacy di Office)
         if os.name == 'nt':  # Solo su Windows
@@ -2158,7 +2167,7 @@ class FileSearchApp:
             self.log_debug(f"Errore nella visualizzazione del log: {str(e)}")
 
     def get_file_content(self, file_path):
-        """Estrae il contenuto testuale dai vari formati di file - versione migliorata"""
+        """Estrae il contenuto testuale dai vari formati di file - versione completa"""
         try:
             # Controlli preliminari
             if self.should_skip_file(file_path):
@@ -2513,6 +2522,527 @@ class FileSearchApp:
                         return ""
                 else:
                     self.log_debug("Estrazione di testo dai file PPT non supportata su questa piattaforma")
+                    return ""
+            
+            # Rich Text Format (RTF) - NUOVO
+            elif ext == '.rtf':
+                try:
+                    from striprtf.striprtf import rtf_to_text
+                    self.log_debug(f"Processando file RTF: {file_path}")
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        rtf_content = f.read()
+                        content = rtf_to_text(rtf_content)
+                        self.log_debug(f"Estratti {len(content)} caratteri da RTF")
+                        return content
+                except ImportError:
+                    self.log_debug("Libreria striprtf non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file RTF {file_path}: {str(e)}")
+                    return ""
+                    
+            # OpenDocument Text (ODT) - NUOVO
+            elif ext == '.odt':
+                try:
+                    from odf import opendocument, text
+                    self.log_debug(f"Processando file ODT: {file_path}")
+                    
+                    doc = opendocument.load(file_path)
+                    paragraphs = []
+                    
+                    # Estrai tutto il testo dai paragrafi
+                    for element in doc.getElementsByType(text.P):
+                        paragraphs.append(element.firstChild.data if element.firstChild else "")
+                        
+                    content = "\n".join(paragraphs)
+                    self.log_debug(f"Estratti {len(content)} caratteri da ODT")
+                    return content
+                except ImportError:
+                    self.log_debug("Libreria odf non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file ODT {file_path}: {str(e)}")
+                    return ""
+                    
+            # OpenDocument Spreadsheet (ODS) - NUOVO
+            elif ext == '.ods':
+                try:
+                    from odf import opendocument, table, text
+                    self.log_debug(f"Processando file ODS: {file_path}")
+                    
+                    doc = opendocument.load(file_path)
+                    sheets = []
+                    
+                    # Estrai tutte le tabelle e celle
+                    for sheet in doc.getElementsByType(table.Table):
+                        sheet_rows = []
+                        sheet_name = sheet.getAttribute('table:name')
+                        sheets.append(f"--- Foglio: {sheet_name} ---")
+                        
+                        for row in sheet.getElementsByType(table.TableRow):
+                            row_cells = []
+                            for cell in row.getElementsByType(table.TableCell):
+                                cell_text = ""
+                                for p in cell.getElementsByType(text.P):
+                                    cell_text += p.firstChild.data if p.firstChild else ""
+                                row_cells.append(cell_text)
+                            if row_cells:
+                                sheet_rows.append(" | ".join(row_cells))
+                                
+                        sheets.append("\n".join(sheet_rows))
+                        
+                    content = "\n".join(sheets)
+                    self.log_debug(f"Estratti {len(content)} caratteri da ODS")
+                    return content
+                except ImportError:
+                    self.log_debug("Libreria odf non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file ODS {file_path}: {str(e)}")
+                    return ""
+
+            # OpenDocument Presentation (ODP) - NUOVO
+            elif ext == '.odp':
+                try:
+                    from odf import opendocument, draw, text
+                    self.log_debug(f"Processando file ODP: {file_path}")
+                    
+                    doc = opendocument.load(file_path)
+                    slides = []
+                    
+                    # Estrai tutte le diapositive
+                    for page in doc.getElementsByType(draw.Page):
+                        slide_text = []
+                        slide_name = page.getAttribute('draw:name')
+                        slides.append(f"--- Diapositiva: {slide_name} ---")
+                        
+                        # Estrai il testo dai frame e forme
+                        for element in page.getElementsByType(draw.Frame):
+                            for p in element.getElementsByType(text.P):
+                                if p.firstChild:
+                                    slide_text.append(p.firstChild.data)
+                                    
+                        slides.append("\n".join(slide_text))
+                        
+                    content = "\n".join(slides)
+                    self.log_debug(f"Estratti {len(content)} caratteri da ODP")
+                    return content
+                except ImportError:
+                    self.log_debug("Libreria odf non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file ODP {file_path}: {str(e)}")
+                    return ""
+                    
+            # EPUB - NUOVO
+            elif ext == '.epub':
+                try:
+                    import ebooklib
+                    from ebooklib import epub
+                    from bs4 import BeautifulSoup
+                    self.log_debug(f"Processando file EPUB: {file_path}")
+                    
+                    # Funzione per estrarre testo dall'HTML
+                    def chapter_to_text(content):
+                        soup = BeautifulSoup(content, 'html.parser')
+                        return soup.get_text()
+                    
+                    book = epub.read_epub(file_path)
+                    chapters = []
+                    
+                    # Estrai metadati
+                    title = book.get_metadata('DC', 'title')
+                    if title:
+                        chapters.append(f"Titolo: {title[0][0]}")
+                    
+                    authors = book.get_metadata('DC', 'creator')
+                    if authors:
+                        chapters.append(f"Autore: {authors[0][0]}")
+                        
+                    # Estrai contenuto
+                    for item in book.get_items():
+                        if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                            chapters.append(chapter_to_text(item.get_content()))
+                            
+                    content = "\n".join(chapters)
+                    self.log_debug(f"Estratti {len(content)} caratteri da EPUB")
+                    return content
+                except ImportError:
+                    self.log_debug("Librerie ebooklib o bs4 non disponibili")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file EPUB {file_path}: {str(e)}")
+                    return ""
+
+            # MOBI - NUOVO
+            elif ext == '.mobi':
+                try:
+                    import mobi
+                    import tempfile
+                    import shutil
+                    self.log_debug(f"Processando file MOBI: {file_path}")
+                    
+                    tempdir = tempfile.mkdtemp()
+                    try:
+                        # Estrai il contenuto del file MOBI
+                        extractor = mobi.Mobi(file_path)
+                        extractor.extract(tempdir)
+                        
+                        # Leggi il testo estratto
+                        text_content = []
+                        for filename in os.listdir(tempdir):
+                            if filename.endswith('.txt'):
+                                with open(os.path.join(tempdir, filename), 'r', encoding='utf-8', errors='replace') as f:
+                                    text_content.append(f.read())
+                        
+                        content = "\n".join(text_content)
+                        self.log_debug(f"Estratti {len(content)} caratteri da MOBI")
+                        return content
+                    finally:
+                        # Pulisci i file temporanei
+                        shutil.rmtree(tempdir)
+                except ImportError:
+                    self.log_debug("Libreria mobi non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file MOBI {file_path}: {str(e)}")
+                    return ""
+                    
+            # LaTeX - NUOVO
+            elif ext == '.tex':
+                try:
+                    self.log_debug(f"Processando file LaTeX: {file_path}")
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        
+                    # Rimuovi i comandi LaTeX più comuni
+                    import re
+                    # Rimuovi i comandi
+                    content = re.sub(r'\\[a-zA-Z]+(\{[^}]*\}|\[[^\]]*\])*', ' ', content)
+                    # Rimuovi gli ambienti
+                    content = re.sub(r'\\begin\{[^}]*\}(.*?)\\end\{[^}]*\}', ' ', content, flags=re.DOTALL)
+                    # Rimuovi i commenti
+                    content = re.sub(r'%.*?(\n|$)', ' ', content)
+                    # Rimuovi le graffe
+                    content = re.sub(r'\{|\}', '', content)
+                    # Sostituisci più spazi con uno solo
+                    content = re.sub(r'\s+', ' ', content)
+                    
+                    self.log_debug(f"Estratti {len(content)} caratteri da LaTeX")
+                    return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file LaTeX {file_path}: {str(e)}")
+                    return ""
+
+            # reStructuredText - NUOVO
+            elif ext == '.rst':
+                try:
+                    self.log_debug(f"Processando file reStructuredText: {file_path}")
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                        
+                    # Rimuovi gli elementi di markup più comuni
+                    import re
+                    # Rimuovi i titoli
+                    content = re.sub(r'(=+|-+|~+|\^+|"+)\n', ' ', content)
+                    # Rimuovi i link
+                    content = re.sub(r'`[^`]*`_', ' ', content)
+                    # Rimuovi i riferimenti alle direttive
+                    content = re.sub(r'\.\. [a-z]+::', ' ', content)
+                    
+                    self.log_debug(f"Estratti {len(content)} caratteri da RST")
+                    return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file RST {file_path}: {str(e)}")
+                    return ""
+                    
+            # SQLite database (.db, .sqlite, .sqlite3) - NUOVO
+            elif ext in ['.db', '.sqlite', '.sqlite3']:
+                try:
+                    import sqlite3
+                    self.log_debug(f"Processando file SQLite: {file_path}")
+                    
+                    # Verifica che sia un file SQLite valido
+                    if not os.path.getsize(file_path) > 100:
+                        return ""
+                        
+                    try:
+                        # Connetti al database
+                        conn = sqlite3.connect(file_path)
+                        cursor = conn.cursor()
+                        
+                        # Ottieni la lista delle tabelle
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                        tables = cursor.fetchall()
+                        
+                        content_parts = []
+                        content_parts.append(f"Database SQLite: {os.path.basename(file_path)}")
+                        content_parts.append(f"Numero di tabelle: {len(tables)}")
+                        
+                        # Estrai struttura e campione di dati da ogni tabella
+                        for table in tables:
+                            table_name = table[0]
+                            content_parts.append(f"\n--- Tabella: {table_name} ---")
+                            
+                            # Ottieni struttura della tabella
+                            cursor.execute(f"PRAGMA table_info({table_name});")
+                            columns = cursor.fetchall()
+                            col_names = [col[1] for col in columns]
+                            content_parts.append("Colonne: " + ", ".join(col_names))
+                            
+                            # Ottieni un campione di dati (massimo 10 righe)
+                            try:
+                                cursor.execute(f"SELECT * FROM {table_name} LIMIT 10;")
+                                rows = cursor.fetchall()
+                                if rows:
+                                    content_parts.append(f"Campione dati ({len(rows)} righe):")
+                                    for row in rows:
+                                        content_parts.append(str(row))
+                            except:
+                                content_parts.append("Errore nell'estrazione del campione dati")
+                        
+                        conn.close()
+                        content = "\n".join(content_parts)
+                        self.log_debug(f"Estratti {len(content)} caratteri da SQLite")
+                        return content
+                        
+                    except sqlite3.Error:
+                        # Non è un database SQLite valido o è cifrato
+                        return ""
+                except ImportError:
+                    self.log_debug("Libreria sqlite3 non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file SQLite {file_path}: {str(e)}")
+                    return ""
+
+            # Microsoft Access (.mdb, .accdb) - NUOVO
+            elif ext in ['.mdb', '.accdb']:
+                try:
+                    import pyodbc
+                    self.log_debug(f"Processando file Access: {file_path}")
+                    
+                    # Verifica che siamo su Windows
+                    if os.name != 'nt':
+                        self.log_debug("L'accesso ai file MDB/ACCDB è supportato solo su Windows")
+                        return ""
+                    
+                    # Connetti al database Access
+                    driver = "Microsoft Access Driver (*.mdb, *.accdb)"
+                    conn_str = f"Driver={{{driver}}};DBQ={file_path};"
+                    
+                    try:
+                        conn = pyodbc.connect(conn_str)
+                        cursor = conn.cursor()
+                        
+                        # Ottieni l'elenco delle tabelle
+                        tables = []
+                        for row in cursor.tables():
+                            if row.table_type == 'TABLE':
+                                tables.append(row.table_name)
+                        
+                        content_parts = []
+                        content_parts.append(f"Database Access: {os.path.basename(file_path)}")
+                        content_parts.append(f"Numero di tabelle: {len(tables)}")
+                        
+                        # Estrai struttura e campione di dati da ogni tabella
+                        for table in tables:
+                            content_parts.append(f"\n--- Tabella: {table} ---")
+                            
+                            # Ottieni struttura della tabella
+                            columns = cursor.columns(table=table)
+                            col_names = [col.column_name for col in columns]
+                            content_parts.append("Colonne: " + ", ".join(col_names))
+                            
+                            # Ottieni un campione di dati (massimo 10 righe)
+                            try:
+                                cursor.execute(f"SELECT * FROM [{table}] LIMIT 10")
+                                rows = cursor.fetchall()
+                                if rows:
+                                    content_parts.append(f"Campione dati ({len(rows)} righe):")
+                                    for row in rows:
+                                        content_parts.append(str(row))
+                            except:
+                                content_parts.append("Errore nell'estrazione del campione dati")
+                        
+                        conn.close()
+                        content = "\n".join(content_parts)
+                        self.log_debug(f"Estratti {len(content)} caratteri da Access")
+                        return content
+                        
+                    except pyodbc.Error as e:
+                        self.log_debug(f"Errore di accesso al database: {str(e)}")
+                        return ""
+                except ImportError:
+                    self.log_debug("Libreria pyodbc non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file Access {file_path}: {str(e)}")
+                    return ""
+
+            # OpenDocument Database (.odb) - NUOVO
+            elif ext == '.odb':
+                try:
+                    import zipfile
+                    import xml.etree.ElementTree as ET
+                    self.log_debug(f"Processando file ODB: {file_path}")
+                    
+                    # ODB è essenzialmente un file ZIP con file XML all'interno
+                    if zipfile.is_zipfile(file_path):
+                        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                            content_parts = []
+                            
+                            # Estrai il file contenente lo schema
+                            try:
+                                with zip_ref.open('content.xml') as content_file:
+                                    tree = ET.parse(content_file)
+                                    root = tree.getroot()
+                                    
+                                    # Cerca namespace
+                                    ns = {'db': 'urn:oasis:names:tc:opendocument:xmlns:database:1.0',
+                                        'office': 'urn:oasis:names:tc:opendocument:xmlns:office:1.0'}
+                                    
+                                    # Estrai informazioni sulle tabelle
+                                    tables = root.findall('.//db:table', ns)
+                                    content_parts.append(f"Database ODB: {os.path.basename(file_path)}")
+                                    content_parts.append(f"Numero di tabelle trovate: {len(tables)}")
+                                    
+                                    for table in tables:
+                                        if 'db:name' in table.attrib:
+                                            table_name = table.get('{urn:oasis:names:tc:opendocument:xmlns:database:1.0}name')
+                                            content_parts.append(f"\n--- Tabella: {table_name} ---")
+                                            
+                                            # Estrai colonne
+                                            columns = table.findall('.//db:column', ns)
+                                            col_names = []
+                                            for column in columns:
+                                                if 'db:name' in column.attrib:
+                                                    col_name = column.get('{urn:oasis:names:tc:opendocument:xmlns:database:1.0}name')
+                                                    col_names.append(col_name)
+                                            
+                                            content_parts.append("Colonne: " + ", ".join(col_names))
+                            except Exception as e:
+                                content_parts.append(f"Errore nell'estrazione dello schema: {str(e)}")
+                            
+                            content = "\n".join(content_parts)
+                            self.log_debug(f"Estratti {len(content)} caratteri da ODB")
+                            return content
+                    else:
+                        return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file ODB {file_path}: {str(e)}")
+                    return ""
+                    
+            # Tab-Separated Values (.tsv) - NUOVO
+            elif ext == '.tsv':
+                try:
+                    import csv
+                    self.log_debug(f"Processando file TSV: {file_path}")
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        reader = csv.reader(f, delimiter='\t')
+                        rows = []
+                        
+                        # Limita a 1000 righe per file grandi
+                        for i, row in enumerate(reader):
+                            if i >= 1000:
+                                rows.append("... (file troncato, troppe righe)")
+                                break
+                            rows.append("\t".join(row))
+                            
+                    content = "\n".join(rows)
+                    self.log_debug(f"Estratti {len(content)} caratteri da TSV")
+                    return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file TSV {file_path}: {str(e)}")
+                    return ""
+
+            # dBase format (.dbf) - NUOVO
+            elif ext == '.dbf':
+                try:
+                    import dbfread
+                    self.log_debug(f"Processando file DBF: {file_path}")
+                    
+                    table = dbfread.DBF(file_path)
+                    records = []
+                    
+                    # Ottieni nomi delle colonne
+                    headers = table.field_names
+                    records.append("Colonne: " + ", ".join(headers))
+                    
+                    # Ottieni un campione di dati
+                    for i, record in enumerate(table):
+                        if i >= 50:  # Limita a 50 record
+                            records.append("... (file troncato, troppi record)")
+                            break
+                            
+                        record_data = []
+                        for field in headers:
+                            record_data.append(f"{field}: {record[field]}")
+                        records.append(" | ".join(record_data))
+                        
+                    content = "\n".join(records)
+                    self.log_debug(f"Estratti {len(content)} caratteri da DBF")
+                    return content
+                except ImportError:
+                    self.log_debug("Libreria dbfread non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file DBF {file_path}: {str(e)}")
+                    return ""
+
+            # Data Interchange Format (.dif) - NUOVO
+            elif ext == '.dif':
+                try:
+                    self.log_debug(f"Processando file DIF: {file_path}")
+                    
+                    # I file DIF hanno una struttura specifica
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        lines = f.readlines()
+                        
+                    if len(lines) < 3:
+                        return ""
+                        
+                    content_lines = []
+                    i = 0
+                    
+                    # Salta l'intestazione
+                    while i < len(lines) and not lines[i].strip().startswith('DATA'):
+                        i += 1
+                        
+                    # Estrai i dati
+                    data_mode = False
+                    current_row = []
+                    
+                    while i < len(lines):
+                        line = lines[i].strip()
+                        
+                        if line.startswith('BOT'):  # Beginning of tuple
+                            current_row = []
+                        elif line.startswith('EOD'):  # End of data
+                            break
+                        elif not data_mode and line.startswith('1,0'):
+                            data_mode = True
+                        elif data_mode and line.startswith('V') or line.startswith('C'):
+                            # La prossima riga contiene il valore
+                            i += 1
+                            if i < len(lines):
+                                value = lines[i].strip().strip('"')
+                                current_row.append(value)
+                        elif line.startswith('EOT'):  # End of tuple
+                            content_lines.append(",".join(current_row))
+                            data_mode = False
+                            
+                        i += 1
+                        
+                    content = "\n".join(content_lines)
+                    self.log_debug(f"Estratti {len(content)} caratteri da DIF")
+                    return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file DIF {file_path}: {str(e)}")
                     return ""
             
             # Testo semplice
@@ -5001,7 +5531,7 @@ class FileSearchApp:
             
             # Carica e ridimensiona l'immagine (modifica le dimensioni secondo necessità)
             original_image = Image.open(image_path)
-            resized_image = original_image.resize((128, 128))  # Ridimensiona a 32x32 pixel
+            resized_image = original_image.resize((84, 84))  # Ridimensiona a 32x32 pixel
             self.logo_image = ImageTk.PhotoImage(resized_image)
             
             # Crea un label per l'immagine
