@@ -2175,6 +2175,10 @@ class FileSearchApp:
     def get_file_content(self, file_path):
         """Estrae il contenuto testuale dai vari formati di file - versione completa"""
         try:
+            # Inizializza le variabili all'inizio per evitare problemi di scope
+            content = ""
+            text_content = ""
+            result = ""
             # Controlli preliminari
             if self.should_skip_file(file_path):
                 return ""
