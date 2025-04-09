@@ -4097,16 +4097,13 @@ class FileSearchApp:
         for result in self.search_results:
             # Gestisci il nuovo formato del risultato con 7 elementi (incluso from_attachment)
             if len(result) >= 7:
-                item_type, name, size, modified, created, path, from_attachment = result
+                item_type, author, size, modified, created, path, from_attachment = result
             else:
-                item_type, name, size, modified, created, path = result
+                item_type, author, size, modified, created, path = result
                 from_attachment = False
             
-            # Aggiungi il simbolo della graffetta se il match è stato trovato in un allegato
-            display_name = name
-            if from_attachment:
-                display_name = "📎 " + name
-                self.log_debug(f"Visualizzando {name} come allegato")
+            # Imposta l'icona della graffetta nella colonna dedicata
+            attachment_icon = "📎" if from_attachment else ""
             
             # Applica stile in base al tipo di elemento
             if item_type == "Directory":
@@ -4116,8 +4113,15 @@ class FileSearchApp:
             else:
                 tags = ("file",)
             
-            # Crea valori da visualizzare con il nome modificato se necessario
-            display_values = (item_type, display_name, size, modified, created, path)
+            display_values = (
+                item_type,        # Tipo
+                attachment_icon,  # Icona allegato
+                size,             # Dimensione
+                modified,         # Data modifica
+                created,          # Data creazione
+                author,           # Nome/Autore
+                path              # Percorso
+            )
                 
             # Inserisci l'elemento nella TreeView con i tag appropriati
             self.results_list.insert("", "end", values=display_values, tags=tags)
@@ -4135,9 +4139,9 @@ class FileSearchApp:
             self.results_list.focus(first_item)
             
             # Opzionalmente, mostra il contenuto del primo risultato
-            if self.auto_preview.get():
+            if hasattr(self, 'auto_preview') and self.auto_preview.get():
                 self.show_file_contents()
-       
+            
     def update_total_files_size(self):
         """Calcola e aggiorna la dimensione totale dei file trovati"""
         try:
@@ -6665,8 +6669,8 @@ class FileSearchApp:
 
         # Creazione della TreeView
         self.results_list = ttk.Treeview(treeview_container, selectmode="extended",
-                                    columns=("type", "author", "size", "modified", "created", "path"),
-                                    show="headings")
+                                columns=("type", "attachment", "size", "modified", "created", "author", "path"), 
+                                show="headings")
 
         # Creazione delle scrollbar
         vsb = ttk.Scrollbar(treeview_container, orient="vertical", command=self.results_list.yview)
@@ -6686,10 +6690,11 @@ class FileSearchApp:
 
         # Impostazione delle intestazioni delle colonne
         self.results_list.heading("type", text="Tipo")
+        self.results_list.heading("attachment", text="Allegato")
         self.results_list.heading("size", text="Dimensione")
         self.results_list.heading("modified", text="Modificato")
         self.results_list.heading("created", text="Creato")
-        self.results_list.heading("author", text="Nome")  # Rinominato da "Autore" a "Nome"
+        self.results_list.heading("author", text="Nome")
         self.results_list.heading("path", text="Percorso")
 
         # Impostazione delle intestazioni delle colonne con funzione di ordinamento
@@ -6708,11 +6713,12 @@ class FileSearchApp:
 
         # Impostazione delle larghezze fisse delle colonne
         self.results_list.column("type", width=120, minwidth=50, stretch=NO, anchor="center")
+        self.results_list.column("attachment", width=70, minwidth=30, stretch=NO, anchor="center")
         self.results_list.column("size", width=100, minwidth=80, stretch=NO, anchor="center")
         self.results_list.column("modified", width=150, minwidth=120, stretch=NO, anchor="center")
         self.results_list.column("created", width=150, minwidth=120, stretch=NO, anchor="center")
-        self.results_list.column("author", width=180, minwidth=80, stretch=NO, anchor="w")
-        self.results_list.column("path", width=600, minwidth=200, stretch=YES, anchor="w")  # Solo questa colonna si espande
+        self.results_list.column("author", width=400, minwidth=80, stretch=NO, anchor="w")
+        self.results_list.column("path", width=600, minwidth=200, stretch=YES, anchor="w")
 
         # Aggiungi binding per l'evento di doppio clic
         self.results_list.bind("<Double-1>", self.open_file_location)
