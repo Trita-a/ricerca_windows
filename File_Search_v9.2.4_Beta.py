@@ -1962,11 +1962,12 @@ class FileSearchApp:
             return True
         
         # Liste predefinite nel codice per ciascun livello
-        base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
-                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
-                        
+        base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.log', 
+                        '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls', '.rtf', '.odt', '.ods', '.odp',
+                        '.csv','.eml', '.msg', '.emlx']
+
         advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
-                                            '.vbs', '.js', '.config', '.ini', '.reg']
+                                            '.vbs', '.js', '.config', '.ini', '.json', '.reg']
                                             
         deep_extensions = advanced_extensions + ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', 
                                             '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
@@ -6207,181 +6208,177 @@ class FileSearchApp:
         
         # Define extensions by category - EXPANDED with more extensions
         extension_categories = {
-            "Documenti": [
-                (".txt", "File di testo"),
-                (".doc", "Word vecchio"),
-                (".docx", "Word"),
-                (".pdf", "PDF"),
-                (".rtf", "Rich Text"),
-                (".odt", "OpenDoc Text"),
-                (".md", "Markdown"),
-                (".csv", "CSV"),
-                (".xml", "XML"),
-                (".html", "HTML"),
-                (".htm", "HTM"),
-                (".json", "JSON"),
-                (".log", "Log file"),
-                (".tex", "LaTeX"),
-                (".rst", "reStructuredText"),
-                (".epub", "E-book EPUB"),
-                (".mobi", "E-book Mobi"),
-                (".vcf", "vCard"),
-                (".ics", "iCalendar"),
-                # .eml rimosso da qui e spostato nella categoria Email
-            ],
-            # NUOVO: Tab dedicato alle email con diverse estensioni
-            "Email": [
-                (".eml", "Email standard"),
-                (".msg", "Email formato Outlook"),
-                (".pst", "Archivio Outlook"),
-                (".ost", "Archivio Outlook Offline"),
-                (".mbox", "Mailbox Unix/Linux"),
-                (".emlx", "Email formato Apple Mail"),
-                (".mbx", "Mailbox formato Eudora/Thunderbird"),
-                (".dbx", "Archivio Outlook Express"),
-                (".wab", "Windows Address Book"),
-                (".nws", "Email formato Outlook Express"),
-                (".mht", "MIME HTML Archive"),
-                (".mhtml", "MIME HTML Archive"),
-                (".imapmbox", "IMAP Mailbox"),
-                (".email", "Email generica")
-            ],
-            "Fogli calcolo": [
-                (".xls", "Excel vecchio"),
-                (".xlsx", "Excel"),
-                (".ods", "OpenCalc"),
-                (".csv", "CSV"),
-                (".tsv", "TSV"),
-                (".dbf", "Database File"),
-                (".dif", "Data Interchange Format")
-            ],
-            "Presentazioni": [
-                (".ppt", "PowerPoint vecchio"),
-                (".pptx", "PowerPoint"),
-                (".odp", "OpenImpress"),
-                (".key", "Keynote"),
-                (".pps", "PowerPoint Show")
-            ],
-            "Database": [
-                (".db", "Database generico"),
-                (".sqlite", "SQLite"),
-                (".sqlite3", "SQLite3"),
-                (".mdb", "Access DB"),
-                (".accdb", "Access DB nuovo"),
-                (".odb", "OpenOffice DB"),
-                (".sql", "SQL script")
-            ],
-            "Immagini": [
-                (".jpg", "JPEG"),
-                (".jpeg", "JPEG"),
-                (".png", "PNG"),
-                (".gif", "GIF"),
-                (".bmp", "Bitmap"),
-                (".tiff", "TIFF"),
-                (".tif", "TIF"),
-                (".svg", "SVG"),
-                (".webp", "WebP"),
-                (".ico", "Icon"),
-                (".raw", "Raw"),
-                (".psd", "Photoshop"),
-                (".ai", "Illustrator"),
-                (".odg", "OpenOffice Draw"),
-                (".xcf", "GIMP"),
-                (".heic", "HEIC")
-            ],
-            "Audio": [
-                (".mp3", "MP3"),
-                (".wav", "WAV"),
-                (".ogg", "OGG"),
-                (".flac", "FLAC"),
-                (".aac", "AAC"),
-                (".m4a", "M4A"),
-                (".wma", "WMA"),
-                (".mid", "MIDI"),
-                (".midi", "MIDI"),
-                (".aiff", "AIFF"),
-                (".opus", "Opus")
-            ],
-            "Video": [
-                (".mp4", "MP4"),
-                (".avi", "AVI"),
-                (".mkv", "MKV"),
-                (".mov", "MOV"),
-                (".wmv", "WMV"),
-                (".flv", "FLV"),
-                (".webm", "WebM"),
-                (".m4v", "M4V"),
-                (".mpg", "MPEG"),
-                (".mpeg", "MPEG"),
-                (".3gp", "3GP"),
-                (".ogv", "OGV"),
-                (".ts", "TS")
-            ],
-            "Archivi": [
-                (".zip", "ZIP"),
-                (".rar", "RAR"),
-                (".7z", "7-Zip"),
-                (".tar", "TAR"),
-                (".gz", "GZip"),
-                (".bz2", "BZip2"),
-                (".iso", "ISO"),
-                (".tgz", "Tar GZipped"),
-                (".xz", "XZ"),
-                (".cab", "Cabinet"),
-                (".jar", "Java Archive")
-            ],
-            "Eseguibili": [
-                (".exe", "Eseguibile"),
-                (".dll", "Libreria"),
-                (".bat", "Batch"),
-                (".cmd", "Command"),
-                (".ps1", "PowerShell"),
-                (".vbs", "VBScript"),
-                (".sh", "Shell script"),
-                (".msi", "Installer Windows"),
-                (".app", "Applicazione macOS"),
-                (".deb", "Pacchetto Debian"),
-                (".rpm", "Red Hat Package"),
-                (".apk", "Android Package")
-            ],
-            "Configurazione": [
-                (".ini", "INI"),
-                (".config", "Config"),
-                (".conf", "Config"),
-                (".reg", "Registry"),
-                (".cfg", "Config"),
-                (".properties", "Properties"),
-                (".yml", "YAML"),
-                (".yaml", "YAML"),
-                (".json", "JSON Config"),
-                (".toml", "TOML"),
-                (".env", "Environment"),
-                (".htaccess", "Apache Config"),
-                (".plist", "macOS Property List")
-            ],
-            "Programmazione": [
-                (".c", "C"),
-                (".cpp", "C++"),
-                (".cs", "C#"),
-                (".java", "Java"),
-                (".py", "Python"),
-                (".js", "JavaScript"),
-                (".php", "PHP"),
-                (".rb", "Ruby"),
-                (".go", "Golang"),
-                (".rs", "Rust"),
-                (".swift", "Swift"),
-                (".pl", "Perl"),
-                (".lua", "Lua"),
-                (".h", "Header C"),
-                (".hpp", "Header C++"),
-                (".vb", "Visual Basic"),
-                (".ts", "TypeScript"),
-                (".scala", "Scala"),
-                (".groovy", "Groovy"),
-                (".kt", "Kotlin")
-            ]
-        }
+        "Documenti": [
+            (".txt", "File di testo"),
+            (".doc", "Word vecchio"),
+            (".docx", "Word"),
+            (".pdf", "PDF"),
+            (".rtf", "Rich Text"),
+            (".odt", "OpenDoc Text"),
+            (".md", "Markdown"),
+            (".xml", "XML"),
+            (".html", "HTML"),
+            (".htm", "HTM"),
+            (".log", "Log file"),
+            (".tex", "LaTeX"),
+            (".rst", "reStructuredText"),
+            (".epub", "E-book EPUB"),
+            (".mobi", "E-book Mobi"),
+            (".vcf", "vCard"),
+            (".ics", "iCalendar"),
+        ],
+        "Email": [
+            (".eml", "Email standard"),
+            (".msg", "Email formato Outlook"),
+            (".pst", "Archivio Outlook"),
+            (".ost", "Archivio Outlook Offline"),
+            (".mbox", "Mailbox Unix/Linux"),
+            (".emlx", "Email formato Apple Mail"),
+            (".mbx", "Mailbox formato Eudora/Thunderbird"),
+            (".dbx", "Archivio Outlook Express"),
+            (".wab", "Windows Address Book"),
+            (".nws", "Email formato Outlook Express"),
+            (".mht", "MIME HTML Archive"),
+            (".mhtml", "MIME HTML Archive"),
+            (".imapmbox", "IMAP Mailbox"),
+            (".email", "Email generica")
+        ],
+        "Fogli calcolo": [
+            (".xls", "Excel vecchio"),
+            (".xlsx", "Excel"),
+            (".ods", "OpenCalc"),
+            (".csv", "CSV (valori separati da virgola)"),
+            (".tsv", "TSV (valori separati da tab)"),
+            (".dbf", "Database File"),
+            (".dif", "Data Interchange Format")
+        ],
+        "Presentazioni": [
+            (".ppt", "PowerPoint vecchio"),
+            (".pptx", "PowerPoint"),
+            (".odp", "OpenImpress"),
+            (".key", "Keynote"),
+            (".pps", "PowerPoint Show")
+        ],
+        "Database": [
+            (".db", "Database generico"),
+            (".sqlite", "SQLite"),
+            (".sqlite3", "SQLite3"),
+            (".mdb", "Access DB"),
+            (".accdb", "Access DB nuovo"),
+            (".odb", "OpenOffice DB"),
+            (".sql", "SQL script")
+        ],
+        "Immagini": [
+            (".jpg", "JPEG"),
+            (".jpeg", "JPEG"),
+            (".png", "PNG"),
+            (".gif", "GIF"),
+            (".bmp", "Bitmap"),
+            (".tiff", "TIFF"),
+            (".tif", "TIF"),
+            (".svg", "SVG"),
+            (".webp", "WebP"),
+            (".ico", "Icon"),
+            (".raw", "Raw"),
+            (".psd", "Photoshop"),
+            (".ai", "Illustrator"),
+            (".odg", "OpenOffice Draw"),
+            (".xcf", "GIMP"),
+            (".heic", "HEIC")
+        ],
+        "Audio": [
+            (".mp3", "MP3"),
+            (".wav", "WAV"),
+            (".ogg", "OGG"),
+            (".flac", "FLAC"),
+            (".aac", "AAC"),
+            (".m4a", "M4A"),
+            (".wma", "WMA"),
+            (".mid", "MIDI"),
+            (".midi", "MIDI"),
+            (".aiff", "AIFF"),
+            (".opus", "Opus")
+        ],
+        "Video": [
+            (".mp4", "MP4"),
+            (".avi", "AVI"),
+            (".mkv", "MKV"),
+            (".mov", "MOV"),
+            (".wmv", "WMV"),
+            (".flv", "FLV"),
+            (".webm", "WebM"),
+            (".m4v", "M4V"),
+            (".mpg", "MPEG"),
+            (".mpeg", "MPEG"),
+            (".3gp", "3GP"),
+            (".ogv", "OGV"),
+            (".ts", "TS (Transport Stream)")
+        ],
+        "Archivi": [
+            (".zip", "ZIP"),
+            (".rar", "RAR"),
+            (".7z", "7-Zip"),
+            (".tar", "TAR"),
+            (".gz", "GZip"),
+            (".bz2", "BZip2"),
+            (".iso", "ISO"),
+            (".tgz", "Tar GZipped"),
+            (".xz", "XZ"),
+            (".cab", "Cabinet"),
+            (".jar", "Java Archive")
+        ],
+        "Eseguibili": [
+            (".exe", "Eseguibile"),
+            (".dll", "Libreria"),
+            (".bat", "Batch"),
+            (".cmd", "Command"),
+            (".ps1", "PowerShell"),
+            (".vbs", "VBScript"),
+            (".sh", "Shell script"),
+            (".msi", "Installer Windows"),
+            (".app", "Applicazione macOS"),
+            (".deb", "Pacchetto Debian"),
+            (".rpm", "Red Hat Package"),
+            (".apk", "Android Package")
+        ],
+        "Configurazione": [
+            (".ini", "INI"),
+            (".config", "Config"),
+            (".conf", "Config"),
+            (".reg", "Registry"),
+            (".cfg", "Config"),
+            (".properties", "Properties"),
+            (".yml", "YAML"),
+            (".yaml", "YAML"),
+            (".json", "JSON Config"),
+            (".toml", "TOML"),
+            (".env", "Environment"),
+            (".htaccess", "Apache Config"),
+            (".plist", "macOS Property List")
+        ],
+        "Programmazione": [
+            (".c", "C"),
+            (".cpp", "C++"),
+            (".cs", "C#"),
+            (".java", "Java"),
+            (".py", "Python"),
+            (".js", "JavaScript"),
+            (".php", "PHP"),
+            (".rb", "Ruby"),
+            (".go", "Golang"),
+            (".rs", "Rust"),
+            (".swift", "Swift"),
+            (".pl", "Perl"),
+            (".lua", "Lua"),
+            (".h", "Header C"),
+            (".hpp", "Header C++"),
+            (".vb", "Visual Basic"),
+            (".ts", "TypeScript"),
+            (".scala", "Scala"),
+            (".groovy", "Groovy"),
+            (".kt", "Kotlin")
+        ]
+    }
         
         # Create a list of all extensions for "profonda" mode
         all_extensions = []
@@ -6393,13 +6390,13 @@ class FileSearchApp:
         current_settings = self.get_extension_settings(mode)
         
         # Extensions that should be included in each search level
-        base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
-                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc',
-                        '.eml', '.msg']  # Aggiunto .msg per supporto base email
+        base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.log', 
+                        '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls', '.rtf', '.odt', '.ods', '.odp',
+                        '.csv','.eml', '.msg', '.emlx']
                         
         advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
                                             '.vbs', '.js', '.config', '.ini', '.reg',
-                                            '.pst', '.ost', '.mbox']  # Aggiunti formati email avanzati
+                                            '.pst', '.ost', '.mbox']
         
         # Per modalità profonda, usa tutte le estensioni definite
         if mode == "profonda":
@@ -6527,48 +6524,33 @@ class FileSearchApp:
         """Get default extensions for the specified search mode"""
         if mode == "base":
             return [
-                '.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
-                '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls', 
-                '.rtf', '.odt', '.ods', '.odp',
+                # Documenti di testo
+                '.txt', '.md', '.html', '.htm', '.xml', '.json', '.log',
+                # Documenti Office
+                '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls',
+                # Formati OpenDocument
+                '.rtf', '.odt', '.ods', '.odp', 
+                # Fogli di calcolo
+                '.csv',
                 # Formati email di base
                 '.eml', '.msg', '.emlx'
             ]
         elif mode == "avanzata":
-            # Prima ottieni le estensioni base
+            # Il resto del codice rimane uguale
             base_exts = self.get_default_extensions("base")
-            
-            # Poi aggiungi estensioni avanzate (senza duplicati)
             advanced_only = [
-                # File di sistema e script
+                # Estensioni avanzate...
                 '.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', '.vbs', 
                 '.config', '.ini', '.reg',
-                
-                # File di programmazione comuni
                 '.py', '.java', '.php', '.cs', '.cpp', '.c', '.h', '.rb', '.js',
-                
-                # File di database semplici
                 '.db', '.sqlite', '.sqlite3',
-                
-                # Formati email avanzati
                 '.pst', '.ost', '.mbox', '.mbx', '.dbx',
-                
-                # File di configurazione aggiuntivi
                 '.env', '.yml', '.yaml', '.toml', '.json5',
-                
-                # File di backup e temporanei
                 '.bak', '.old', '.tmp', '.temp',
-                
-                # Formati di documento meno comuni
                 '.epub', '.tex', '.rst',
-                
-                # File web
                 '.css', '.less', '.scss', '.jsp', '.asp', '.aspx',
-                
-                # Altri formati Office meno comuni
                 '.dot', '.dotx', '.xlt', '.xltx', '.pot', '.potx', '.ppsx'
             ]
-            
-            # Combina le liste evitando duplicati
             return base_exts + [ext for ext in advanced_only if ext not in base_exts]
         else:  # profonda
             return []  # Il valore effettivo viene determinato in configure_extensions
@@ -6583,8 +6565,17 @@ class FileSearchApp:
                 "profonda": self.get_default_extensions("profonda")
             }
         
-        # Aggiungi log per verificare le estensioni quando si accede ad esse
-        extensions = self.extension_settings.get(mode, [])
+        extensions = self.extension_settings.get(mode)
+        
+        # Se non abbiamo estensioni per questa modalità o la lista è vuota, 
+        # usa i valori predefiniti
+        if extensions is None or len(extensions) == 0:
+            extensions = self.get_default_extensions(mode)
+            # Salva queste estensioni predefinite per usi futuri
+            if not hasattr(self, 'extension_settings'):
+                self.extension_settings = {}
+            self.extension_settings[mode] = extensions
+        
         self.log_debug(f"Estensioni caricate per modalità {mode}: {', '.join(extensions)}")
         return extensions
         
@@ -7637,4 +7628,3 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
-
