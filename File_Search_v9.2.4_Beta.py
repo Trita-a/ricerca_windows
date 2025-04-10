@@ -440,9 +440,9 @@ class FileSearchApp:
                             break
             
             if matched:
-                # Verifica se il match è in un allegato di un file EML
+                # Verifica se il match è in un allegato di un file EMAIL (EML o MSG)
                 _, ext = os.path.splitext(file_path)
-                if ext.lower() == '.eml' and search_content and "--- ALLEGATO" in content:
+                if ext.lower() in ['.eml', '.msg'] and search_content and "--- ALLEGATO" in content:
                     # Cerca il match dopo un'intestazione di allegato
                     attachment_sections = content.split("--- ALLEGATO")
                     for section in attachment_sections[1:]:  # Salta il primo che è l'intestazione email
@@ -453,7 +453,7 @@ class FileSearchApp:
                                 self.log_debug(f"Match trovato in allegato di {file_path}")
                                 return self.create_file_info(file_path, from_attachment=True)
                 
-                # Match normale (non in allegato o non in file EML)
+                # Match normale (non in allegato o non in file EMAIL)
                 return self.create_file_info(file_path)
                 
         except Exception as e:
@@ -3599,9 +3599,296 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file {ext} {file_path}: {str(e)}")
                     return ""
             
-            # Formato non supportato o non gestito
-            self.log_debug(f"Formato {ext} non supportato per estrazione contenuto")
-            return ""
+            # File MSG (Outlook)
+            elif ext == '.msg':
+                try:
+                    self.log_debug(f"Processando file MSG Outlook: {file_path}")
+                    try:
+                        import extract_msg
+                        msg = extract_msg.Message(file_path)
+                        
+                        content_parts = []
+                        
+                        # Estrai intestazioni principali
+                        from_address = msg.sender if hasattr(msg, 'sender') else "N/A"
+                        to_address = msg.to if hasattr(msg, 'to') else "N/A"
+                        subject = msg.subject if hasattr(msg, 'subject') else "N/A"
+                        msg_date = msg.date if hasattr(msg, 'date') else "N/A"
+                        
+                        # Aggiungi intestazioni al contenuto
+                        content_parts.append(f"Da: {from_address}")
+                        content_parts.append(f"A: {to_address}")
+                        content_parts.append(f"Oggetto: {subject}")
+                        content_parts.append(f"Data: {msg_date}")
+                        content_parts.append("-" * 40)  # Separatore
+                        
+                        # Estrai corpo del messaggio
+                        msg_body = msg.body if hasattr(msg, 'body') else ""
+                        if msg_body:
+                            content_parts.append(msg_body)
+                        
+                        # Contatori per monitoraggio allegati
+                        attachment_count = 0
+                        
+                        # Processa allegati esattamente come fatto per gli EML
+                        for attachment in msg.attachments:
+                            if not hasattr(attachment, 'name') or not attachment.name:
+                                continue
+                            
+                            attachment_count += 1
+                            filename = attachment.name
+                            content_parts.append(f"\n--- ALLEGATO {attachment_count}: {filename} ---\n")
+                            
+                            try:
+                                # Ottieni i dati binari dell'allegato
+                                attachment_data = None
+                                if hasattr(attachment, 'data'):
+                                    attachment_data = attachment.data
+                                elif hasattr(attachment, 'getBytes'):
+                                    attachment_data = attachment.getBytes()
+                                
+                                if not attachment_data:
+                                    content_parts.append(f"[Allegato vuoto o non leggibile]")
+                                    continue
+                                
+                                # Ottieni il tipo di contenuto (MIME type)
+                                content_type = ""
+                                if hasattr(attachment, 'mimetype') and attachment.mimetype:
+                                    content_type = attachment.mimetype
+                                
+                                # IMPORTANTE: Usa esattamente la stessa funzione di EML
+                                # per processare l'allegato ed estrarre il contenuto
+                                attachment_content = self.process_email_attachment(
+                                    attachment_data, filename, content_type)
+                                
+                                if attachment_content:
+                                    # Aggiungi il contenuto estratto ai risultati
+                                    content_parts.append(attachment_content)
+                                    self.log_debug(f"Estratto contenuto da allegato '{filename}': {len(attachment_content)} caratteri")
+                                else:
+                                    content_parts.append(f"[Allegato {filename}: nessun contenuto estraibile]")
+                                    
+                            except Exception as e:
+                                self.log_debug(f"Errore nell'elaborazione dell'allegato {filename}: {str(e)}")
+                                content_parts.append(f"[Errore nell'elaborazione dell'allegato: {str(e)}]")
+                        
+                        content = "\n".join(content_parts)
+                        self.log_debug(f"Estratti {len(content)} caratteri da MSG (inclusi {attachment_count} allegati)")
+                        return content
+                        
+                    except ImportError:
+                        self.log_debug("Libreria extract_msg non disponibile")
+                        # Metodo fallback - estrai contenuto usando regexp base
+                        with open(file_path, 'rb') as f:
+                            binary_content = f.read()
+                            text_content = ""
+                            # Cerca stringhe ASCII leggibili nel file binario
+                            import re
+                            text_chunks = re.findall(b'[\x20-\x7E\r\n]{4,}', binary_content)
+                            for chunk in text_chunks:
+                                try:
+                                    text_content += chunk.decode('utf-8', errors='replace') + "\n"
+                                except:
+                                    pass
+                            
+                            if text_content:
+                                self.log_debug(f"Estratti {len(text_content)} caratteri da MSG (metodo fallback)")
+                                return text_content
+                            return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file MSG {file_path}: {str(e)}")
+                    return ""
+
+            # File PST/OST (Outlook database) - versione semplificata senza dipendenze esterne
+            elif ext in ['.pst', '.ost']:
+                try:
+                    self.log_debug(f"Processando file {ext} Outlook: {file_path}")
+                    
+                    # Estrai metadati di base
+                    file_size = os.path.getsize(file_path)
+                    content_parts = []
+                    
+                    content_parts.append(f"File {ext.upper()} Outlook")
+                    content_parts.append(f"Percorso: {file_path}")
+                    content_parts.append(f"Dimensione: {self._format_size(file_size)}")
+                    content_parts.append(f"Data modifica: {datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%d/%m/%Y %H:%M')}")
+                    
+                    # Estrai stringhe di testo leggibili (approccio base)
+                    try:
+                        with open(file_path, 'rb') as f:
+                            binary_content = f.read(1024*1024)  # Leggi solo il primo MB
+                            
+                            # Usa espressione regolare per trovare stringhe ASCII leggibili
+                            import re
+                            # Trova stringhe alfanumeriche con spazi/punteggiatura di almeno 5 caratteri
+                            pattern = re.compile(b'[a-zA-Z0-9\\s\\.,@\\-_:;\'"/]{5,}')
+                            matches = pattern.findall(binary_content)
+                            
+                            # Filtra e converte le stringhe trovate
+                            strings = []
+                            for match in matches:
+                                try:
+                                    text = match.decode('utf-8', errors='replace')
+                                    # Filtra stringhe che sembrano email valide o messaggi
+                                    if ('@' in text or 
+                                        text.startswith("To:") or 
+                                        text.startswith("From:") or 
+                                        text.startswith("Subject:")):
+                                        strings.append(text)
+                                    # O stringhe abbastanza lunghe da essere significative
+                                    elif len(text) > 15:
+                                        strings.append(text)
+                                except:
+                                    pass
+                            
+                            # Aggiungi i risultati all'output
+                            if strings:
+                                content_parts.append("\n--- Contenuto estratto ---\n")
+                                content_parts.extend(strings)
+                    except Exception as e:
+                        self.log_debug(f"Errore nell'estrazione del testo: {str(e)}")
+                    
+                    content = "\n".join(content_parts)
+                    self.log_debug(f"Estratti {len(content)} caratteri da {ext}")
+                    return content
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file {ext} {file_path}: {str(e)}")
+                    return ""
+
+            # File MBOX - usa il modulo mailbox standard
+            elif ext == '.mbox':
+                try:
+                    self.log_debug(f"Processando file MBOX: {file_path}")
+                    import mailbox
+                    import email
+                    
+                    # Apri il file MBOX
+                    mbox = mailbox.mbox(file_path)
+                    content_parts = []
+                    
+                    # Limita il numero di messaggi da processare
+                    max_messages = 50
+                    processed = 0
+                    
+                    content_parts.append(f"File MBOX: {os.path.basename(file_path)}")
+                    content_parts.append(f"Totale messaggi: {len(mbox)}")
+                    content_parts.append("-" * 40)
+                    
+                    # Itera attraverso i messaggi
+                    for key, msg in mbox.items():
+                        if processed >= max_messages:
+                            content_parts.append(f"[Limitato a {max_messages} messaggi]")
+                            break
+                        
+                        try:
+                            # Estrai le intestazioni principali
+                            headers = []
+                            for header in ['From', 'To', 'Subject', 'Date']:
+                                if msg[header]:
+                                    headers.append(f"{header}: {msg[header]}")
+                            
+                            content_parts.append(f"\n--- MESSAGGIO {processed+1} ---")
+                            content_parts.extend(headers)
+                            
+                            # Estrai corpo del messaggio
+                            if msg.is_multipart():
+                                for part in msg.walk():
+                                    content_type = part.get_content_type()
+                                    if content_type == "text/plain" and not part.get_filename():
+                                        try:
+                                            payload = part.get_payload(decode=True)
+                                            if payload:
+                                                charset = part.get_content_charset() or 'utf-8'
+                                                text = payload.decode(charset, errors='replace')
+                                                content_parts.append(text)
+                                        except:
+                                            pass
+                            else:
+                                payload = msg.get_payload(decode=True)
+                                if payload:
+                                    charset = msg.get_content_charset() or 'utf-8'
+                                    try:
+                                        text = payload.decode(charset, errors='replace')
+                                        content_parts.append(text)
+                                    except:
+                                        pass
+                            
+                            processed += 1
+                        except Exception as e:
+                            self.log_debug(f"Errore nel processare il messaggio MBOX: {str(e)}")
+                    
+                    mbox.close()
+                    content = "\n".join(content_parts)
+                    self.log_debug(f"Estratti {len(content)} caratteri da MBOX")
+                    return content
+                except ImportError:
+                    self.log_debug("Libreria mailbox non disponibile")
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file MBOX {file_path}: {str(e)}")
+                    return ""
+
+            # File EMLX (Apple Mail)
+            elif ext == '.emlx':
+                try:
+                    self.log_debug(f"Processando file EMLX: {file_path}")
+                    import email
+                    
+                    # I file EMLX hanno un formato particolare: prima riga è un numero, poi segue il messaggio email
+                    with open(file_path, 'rb') as f:
+                        content = f.read()
+                        
+                    # Separa il numero iniziale dal resto del contenuto email
+                    try:
+                        # La prima riga è un numero seguito da una nuova riga
+                        parts = content.split(b'\n', 1)
+                        if len(parts) > 1:
+                            email_content = parts[1]
+                            
+                            # Parse dell'email con il modulo email standard
+                            msg = email.message_from_bytes(email_content)
+                            
+                            # Da qui in poi possiamo usare lo stesso codice per gestire il messaggio
+                            # come facciamo per i file EML standard
+                            content_parts = []
+                            
+                            # Estrai intestazioni
+                            for header in ['From', 'To', 'Subject', 'Date']:
+                                if msg[header]:
+                                    content_parts.append(f"{header}: {msg[header]}")
+                            
+                            # Estrai corpo del messaggio
+                            if msg.is_multipart():
+                                for part in msg.walk():
+                                    content_type = part.get_content_type()
+                                    if content_type == "text/plain" and not part.get_filename():
+                                        payload = part.get_payload(decode=True)
+                                        if payload:
+                                            charset = part.get_content_charset() or 'utf-8'
+                                            try:
+                                                text = payload.decode(charset, errors='replace')
+                                                content_parts.append(text)
+                                            except:
+                                                pass
+                            else:
+                                payload = msg.get_payload(decode=True)
+                                if payload:
+                                    try:
+                                        text = payload.decode('utf-8', errors='replace')
+                                        content_parts.append(text)
+                                    except:
+                                        pass
+                            
+                            result = "\n".join(content_parts)
+                            self.log_debug(f"Estratti {len(result)} caratteri da EMLX")
+                            return result
+                    except Exception as e:
+                        self.log_debug(f"Errore nell'analisi del file EMLX: {str(e)}")
+                    
+                    return ""
+                except Exception as e:
+                    self.log_debug(f"Errore nell'analisi del file EMLX {file_path}: {str(e)}")
+                    return ""
             
         except Exception as e:
             self.log_debug(f"Errore generale nella lettura del file {file_path}: {str(e)}")
@@ -6242,7 +6529,9 @@ class FileSearchApp:
             return [
                 '.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
                 '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls', 
-                '.rtf', '.odt', '.ods', '.odp', '.vcf', '.ics', '.eml' 
+                '.rtf', '.odt', '.ods', '.odp',
+                # Formati email di base
+                '.eml', '.msg', '.emlx'
             ]
         elif mode == "avanzata":
             # Prima ottieni le estensioni base
@@ -6259,6 +6548,9 @@ class FileSearchApp:
                 
                 # File di database semplici
                 '.db', '.sqlite', '.sqlite3',
+                
+                # Formati email avanzati
+                '.pst', '.ost', '.mbox', '.mbx', '.dbx',
                 
                 # File di configurazione aggiuntivi
                 '.env', '.yml', '.yaml', '.toml', '.json5',
