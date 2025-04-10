@@ -6007,13 +6007,13 @@ class FileSearchApp:
     
     def open_file_location(self, event=None):
         """Apre il percorso del file selezionato nel file explorer"""
-               
+            
         selected_items = self.results_list.selection()
         if not selected_items:
             return
             
         selected_item = selected_items[0]  # Prendi il primo elemento selezionato
-        file_path = self.results_list.item(selected_item, "values")[5]  # Ottieni il percorso del file
+        file_path = self.results_list.item(selected_item, "values")[6]  # Modificato da 5 a 6
         
         try:
             if os.path.exists(file_path):
@@ -7637,3 +7637,4 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
+
