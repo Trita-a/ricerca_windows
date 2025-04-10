@@ -4154,7 +4154,11 @@ class FileSearchApp:
             # Calcola la dimensione totale dai risultati
             for result in self.search_results:
                 try:
-                    item_type, _, size_str, _, _, _ = result
+                    # Handle both 6-element and 7-element results
+                    if len(result) >= 7:  # If it includes from_attachment flag
+                        item_type, _, size_str, _, _, _, _ = result
+                    else:
+                        item_type, _, size_str, _, _, _ = result
                     
                     # Conta solo i file, non le directory
                     if item_type != "Directory":
@@ -5936,7 +5940,24 @@ class FileSearchApp:
                 (".mobi", "E-book Mobi"),
                 (".vcf", "vCard"),
                 (".ics", "iCalendar"),
-                (".eml", "Email")
+                # .eml rimosso da qui e spostato nella categoria Email
+            ],
+            # NUOVO: Tab dedicato alle email con diverse estensioni
+            "Email": [
+                (".eml", "Email standard"),
+                (".msg", "Email formato Outlook"),
+                (".pst", "Archivio Outlook"),
+                (".ost", "Archivio Outlook Offline"),
+                (".mbox", "Mailbox Unix/Linux"),
+                (".emlx", "Email formato Apple Mail"),
+                (".mbx", "Mailbox formato Eudora/Thunderbird"),
+                (".dbx", "Archivio Outlook Express"),
+                (".wab", "Windows Address Book"),
+                (".nws", "Email formato Outlook Express"),
+                (".mht", "MIME HTML Archive"),
+                (".mhtml", "MIME HTML Archive"),
+                (".imapmbox", "IMAP Mailbox"),
+                (".email", "Email generica")
             ],
             "Fogli calcolo": [
                 (".xls", "Excel vecchio"),
@@ -6086,17 +6107,19 @@ class FileSearchApp:
         
         # Extensions that should be included in each search level
         base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.json', '.log', 
-                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc']
+                        '.docx', '.pdf', '.pptx', '.xlsx', '.rtf', '.odt', '.xls', '.doc',
+                        '.eml', '.msg']  # Aggiunto .msg per supporto base email
                         
         advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
-                                            '.vbs', '.js', '.config', '.ini', '.reg']
+                                            '.vbs', '.js', '.config', '.ini', '.reg',
+                                            '.pst', '.ost', '.mbox']  # Aggiunti formati email avanzati
         
         # Per modalità profonda, usa tutte le estensioni definite
         if mode == "profonda":
             # Sovrascrive le impostazioni correnti per far sì che tutte le estensioni siano selezionate
             current_settings = all_extensions
         
-         # Dizionario per tenere traccia dei pulsanti per categoria
+        # Dizionario per tenere traccia dei pulsanti per categoria
         category_buttons = {}
         
         # Create tabs for each category
@@ -6394,7 +6417,7 @@ class FileSearchApp:
         title_label.pack(anchor=W)
 
         # Aggiunta del testo "Antonino" sotto il titolo
-        antonino_label = ttk.Label(title_text_container, text="Aps Sc QS Antonino Tessio", 
+        antonino_label = ttk.Label(title_text_container, text="APS.QS Antonino Tessio", 
                             font=("Helvetica", 12))
         antonino_label.pack(anchor=W)
 
