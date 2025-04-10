@@ -136,3 +136,5 @@ E altri linguaggi di programmazione
 .dll - Librerie dinamiche Windows
 .so - Librerie condivise Linux
 .dylib - Librerie dinamiche macOS 
+9.2.4
+aggiunto supporto eml msg e allegati
