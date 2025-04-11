@@ -1523,6 +1523,8 @@ class FileSearchApp:
         # Determina il numero massimo di file per blocco in base alle impostazioni
         max_files_in_block = self.max_files_per_block.get()
         
+         # NUOVA RIGA: Verifica se il calcolo della dimensione è abilitato
+        calculation_enabled = self.dir_size_calculation.get() != "disabilitato"
         # Adatta automaticamente la dimensione del blocco se richiesto
         if self.block_size_auto_adjust.get():
             # Ottimizzazione per ricerche di sistema o cartelle molto grandi
@@ -1809,6 +1811,9 @@ class FileSearchApp:
             dirs_checked = [0]
             start_time = time.time()
             timeout = self.timeout_seconds.get() if self.timeout_enabled.get() else None
+            
+            # NUOVA RIGA: Verifica all'inizio se il calcolo della dimensione è abilitato
+            calculation_enabled = self.dir_size_calculation.get() != "disabilitato"
             
             self.current_search_size = 0  # Dimensione totale dei file trovati
             last_size_update_time = time.time()  # Per aggiornamenti periodici
@@ -4493,8 +4498,11 @@ class FileSearchApp:
                                 # È solo un messaggio di stato semplice
                                 self.status_label["text"] = value
                         elif progress_type == "update_dir_size":
-                            if hasattr(self, 'dir_size_var'):
+                            calculation_mode = self.dir_size_calculation.get()
+                            if hasattr(self, 'dir_size_var') and calculation_mode != "disabilitato":
                                 self.dir_size_var.set(self._format_size(value))
+                            elif hasattr(self, 'dir_size_var') and calculation_mode == "disabilitato":
+                                self.dir_size_var.set("Calcolo disattivato")
                         elif progress_type == "complete":
                             self.is_searching = False
                             self.enable_all_controls()
@@ -8192,3 +8200,4 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
+
