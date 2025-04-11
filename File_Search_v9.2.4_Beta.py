@@ -1236,7 +1236,7 @@ class FileSearchApp:
         keywords = self.keyword_entry.get().strip()
         
         # Stampa di debug (puoi rimuoverla in produzione)
-        print(f"Debug - Percorso: '{search_path}', Parole chiave: '{keywords}'")
+        self.log_debug(f"Avvio ricerca - Percorso: '{search_path}', Parole chiave: '{keywords}'")
         
         # 1. Verifica il percorso
         if not search_path:
@@ -1274,7 +1274,16 @@ class FileSearchApp:
         
         # Aggiorna le informazioni del disco qui, quando l'utente clicca su cerca
         calculation_mode = self.dir_size_calculation.get()
-        should_calculate = calculation_mode != "disabilitato"
+        
+        # CORREZIONE: Determina se calcolare la dimensione in modo esplicito
+        should_calculate = False
+        if calculation_mode == "stimato" or calculation_mode == "accurato":
+            should_calculate = True
+            self.log_debug(f"Calcolo dimensione directory abilitato: {calculation_mode}")
+        else:
+            self.log_debug("Calcolo dimensione directory disabilitato")
+        
+        # Passa il flag corretto a update_disk_info
         self.update_disk_info(path=search_path, calculate_dir_size=should_calculate)
 
         self.show_optimization_tips(self.search_path.get())
@@ -6015,29 +6024,43 @@ class FileSearchApp:
             return (0, 0, 0)
 
     def update_disk_info(self, path=None, calculate_dir_size=True):
-        """Aggiorna le informazioni del disco. Funzione wrapper che mantiene compatibilità con le chiamate esistenti."""
-        # Se non viene specificato un percorso, usa quello corrente
+        """Aggiorna le informazioni sul disco e sulla directory"""
         if path is None:
             path = self.search_path.get()
         
-        # Se il percorso non esiste o è vuoto, non fare nulla
         if not path or not os.path.exists(path):
-            self.log_debug(f"Percorso non valido per update_disk_info: {path}")
+            return
+
+        # Aggiorna la variabile di controllo globale in base al parametro
+        self.directory_calculation_enabled = calculate_dir_size
+        
+        # Solo per debug
+        self.log_debug(f"Aggiornamento info disco: path={path}, calculation_enabled={self.directory_calculation_enabled}")
+        
+        # Se il calcolo è disabilitato, aggiorna solo le informazioni del disco
+        if not self.directory_calculation_enabled:
+            self.log_debug("Calcolo dimensione directory disabilitato nelle impostazioni")
+            
+            # Aggiorniamo solo le informazioni del disco senza calcolare la dimensione della directory
+            try:
+                total, used, free = self.get_disk_space(path)
+                percent_used = (used / total) * 100 if total > 0 else 0
+                
+                total_formatted = self._format_size(total)
+                free_formatted = self._format_size(free)
+                
+                self.disk_info_label.config(text=f"Disco: {total_formatted} totali, {free_formatted} liberi ({percent_used:.1f}% usato)")
+                
+                # Importante: NON avviare il thread di calcolo della directory
+                if hasattr(self, 'dir_size_label'):
+                    self.dir_size_label.config(text="Dimensione directory: calcolo disabilitato")
+            except Exception as e:
+                self.log_debug(f"Errore nell'aggiornamento info disco: {str(e)}")
+            
             return
         
-        # Verifica se il calcolo è disabilitato
-        if self.dir_size_calculation.get() == "disabilitato":
-            self.log_debug(f"update_disk_info: calcolo dimensione directory disabilitato nelle impostazioni")
-            calculate_dir_size = False
-        
-        self.log_debug(f"update_disk_info: aggiornamento info disco per {path}, calcola_dimensione={calculate_dir_size}")
-        
-        # Avvia un thread separato per calcolare le informazioni del disco
-        threading.Thread(
-            target=self._async_update_disk_info,
-            args=(path, calculate_dir_size),
-            daemon=True
-        ).start()
+        # Se arriviamo qui, il calcolo è abilitato e dobbiamo procedere
+        self._async_update_disk_info(path, calculate_dir_size)
         
     def _update_disk_info_thread(self, path, calculate_dir_size):
         """Thread per calcolare le informazioni del disco"""
@@ -7899,6 +7922,7 @@ class FileSearchApp:
         self.dir_size_calculation = StringVar(value="disabilitato")
         
         # Variabili per la visualizzazione
+        self.directory_calculation_enabled = False
         self.dir_size_var = StringVar(value="")
         self.total_disk_var = StringVar(value="")
         self.used_disk_var = StringVar(value="")
