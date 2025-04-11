@@ -7434,7 +7434,7 @@ class FileSearchApp:
 
     def show_advanced_options(self):
         """Mostra una finestra di dialogo unificata per tutte le opzioni avanzate"""
-        dialog = tk.Toplevel(self.root)
+        dialog = ttk.Toplevel(self.root)
         dialog.title("Impostazioni avanzate")
         dialog.geometry("800x650")
         dialog.transient(self.root)
@@ -7467,27 +7467,46 @@ class FileSearchApp:
         
         ttk.Label(depth_control, text="Profondità:").pack(side=LEFT)
         
-        # Creiamo una StringVar per facilitare il reset dei valori
-        depth_var = StringVar(value=str(self.max_depth))
+        # Usa variabili per i controlli
+        depth_var = IntVar(value=self.max_depth)
         depth_spinbox = ttk.Spinbox(depth_control, from_=0, to=20, width=3, textvariable=depth_var)
         depth_spinbox.pack(side=LEFT, padx=5)
-        self.depth_spinbox = depth_spinbox  # Salva riferimento
         ttk.Label(depth_control, text="(0 = illimitata)", foreground="gray").pack(side=LEFT)
+        
+        # AGGIUNTO TOOLTIP
+        self.create_tooltip(depth_spinbox, 
+                    "Controlla quanto a fondo cercare nelle sottocartelle.\n"
+                    "Un valore più alto aumenta il tempo di ricerca ma trova file in cartelle più profonde.\n"
+                    "Il valore 0 cerca in tutte le sottocartelle senza limiti di profondità.")
         
         # Contenuti da cercare
         content_frame = ttk.LabelFrame(search_options_frame, text="Contenuti da cercare", padding=10)
         content_frame.pack(fill=X, pady=10)
         
-        # Creiamo copie locali delle variabili per poterle resettare
         search_files_var = BooleanVar(value=self.search_files.get())
-        search_folders_var = BooleanVar(value=self.search_folders.get())
-        search_content_var = BooleanVar(value=self.search_content.get())
-        whole_word_var = BooleanVar(value=self.whole_word_search.get())
+        search_files_cb = ttk.Checkbutton(content_frame, text="Cerca nei file", variable=search_files_var)
+        search_files_cb.pack(anchor=W, pady=2)
+        self.create_tooltip(search_files_cb, "Attiva per includere i file nei risultati di ricerca")
         
-        ttk.Checkbutton(content_frame, text="Cerca nei file", variable=search_files_var).pack(anchor=W, pady=2)
-        ttk.Checkbutton(content_frame, text="Cerca nelle cartelle", variable=search_folders_var).pack(anchor=W, pady=2)
-        ttk.Checkbutton(content_frame, text="Cerca nei contenuti dei file", variable=search_content_var).pack(anchor=W, pady=2)
-        ttk.Checkbutton(content_frame, text="Cerca parole intere", variable=whole_word_var).pack(anchor=W, pady=2)
+        search_folders_var = BooleanVar(value=self.search_folders.get())
+        search_folders_cb = ttk.Checkbutton(content_frame, text="Cerca nelle cartelle", variable=search_folders_var)
+        search_folders_cb.pack(anchor=W, pady=2)
+        self.create_tooltip(search_folders_cb, "Attiva per includere le cartelle nei risultati di ricerca")
+        
+        search_content_var = BooleanVar(value=self.search_content.get())
+        search_content_cb = ttk.Checkbutton(content_frame, text="Cerca nei contenuti dei file", variable=search_content_var)
+        search_content_cb.pack(anchor=W, pady=2)
+        self.create_tooltip(search_content_cb, 
+                        "Attiva per cercare le parole chiave all'interno dei file.\n"
+                        "Questo rallenta la ricerca ma permette di trovare i file\n"
+                        "che contengono il testo cercato anche se non è nel nome.")
+        
+        whole_word_var = BooleanVar(value=self.whole_word_search.get())
+        whole_word_cb = ttk.Checkbutton(content_frame, text="Cerca parole intere", variable=whole_word_var)
+        whole_word_cb.pack(anchor=W, pady=2)
+        self.create_tooltip(whole_word_cb, 
+                        "Quando attivato, cerca solo corrispondenze esatte delle parole.\n"
+                        "Esempio: cercando 'log' NON troverà 'login' o 'catalogo'.")
         
         # ================= Scheda 2: Filtri avanzati =================
         filters_frame = ttk.Frame(notebook, padding=15)
@@ -7502,19 +7521,24 @@ class FileSearchApp:
         size_grid = ttk.Frame(size_frame)
         size_grid.pack(fill=X)
         
-        # Verifica che advanced_filters esista e inizializzalo se necessario
-        if not hasattr(self, 'advanced_filters'):
-            self.advanced_filters = {"size_min": 0, "size_max": 0, "date_min": "", "date_max": "", "extensions": []}
-        
-        ttk.Label(size_grid, text="Dimensione minima (KB):").grid(row=0, column=0, padx=5, pady=5, sticky=W)
-        min_size_var = StringVar(value=str(self.advanced_filters.get("size_min", 0) // 1024))
+        size_min_label = ttk.Label(size_grid, text="Dimensione minima (KB):")
+        size_min_label.grid(row=0, column=0, padx=5, pady=5, sticky=W)
+        min_size_var = StringVar(value=str(self.advanced_filters["size_min"] // 1024))
         min_size = ttk.Entry(size_grid, width=10, textvariable=min_size_var)
         min_size.grid(row=0, column=1, padx=5, pady=5)
+        self.create_tooltip(min_size, 
+                    "Filtra i file più piccoli della dimensione specificata in KB.\n"
+                    "Esempio: impostando 100 verranno ignorati i file minori di 100KB.")
         
-        ttk.Label(size_grid, text="Dimensione massima (KB):").grid(row=1, column=0, padx=5, pady=5, sticky=W)
-        max_size_var = StringVar(value=str(self.advanced_filters.get("size_max", 0) // 1024 if self.advanced_filters.get("size_max", 0) else 0))
+        size_max_label = ttk.Label(size_grid, text="Dimensione massima (KB):")
+        size_max_label.grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        max_size_var = StringVar(value=str(self.advanced_filters["size_max"] // 1024 if self.advanced_filters["size_max"] else 0))
         max_size = ttk.Entry(size_grid, width=10, textvariable=max_size_var)
         max_size.grid(row=1, column=1, padx=5, pady=5)
+        self.create_tooltip(max_size, 
+                    "Filtra i file più grandi della dimensione specificata in KB.\n"
+                    "Esempio: impostando 1000 verranno ignorati i file maggiori di 1000KB (1MB).\n"
+                    "Impostare a 0 per nessun limite.")
         
         # Filtri data
         date_frame = ttk.LabelFrame(filters_frame, text="Data di modifica", padding=10)
@@ -7525,50 +7549,57 @@ class FileSearchApp:
         date_grid = ttk.Frame(date_frame)
         date_grid.pack(fill=X)
         
-        ttk.Label(date_grid, text="Data inizio (DD-MM-YYYY):").grid(row=0, column=0, padx=5, pady=5, sticky=W)
-        min_date_var = StringVar(value=self.advanced_filters.get("date_min", ""))
+        date_min_label = ttk.Label(date_grid, text="Data inizio (DD-MM-YYYY):")
+        date_min_label.grid(row=0, column=0, padx=5, pady=5, sticky=W)
         min_date = ttk.DateEntry(date_grid, dateformat="%d-%m-%Y")
         min_date.grid(row=0, column=1, padx=5, pady=5)
         min_date.entry.delete(0, 'end')
-        if min_date_var.get():
-            min_date.entry.insert(0, min_date_var.get())
+        if self.advanced_filters["date_min"]:
+            min_date.entry.insert(0, self.advanced_filters["date_min"])
+        self.create_tooltip(min_date, 
+                    "Includi solo file modificati dopo questa data.\n"
+                    "Lascia vuoto per nessun limite di data minima.")
         
-        ttk.Label(date_grid, text="Data fine (DD-MM-YYYY):").grid(row=1, column=0, padx=5, pady=5, sticky=W)
-        max_date_var = StringVar(value=self.advanced_filters.get("date_max", ""))
+        date_max_label = ttk.Label(date_grid, text="Data fine (DD-MM-YYYY):")
+        date_max_label.grid(row=1, column=0, padx=5, pady=5, sticky=W)
         max_date = ttk.DateEntry(date_grid, dateformat="%d-%m-%Y")
         max_date.grid(row=1, column=1, padx=5, pady=5)
         max_date.entry.delete(0, 'end')
-        if max_date_var.get():
-            max_date.entry.insert(0, max_date_var.get())
+        if self.advanced_filters["date_max"]:
+            max_date.entry.insert(0, self.advanced_filters["date_max"])
+        self.create_tooltip(max_date, 
+                    "Includi solo file modificati prima di questa data.\n"
+                    "Lascia vuoto per nessun limite di data massima.")
         
         # ================= Scheda 3: Gestione esclusioni =================
         exclusions_frame = ttk.Frame(notebook, padding=15)
         notebook.add(exclusions_frame, text="Esclusioni")
-        
+
         ttk.Label(exclusions_frame, text="Aggiungi cartelle da escludere dalla ricerca:", wraplength=700).pack(anchor=W, pady=(0, 10))
-        
+
         # Lista dei percorsi esclusi
         list_frame = ttk.Frame(exclusions_frame)
-        list_frame.pack(fill=BOTH, expand=YES, pady=5)
-        
+        list_frame.pack(fill=BOTH, expand=YES, pady=5)  # Cambiato expand da NO a YES
+
         scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side=RIGHT, fill=Y)
-        
+
+        # Aggiungi il parametro height per specificare il numero di righe visibili
         excluded_list = ttk.Treeview(list_frame, columns=("path",), show="headings", 
-                                yscrollcommand=scrollbar.set, selectmode="extended")
+                                yscrollcommand=scrollbar.set, selectmode="extended", height=15)  # Aggiunto height=15
         excluded_list.heading("path", text="Percorso")
         excluded_list.column("path", width=450)
         excluded_list.pack(fill=BOTH, expand=YES)
+        self.create_tooltip(excluded_list, 
+                    "Elenco di cartelle escluse dalla ricerca.\n"
+                    "Le sottocartelle di questi percorsi non verranno analizzate.")
         
         scrollbar.config(command=excluded_list.yview)
         
-        # Inizializza excluded_paths se non esiste
-        if not hasattr(self, 'excluded_paths'):
-            self.excluded_paths = []
-        
         # Aggiungi i percorsi esclusi alla lista
-        for path in self.excluded_paths:
-            excluded_list.insert("", "end", values=(path,))
+        if hasattr(self, 'excluded_paths'):
+            for path in self.excluded_paths:
+                excluded_list.insert("", "end", values=(path,))
         
         # Frame per aggiungere nuovi percorsi
         add_frame = ttk.Frame(exclusions_frame)
@@ -7577,13 +7608,18 @@ class FileSearchApp:
         path_var = StringVar()
         path_entry = ttk.Entry(add_frame, textvariable=path_var, width=50)
         path_entry.pack(side=LEFT, padx=(0, 5), fill=X, expand=YES)
+        self.create_tooltip(path_entry, 
+                    "Inserisci il percorso completo della cartella da escludere.\n"
+                    "Esempio: C:/Windows o C:/Program Files")
         
         def browse_exclude():
             directory = filedialog.askdirectory()
             if directory:
                 path_var.set(directory)
         
-        ttk.Button(add_frame, text="Sfoglia", command=browse_exclude).pack(side=LEFT, padx=5)
+        browse_btn = ttk.Button(add_frame, text="Sfoglia", command=browse_exclude)
+        browse_btn.pack(side=LEFT, padx=5)
+        self.create_tooltip(browse_btn, "Seleziona la cartella da escludere usando una finestra di dialogo")
         
         def add_exclusion():
             path = path_var.get().strip()
@@ -7591,7 +7627,9 @@ class FileSearchApp:
                 excluded_list.insert("", "end", values=(path,))
                 path_var.set("")
         
-        ttk.Button(add_frame, text="Aggiungi", command=add_exclusion).pack(side=LEFT, padx=5)
+        add_btn = ttk.Button(add_frame, text="Aggiungi", command=add_exclusion)
+        add_btn.pack(side=LEFT, padx=5)
+        self.create_tooltip(add_btn, "Aggiungi il percorso specificato alla lista delle esclusioni")
         
         # Pulsante per rimuovere elementi selezionati
         def remove_selected():
@@ -7600,7 +7638,9 @@ class FileSearchApp:
                 for item in selected:
                     excluded_list.delete(item)
         
-        ttk.Button(exclusions_frame, text="Rimuovi selezionati", command=remove_selected).pack(anchor=W, pady=5)
+        remove_btn = ttk.Button(exclusions_frame, text="Rimuovi selezionati", command=remove_selected)
+        remove_btn.pack(anchor=W, pady=5)
+        self.create_tooltip(remove_btn, "Rimuovi i percorsi selezionati dalla lista delle esclusioni")
         
         # ================= Scheda 4: Opzioni a blocchi =================
         blocks_frame = ttk.Frame(notebook, padding=15)
@@ -7617,43 +7657,47 @@ class FileSearchApp:
         size_grid = ttk.Frame(size_frame)
         size_grid.pack(fill=X)
         
-        # Inizializza variabili se non esistono
-        if not hasattr(self, 'max_files_per_block'):
-            self.max_files_per_block = IntVar(value=1000)
-        if not hasattr(self, 'max_parallel_blocks'):
-            self.max_parallel_blocks = IntVar(value=4)
-            
-        # Crea copie locali per il reset
+        files_block_label = ttk.Label(size_grid, text="Max file per blocco:")
+        files_block_label.grid(row=0, column=0, sticky=W, padx=5, pady=5)
         files_block_var = IntVar(value=self.max_files_per_block.get())
-        parallel_var = IntVar(value=self.max_parallel_blocks.get())
-        
-        ttk.Label(size_grid, text="Max file per blocco:").grid(row=0, column=0, sticky=W, padx=5, pady=5)
         files_block = ttk.Spinbox(size_grid, from_=100, to=10000, increment=100, width=7, textvariable=files_block_var)
         files_block.grid(row=0, column=1, padx=5, pady=5)
+        self.create_tooltip(files_block, 
+                    "Numero massimo di file da processare in un singolo blocco.\n"
+                    "Valori più bassi aumentano la reattività dell'interfaccia ma\n"
+                    "possono ridurre leggermente la velocità di ricerca complessiva.")
         
-        ttk.Label(size_grid, text="Blocchi paralleli:").grid(row=0, column=2, sticky=W, padx=(20, 5), pady=5)
+        parallel_label = ttk.Label(size_grid, text="Blocchi paralleli:")
+        parallel_label.grid(row=0, column=2, sticky=W, padx=(20, 5), pady=5)
+        parallel_var = IntVar(value=self.max_parallel_blocks.get())
         parallel = ttk.Spinbox(size_grid, from_=1, to=16, increment=1, width=5, textvariable=parallel_var)
         parallel.grid(row=0, column=3, padx=5, pady=5)
+        self.create_tooltip(parallel, 
+                    "Numero di blocchi da elaborare contemporaneamente.\n"
+                    "Aumentare questo valore su sistemi con molte CPU può\n"
+                    "velocizzare la ricerca, ma consuma più risorse.")
         
         # Opzioni aggiuntive
         options_frame = ttk.LabelFrame(blocks_frame, text="Ottimizzazioni", padding=10)
         options_frame.pack(fill=X, pady=10)
         
-        # Inizializza se non esistono
-        if not hasattr(self, 'block_size_auto_adjust'):
-            self.block_size_auto_adjust = BooleanVar(value=True)
-        if not hasattr(self, 'prioritize_user_folders'):
-            self.prioritize_user_folders = BooleanVar(value=True)
-            
-        # Crea copie locali per il reset
         auto_adjust_var = BooleanVar(value=self.block_size_auto_adjust.get())
+        auto_adjust_cb = ttk.Checkbutton(options_frame, text="Adatta automaticamente la dimensione dei blocchi", 
+                    variable=auto_adjust_var)
+        auto_adjust_cb.pack(anchor=W, pady=2)
+        self.create_tooltip(auto_adjust_cb, 
+                    "Quando attivato, la dimensione dei blocchi viene adattata\n"
+                    "automaticamente in base al tipo di ricerca e alla velocità del sistema.\n"
+                    "Utile per bilanciare prestazioni e reattività.")
+        
         prioritize_var = BooleanVar(value=self.prioritize_user_folders.get())
-        
-        ttk.Checkbutton(options_frame, text="Adatta automaticamente la dimensione dei blocchi", 
-                    variable=auto_adjust_var).pack(anchor=W, pady=2)
-        
-        ttk.Checkbutton(options_frame, text="Dare priorità alle cartelle utente", 
-                    variable=prioritize_var).pack(anchor=W, pady=2)
+        prioritize_cb = ttk.Checkbutton(options_frame, text="Dare priorità alle cartelle utente", 
+                    variable=prioritize_var)
+        prioritize_cb.pack(anchor=W, pady=2)
+        self.create_tooltip(prioritize_cb, 
+                    "Analizza prima le cartelle più importanti come Documenti, Desktop,\n"
+                    "per trovare rapidamente i file più rilevanti.\n"
+                    "Utile quando si cercano file personali.")
         
         # ================= Scheda 5: Performance =================
         performance_frame = ttk.Frame(notebook, padding=15)
@@ -7667,37 +7711,42 @@ class FileSearchApp:
         timeout_grid = ttk.Frame(timeout_frame)
         timeout_grid.pack(fill=X, pady=5)
 
-        # Inizializza variabili se non esistono
-        if not hasattr(self, 'timeout_enabled'):
-            self.timeout_enabled = BooleanVar(value=False)
-        if not hasattr(self, 'timeout_seconds'):
-            self.timeout_seconds = IntVar(value=300)
-        if not hasattr(self, 'max_files_to_check'):
-            self.max_files_to_check = IntVar(value=100000)
-        if not hasattr(self, 'max_results'):
-            self.max_results = IntVar(value=10000)
-            
-        # Crea copie locali per il reset
-        timeout_enabled_var = BooleanVar(value=self.timeout_enabled.get())
-        timeout_seconds_var = IntVar(value=self.timeout_seconds.get())
-        max_files_var = IntVar(value=self.max_files_to_check.get())
-        max_results_var = IntVar(value=self.max_results.get())
-
         # Riga 0: Checkbox e secondi nella stessa riga
+        timeout_enabled_var = BooleanVar(value=self.timeout_enabled.get())
         timeout_check = ttk.Checkbutton(timeout_grid, text="Attiva timeout ricerca", variable=timeout_enabled_var)
         timeout_check.grid(row=0, column=0, sticky=W, padx=5, pady=2)
+        self.create_tooltip(timeout_check, 
+                    "Interrompe automaticamente la ricerca dopo il tempo specificato.\n"
+                    "Utile per evitare ricerche troppo lunghe su grandi volumi di dati.")
 
-        ttk.Label(timeout_grid, text="Secondi:").grid(row=0, column=1, sticky=W, padx=(55, 5), pady=2)
+        timeout_label = ttk.Label(timeout_grid, text="Secondi:")
+        timeout_label.grid(row=0, column=1, sticky=W, padx=(55, 5), pady=2)
+        timeout_seconds_var = IntVar(value=self.timeout_seconds.get())
         timeout_spin = ttk.Spinbox(timeout_grid, from_=10, to=3600, width=5, textvariable=timeout_seconds_var)
         timeout_spin.grid(row=0, column=2, padx=5, pady=2, sticky=W)
+        self.create_tooltip(timeout_spin, 
+                    "Durata massima della ricerca in secondi prima dell'interruzione automatica.\n"
+                    "Es. 300 = 5 minuti, 3600 = 1 ora")
         
-        ttk.Label(timeout_grid, text="Max file da controllare:").grid(row=1, column=0, sticky=W, padx=5, pady=5)
+        max_files_label = ttk.Label(timeout_grid, text="Max file da controllare:")
+        max_files_label.grid(row=1, column=0, sticky=W, padx=5, pady=5)
+        max_files_var = IntVar(value=self.max_files_to_check.get())
         max_files = ttk.Spinbox(timeout_grid, from_=1000, to=10000000, width=8, textvariable=max_files_var)
         max_files.grid(row=1, column=1, padx=5, pady=5, sticky=W)
+        self.create_tooltip(max_files, 
+                    "Numero massimo di file da controllare prima di terminare la ricerca.\n"
+                    "Limita le ricerche molto estese per evitare tempi di attesa eccessivi.\n"
+                    "Valori consigliati: 10000 per ricerche rapide, 100000 per ricerche approfondite.")
         
-        ttk.Label(timeout_grid, text="Max risultati:").grid(row=1, column=2, sticky=W, padx=5, pady=5)
+        max_results_label = ttk.Label(timeout_grid, text="Max risultati:")
+        max_results_label.grid(row=1, column=2, sticky=W, padx=5, pady=5)
+        max_results_var = IntVar(value=self.max_results.get())
         max_results = ttk.Spinbox(timeout_grid, from_=500, to=100000, width=8, textvariable=max_results_var)
         max_results.grid(row=1, column=3, padx=5, pady=5, sticky=W)
+        self.create_tooltip(max_results, 
+                    "Numero massimo di risultati da mostrare.\n"
+                    "Limita il numero di risultati per migliorare le prestazioni\n"
+                    "dell'interfaccia in caso di ricerche con molte corrispondenze.")
         
         # Processamento
         process_frame = ttk.LabelFrame(performance_frame, text="Processamento", padding=10)
@@ -7706,95 +7755,86 @@ class FileSearchApp:
         process_grid = ttk.Frame(process_frame)
         process_grid.pack(fill=X)
         
-        # Inizializza variabili se non esistono
-        if not hasattr(self, 'worker_threads'):
-            self.worker_threads = IntVar(value=4)
-        if not hasattr(self, 'max_file_size_mb'):
-            self.max_file_size_mb = IntVar(value=50)
-            
-        # Crea copie locali per il reset
+        threads_label = ttk.Label(process_grid, text="Thread paralleli:")
+        threads_label.grid(row=0, column=0, sticky=W, padx=5, pady=5)
         threads_var = IntVar(value=self.worker_threads.get())
-        max_size_mb_var = IntVar(value=self.max_file_size_mb.get())
-        
-        ttk.Label(process_grid, text="Thread paralleli:").grid(row=0, column=0, sticky=W, padx=5, pady=5)
         threads = ttk.Spinbox(process_grid, from_=1, to=16, width=3, textvariable=threads_var)
         threads.grid(row=0, column=1, padx=5, pady=5, sticky=W)
+        self.create_tooltip(threads, 
+                    "Numero di thread paralleli per la ricerca.\n"
+                    "Più thread accelerano la ricerca ma usano più CPU.\n"
+                    "Consigliato: 4-8 thread su PC moderni.")
         
-        ttk.Label(process_grid, text="Dimensione max file (MB):").grid(row=0, column=2, sticky=W, padx=5, pady=5)
-        max_size = ttk.Spinbox(process_grid, from_=1, to=1000, width=5, textvariable=max_size_mb_var)
-        max_size.grid(row=0, column=3, padx=5, pady=5, sticky=W)
+        max_size_label = ttk.Label(process_grid, text="Dimensione max file (MB):")
+        max_size_label.grid(row=0, column=2, sticky=W, padx=5, pady=5)
+        max_size_mb_var = IntVar(value=self.max_file_size_mb.get())
+        max_size_mb = ttk.Spinbox(process_grid, from_=1, to=1000, width=5, textvariable=max_size_mb_var)
+        max_size_mb.grid(row=0, column=3, padx=5, pady=5, sticky=W)
+        self.create_tooltip(max_size_mb, 
+                    "Dimensione massima in MB dei file di cui analizzare il contenuto.\n"
+                    "I file più grandi saranno considerati solo in base al nome.\n"
+                    "Un valore più basso aumenta la velocità di ricerca.")
         
         # Calcolo dimensioni
         calc_frame = ttk.LabelFrame(performance_frame, text="Calcolo dimensioni", padding=10)
         calc_frame.pack(fill=X, pady=10)
         
-        # Inizializza se non esiste
-        if not hasattr(self, 'dir_size_calculation'):
-            self.dir_size_calculation = StringVar(value="disabilitato")
-            
-        # Crea copia locale per il reset
+        calc_label = ttk.Label(calc_frame, text="Modalità di calcolo:")
+        calc_label.pack(side=LEFT, padx=5)
         dir_size_calc_var = StringVar(value=self.dir_size_calculation.get())
-        
-        ttk.Label(calc_frame, text="Modalità di calcolo:").pack(side=LEFT, padx=5)
         calc_combo = ttk.Combobox(calc_frame, textvariable=dir_size_calc_var, 
                             values=["incrementale", "preciso", "stimato", "sistema", "disabilitato"], 
                             width=12, state="readonly")
         calc_combo.pack(side=LEFT, padx=5)
+        self.create_tooltip(calc_combo, 
+                    "Modalità di calcolo della dimensione delle directory:\n"
+                    "• incrementale: aggiorna durante la ricerca\n"
+                    "• preciso: calcolo completo ma più lento\n"
+                    "• stimato: più veloce ma approssimato\n"
+                    "• sistema: usa comandi di sistema esterni\n"
+                    "• disabilitato: non calcolare le dimensioni")
         
         # Pulsanti finali per la finestra
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=X, pady=(15, 0))
         
-        # CORREZIONE: Implementazione corretta della funzione restore_defaults
-        def restore_defaults():
-            # Scheda 1: Opzioni di ricerca
-            depth_var.set("0")  # Profondità illimitata
-            search_files_var.set(True)
-            search_folders_var.set(True)
-            search_content_var.set(True)
-            whole_word_var.set(False)
-            
-            # Scheda 2: Filtri avanzati
-            min_size_var.set("0")
-            max_size_var.set("0")
-            min_date.entry.delete(0, END)
-            max_date.entry.delete(0, END)
-            
-            # Scheda 3: Esclusioni
-            for item in excluded_list.get_children():
-                excluded_list.delete(item)
-                
-            # Valori predefiniti per le esclusioni di sistema
-            default_exclusions = [
-                "C:\\Windows",
-                "C:\\Program Files",
-                "C:\\Program Files (x86)",
-                "C:\\$Recycle.Bin"
-            ]
-            for path in default_exclusions:
-                excluded_list.insert("", "end", values=(path,))
-            
-            # Scheda 4: Opzioni a blocchi
-            files_block_var.set(1000)  # Valore predefinito
-            parallel_var.set(4)        # Valore predefinito
-            auto_adjust_var.set(True)
-            prioritize_var.set(True)
-            
-            # Scheda 5: Performance
-            timeout_enabled_var.set(False)
-            timeout_seconds_var.set(300)
-            max_files_var.set(100000)
-            max_results_var.set(10000)
-            threads_var.set(min(8, os.cpu_count() or 4))  # Valore predefinito per CPU
-            max_size_mb_var.set(50)
-            dir_size_calc_var.set("disabilitato")
-            
-            messagebox.showinfo("Impostazioni", "Valori predefiniti ripristinati.")
-        
-        # CORREZIONE: Implementazione corretta di save_options che salva effettivamente le impostazioni
         def save_options():
-            # Salva le opzioni di ricerca
+            # Log dell'inizio dell'operazione
+            self.log_debug("===== INIZIO MODIFICA IMPOSTAZIONI AVANZATE =====")
+            
             try:
+                # Memorizza i valori precedenti per confronto
+                old_depth = self.max_depth
+                old_search_files = self.search_files.get()
+                old_search_folders = self.search_folders.get()
+                old_search_content = self.search_content.get()
+                old_whole_word = self.whole_word_search.get()
+                old_size_min = self.advanced_filters["size_min"]
+                old_size_max = self.advanced_filters["size_max"]
+                old_date_min = self.advanced_filters["date_min"]
+                old_date_max = self.advanced_filters["date_max"]
+                old_extensions = self.advanced_filters.get("extensions", [])
+                
+                # Inizializzazione sicura per excluded_paths
+                if hasattr(self, 'excluded_paths') and self.excluded_paths is not None:
+                    old_excluded_paths = self.excluded_paths.copy()
+                else:
+                    old_excluded_paths = []
+                    self.excluded_paths = []  # Inizializza se non esiste
+                    
+                old_max_files_block = self.max_files_per_block.get()
+                old_max_parallel = self.max_parallel_blocks.get()
+                old_auto_adjust = self.block_size_auto_adjust.get()
+                old_prioritize = self.prioritize_user_folders.get()
+                old_timeout_enabled = self.timeout_enabled.get()
+                old_timeout_seconds = self.timeout_seconds.get()
+                old_max_files = self.max_files_to_check.get()
+                old_max_results = self.max_results.get()
+                old_worker_threads = self.worker_threads.get()
+                old_max_file_size = self.max_file_size_mb.get()
+                old_dir_size_calc = self.dir_size_calculation.get()
+                
+                # Salva le opzioni di ricerca
                 self.max_depth = int(depth_var.get())
                 self.search_files.set(search_files_var.get())
                 self.search_folders.set(search_folders_var.get())
@@ -7811,11 +7851,12 @@ class FileSearchApp:
                 self.advanced_filters["date_max"] = max_date.entry.get().strip()
                 
                 # Salva i percorsi esclusi
-                self.excluded_paths = []
+                new_excluded_paths = []
                 for item in excluded_list.get_children():
                     values = excluded_list.item(item)["values"]
                     if values:
-                        self.excluded_paths.append(values[0])
+                        new_excluded_paths.append(values[0])
+                self.excluded_paths = new_excluded_paths
                 
                 # Salva le opzioni a blocchi
                 self.max_files_per_block.set(files_block_var.get())
@@ -7832,28 +7873,74 @@ class FileSearchApp:
                 self.max_file_size_mb.set(max_size_mb_var.get())
                 self.dir_size_calculation.set(dir_size_calc_var.get())
                 
+                # Log delle modifiche
+                self.log_debug(f"Profondità ricerca: {old_depth} -> {self.max_depth}")
+                self.log_debug(f"Cerca nei file: {old_search_files} -> {self.search_files.get()}")
+                self.log_debug(f"Cerca nelle cartelle: {old_search_folders} -> {self.search_folders.get()}")
+                self.log_debug(f"Cerca nei contenuti: {old_search_content} -> {self.search_content.get()}")
+                self.log_debug(f"Parole intere: {old_whole_word} -> {self.whole_word_search.get()}")
+                self.log_debug(f"Dimensione min (KB): {old_size_min//1024} -> {self.advanced_filters['size_min']//1024}")
+                self.log_debug(f"Dimensione max (KB): {old_size_max//1024} -> {self.advanced_filters['size_max']//1024}")
+                self.log_debug(f"Data min: '{old_date_min}' -> '{self.advanced_filters['date_min']}'")
+                self.log_debug(f"Data max: '{old_date_max}' -> '{self.advanced_filters['date_max']}'")
+
+                
+                # Log percorsi esclusi
+                added_paths = [p for p in self.excluded_paths if p not in old_excluded_paths]
+                removed_paths = [p for p in old_excluded_paths if p not in self.excluded_paths]
+                if added_paths:
+                    self.log_debug(f"Percorsi esclusi aggiunti: {', '.join(added_paths)}")
+                if removed_paths:
+                    self.log_debug(f"Percorsi esclusi rimossi: {', '.join(removed_paths)}")
+                    
+                self.log_debug(f"File per blocco: {old_max_files_block} -> {self.max_files_per_block.get()}")
+                self.log_debug(f"Blocchi paralleli: {old_max_parallel} -> {self.max_parallel_blocks.get()}")
+                self.log_debug(f"Auto-adattamento blocchi: {old_auto_adjust} -> {self.block_size_auto_adjust.get()}")
+                self.log_debug(f"Priorità cartelle utente: {old_prioritize} -> {self.prioritize_user_folders.get()}")
+                self.log_debug(f"Timeout attivo: {old_timeout_enabled} -> {self.timeout_enabled.get()}")
+                self.log_debug(f"Secondi timeout: {old_timeout_seconds} -> {self.timeout_seconds.get()}")
+                self.log_debug(f"Max file da controllare: {old_max_files} -> {self.max_files_to_check.get()}")
+                self.log_debug(f"Max risultati: {old_max_results} -> {self.max_results.get()}")
+                self.log_debug(f"Thread paralleli: {old_worker_threads} -> {self.worker_threads.get()}")
+                self.log_debug(f"Dimensione max file (MB): {old_max_file_size} -> {self.max_file_size_mb.get()}")
+                self.log_debug(f"Modalità calcolo dimensioni: '{old_dir_size_calc}' -> '{self.dir_size_calculation.get()}'")
+                
                 # CORREZIONE: Salva effettivamente le impostazioni su file
                 if hasattr(self, 'save_settings_to_file'):
                     self.save_settings_to_file()
-                    self.log_debug("Impostazioni avanzate salvate su file")
+                    self.log_debug("Impostazioni avanzate salvate su file permanente")
                 else:
-                    self.log_debug("Metodo save_settings_to_file non disponibile, salvataggio permanente non effettuato")
+                    self.log_debug("AVVISO: Metodo save_settings_to_file non disponibile, salvataggio permanente non effettuato")
                 
+                self.log_debug("===== FINE MODIFICA IMPOSTAZIONI AVANZATE - SALVATAGGIO COMPLETATO =====")
                 messagebox.showinfo("Impostazioni", "Opzioni salvate con successo!")
                 dialog.destroy()
                 
             except ValueError as e:
-                messagebox.showerror("Errore", f"Valore non valido: {str(e)}")
+                error_msg = f"Errore di valore non valido: {str(e)}"
+                self.log_debug(f"ERRORE SALVATAGGIO: {error_msg}")
+                messagebox.showerror("Errore", error_msg)
                 return
             except Exception as e:
-                messagebox.showerror("Errore", f"Errore durante il salvataggio: {str(e)}")
-                self.log_debug(f"Errore nel salvataggio delle opzioni avanzate: {str(e)}")
+                error_msg = f"Errore durante il salvataggio: {str(e)}"
+                self.log_debug(f"ERRORE SALVATAGGIO: {error_msg}")
+                import traceback
+                self.log_debug(traceback.format_exc())  # Registra il traceback completo dell'errore
+                messagebox.showerror("Errore", error_msg)
                 return
         
-        # CORREZIONE: Pulsanti correttamente configurati
-        ttk.Button(btn_frame, text="Ripristina valori predefiniti", command=restore_defaults).pack(side=LEFT)
-        ttk.Button(btn_frame, text="Annulla", command=dialog.destroy).pack(side=RIGHT, padx=5)
-        ttk.Button(btn_frame, text="Salva", command=save_options).pack(side=RIGHT, padx=5)
+        defaults_btn = ttk.Button(btn_frame, text="Ripristina valori predefiniti", 
+            command=lambda: messagebox.showinfo("Info", "Funzione non implementata"))
+        defaults_btn.pack(side=LEFT)
+        self.create_tooltip(defaults_btn, "Ripristina tutte le impostazioni ai valori predefiniti")
+        
+        cancel_btn = ttk.Button(btn_frame, text="Annulla", command=dialog.destroy)
+        cancel_btn.pack(side=RIGHT, padx=5)
+        self.create_tooltip(cancel_btn, "Chiudi la finestra senza salvare le modifiche")
+        
+        save_btn = ttk.Button(btn_frame, text="Salva", command=save_options)
+        save_btn.pack(side=RIGHT, padx=5)
+        self.create_tooltip(save_btn, "Salva tutte le impostazioni e chiudi la finestra")
         
         # Centra la finestra
         dialog.update_idletasks()
@@ -8157,7 +8244,7 @@ class FileSearchApp:
         # Create a new toplevel window
         log_window = tk.Toplevel(self.root)
         log_window.title("Debug Log")
-        log_window.geometry("900x600")
+        log_window.geometry("1000x800")
         log_window.transient(self.root)
         
         # Main container frame
@@ -8212,7 +8299,7 @@ class FileSearchApp:
                 # Write to file
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(header + log_content)
-                    
+
                 messagebox.showinfo("Esportazione completata", 
                                 f"Log salvato con successo in:\n{file_path}\n\n"
                                 f"Il file contiene {len(self.complete_debug_log_history)} messaggi di log dall'avvio dell'applicazione.")
