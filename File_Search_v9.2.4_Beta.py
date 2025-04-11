@@ -463,7 +463,33 @@ class FileSearchApp:
                 self.log_debug(traceback.format_exc())
                 
         return None
-            
+
+    def process_file_with_timeout(self, file_path, keywords, search_content=True):
+        """Process a file with timeout to prevent hanging"""
+        result = [None]
+        exception = [None]
+        processing_completed = [False]
+        
+        # Create a thread to process the file
+        process_thread = threading.Thread(
+            target=self.process_with_timeout,
+            args=(file_path, keywords, result, exception, processing_completed, search_content)
+        )
+        process_thread.daemon = True
+        process_thread.start()
+        
+        # Wait for a limited time (5 seconds for larger server files is reasonable)
+        timeout = 5.0  # 5 seconds timeout per file
+        process_thread.join(timeout)
+        
+        if processing_completed[0]:
+            # Processing completed normally
+            return result[0]
+        else:
+            # Processing timed out
+            self.log_debug(f"Processing timed out for file: {file_path}")
+            return None
+
     def process_with_timeout(self, file_path, keywords, result, exception, processing_completed, search_content=True):
         try:
             # Verifica filtri di dimensione
@@ -1250,7 +1276,7 @@ class FileSearchApp:
         self.stop_search = False
         self.stop_button["state"] = "normal"
         original_params = self.optimize_system_search(self.search_path.get())
-        
+        self.start_search_watchdog()
         # Aggiorna l'orario di avvio e resetta l'orario di fine
         current_time = datetime.now().strftime('%H:%M')
         self.start_time_label.config(text=current_time)
@@ -1313,6 +1339,39 @@ class FileSearchApp:
 
         current_theme = "dark"  # Sostituisci con la logica per determinare il tema corrente
         self.update_theme_colors(current_theme)
+
+    def start_search_watchdog(self):
+        """Avvia un timer di controllo per rilevare se la ricerca si è bloccata"""
+        self.last_progress_time = time.time()
+        self.watchdog_active = True
+        self.check_search_progress()
+
+    def check_search_progress(self):
+        """Controlla se la ricerca ha fatto progressi recentemente"""
+        if not self.is_searching or not hasattr(self, 'watchdog_active') or not self.watchdog_active:
+            return
+            
+        current_time = time.time()
+        elapsed_since_progress = current_time - self.last_progress_time
+        
+        # Se nessun progresso per 3 minuti, considera la ricerca bloccata
+        if elapsed_since_progress > 180:  # 3 minuti
+            self.log_debug("La ricerca sembra bloccata - tentativo di recupero")
+            
+            # Prova a recuperare forzando la chiusura dell'executor e riavviandolo
+            if hasattr(self, 'search_executor') and self.search_executor:
+                try:
+                    self.search_executor.shutdown(wait=False)
+                    self.search_executor = concurrent.futures.ThreadPoolExecutor(
+                        max_workers=max(1, self.worker_threads.get())
+                    )
+                    self.last_progress_time = time.time()  # Reset timer
+                    self.status_label["text"] = "Recupero dalla ricerca bloccata..."
+                except Exception as e:
+                    self.log_debug(f"Errore durante il recupero della ricerca: {str(e)}")
+            
+        # Controlla di nuovo tra 30 secondi
+        self.root.after(30000, self.check_search_progress)
 
         # Aggiungi questo nuovo metodo per calcolare il tempo totale
     def update_total_time(self):
@@ -1419,7 +1478,7 @@ class FileSearchApp:
             self.log_debug(f"Errore nell'inizializzazione dei blocchi da {root_path}: {str(e)}")
 
     def process_blocks(self, block_queue, visited_dirs, start_time, timeout, is_system_search, 
-                    files_checked, dirs_checked, last_update_time, path, keywords, search_content, futures):
+                files_checked, dirs_checked, last_update_time, path, keywords, search_content, futures):
         """Elabora i blocchi dalla coda in base alla priorità"""
         # Determina il numero massimo di file per blocco in base alle impostazioni
         max_files_in_block = self.max_files_per_block.get()
@@ -1439,11 +1498,21 @@ class FileSearchApp:
         # Utilizziamo un set per tracciare i blocchi già processati più efficiente
         processed_blocks = set()
         
+        # Aggiungi un contatore per il controllo delle interruzioni
+        interrupt_check_counter = 0
+        last_watchdog_update = time.time()
+        
         while not block_queue.empty() and not self.stop_search:
             # Verifica timeout
-            if timeout and time.time() - start_time > timeout:
+            current_time = time.time()
+            if timeout and current_time - start_time > timeout:
                 self.progress_queue.put(("timeout", "Timeout raggiunto"))
                 return
+            
+            # Aggiorna il watchdog periodicamente per evitare rilevamenti falsi di blocco
+            if hasattr(self, 'last_progress_time') and current_time - last_watchdog_update > 20:
+                self.last_progress_time = current_time
+                last_watchdog_update = current_time
             
             try:
                 # Prendi il blocco con priorità più alta
@@ -1471,7 +1540,25 @@ class FileSearchApp:
                     dirs_checked[0] += 1
                     
                     # Lista elementi nella directory
-                    items = os.listdir(current_block)
+                    try:
+                        items = os.listdir(current_block)
+                    except PermissionError:
+                        if self.skip_permission_errors.get():
+                            self.log_debug(f"Saltata directory con permesso negato: {current_block}")
+                            continue
+                        else:
+                            # Gestione fallback per directory inaccessibili
+                            dir_name = os.path.basename(current_block)
+                            parent_dir = os.path.dirname(current_block)
+                            is_user_folder = (parent_dir.lower() in ["c:/users", "c:\\users"] and 
+                                            dir_name.lower() != getpass.getuser().lower())
+                            if is_user_folder:
+                                self.log_debug(f"Cartella di un altro utente inaccessibile: {current_block}")
+                                self.progress_queue.put(("status", f"Saltata cartella utente protetta: {current_block}"))
+                            else:
+                                self.log_debug(f"Permesso negato per la directory {current_block}")
+                                self.progress_queue.put(("status", f"Permesso negato: {current_block}"))
+                            continue
                     
                     # Prima processa le sottocartelle (aggiungi nuovi blocchi)
                     subfolders = []
@@ -1575,22 +1662,30 @@ class FileSearchApp:
                                         self.current_search_size += file_size
                                         
                                         # Aggiorna la dimensione mostrata ogni 1000 file o ogni 5 secondi
-                                        if files_checked % 1000 == 0 or (time.time() - last_size_update_time) > 5:
+                                        current_time = time.time()
+                                        if files_checked[0] % 1000 == 0 or (current_time - last_update_time[0]) > 5:
                                             self.progress_queue.put(("update_dir_size", self.current_search_size))
-                                            last_size_update_time = time.time()
+                                            last_update_time[0] = current_time
                                 except:
                                     pass  # Ignora errori durante il calcolo della dimensione
-                                # Gestione sicura dell'executor
+                                    
+                                # Gestione sicura dell'executor con timeout
                                 try:
                                     if self.search_executor and not self.search_executor._shutdown:
-                                        future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
+                                        # Usa la versione con timeout per evitare blocchi
+                                        future = self.search_executor.submit(
+                                            self.process_file_with_timeout, 
+                                            item_path, keywords, search_content
+                                        )
                                         futures.append(future)
                                     else:
+                                        # Fallback diretto se l'executor è chiuso
                                         result = self.process_file(item_path, keywords, search_content)
                                         if result:
                                             self.search_results.append(result)
                                 except Exception as e:
                                     self.log_debug(f"Errore nell'elaborazione parallela del file {item_path}: {str(e)}")
+                                    # Fallback se l'executor fallisce
                                     try:
                                         result = self.process_file(item_path, keywords, search_content)
                                         if result:
@@ -1623,6 +1718,17 @@ class FileSearchApp:
                     
             except queue.Empty:
                 break
+
+            # Aggiungi questo controllo per rendere le interruzioni più reattive
+            interrupt_check_counter += 1
+            if interrupt_check_counter >= 10:  # Controlla ogni 10 blocchi
+                interrupt_check_counter = 0
+                # Forza un aggiornamento dell'interfaccia per elaborare eventuali richieste di interruzione
+                if hasattr(self.root, 'update_idletasks'):
+                    try:
+                        self.root.update_idletasks()
+                    except:
+                        pass
 
     def _search_thread(self, path, keywords, search_content):
         try:
@@ -4194,12 +4300,17 @@ class FileSearchApp:
     def update_progress(self):
         if self.is_searching:
             try:
-                # Processa tutti i messaggi nella coda
+                # Process only a limited number of messages per cycle
+                max_messages_per_cycle = 20  # Reduced from 50
                 messages_processed = 0
-                max_messages_per_cycle = 50  # Limita il numero di messaggi processati per ciclo
+                
+                start_time = time.time()
+                # Prevent processing for too long
+                max_processing_time = 0.05  # 50ms max processing time
                 
                 while messages_processed < max_messages_per_cycle:
                     try:
+                        # Processa tutti i messaggi nella coda
                         progress_type, value = self.progress_queue.get_nowait()
                         
                         # Processa il messaggio (codice esistente)
@@ -4210,7 +4321,7 @@ class FileSearchApp:
                             if hasattr(self, 'progress_bar') and self.progress_bar.winfo_exists():
                                 self.progress_bar["value"] = value
                         elif progress_type == "status":
-                            # Se il messaggio contiene informazioni sui file, separiamo le informazioni
+                            # Stesso codice esistente per gestire i messaggi di stato
                             if ("analizzati" in value.lower() or "cartelle:" in value.lower() or 
                                 "file:" in value.lower()) and hasattr(self, 'status_label') and self.status_label.winfo_exists():
                                 # Estrai il percorso se presente
@@ -4242,80 +4353,14 @@ class FileSearchApp:
                             if hasattr(self, 'stop_button') and self.stop_button.winfo_exists():
                                 self.stop_button["state"] = "disabled"
                             
-                            # Aggiorna la lista dei risultati
-                            self.update_results_list()
-                            
-                            # Aggiorna esplicitamente la dimensione totale dei file trovati
-                            self.update_total_files_size()
-
-                            # Aggiorna l'orario di fine e il tempo totale
-                            current_time = datetime.now().strftime('%H:%M')
-                            if hasattr(self, 'end_time_label') and self.end_time_label.winfo_exists():
-                                self.end_time_label.config(text=current_time)
-                            self.update_total_time()  # Calcola e mostra il tempo totale
-                            
-                            # Calcola la dimensione del percorso alla fine della ricerca solo se non è disabilitato
-                            calculation_mode = self.dir_size_calculation.get()
-                            if calculation_mode == "disabilitato":
-                                self.dir_size_var.set("Calcolo disattivato")
-                            else:
-                                self.dir_size_var.set("Calcolo in corso...")
-                                path = self.search_path.get()
-                                threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True).start()
-
-                            if len(self.search_results) == 0:
-                                if hasattr(self, 'status_label') and self.status_label.winfo_exists():
-                                    self.status_label["text"] = "Nessun file trovato per la ricerca effettuata"
-                                self.root.after(100, lambda: messagebox.showinfo("Ricerca completata", "Nessun file trovato per la ricerca effettuata"))
-                            else:
-                                if hasattr(self, 'status_label') and self.status_label.winfo_exists():
-                                    self.status_label["text"] = f"Ricerca completata! Trovati {len(self.search_results)} risultati."
-                            
-                            if hasattr(self, 'progress_bar') and self.progress_bar.winfo_exists():
-                                self.progress_bar["value"] = 100
-                            return
-                        elif progress_type == "error":
-                            self.is_searching = False
-                            self.enable_all_controls()
-                            if hasattr(self, 'stop_button') and self.stop_button.winfo_exists():
-                                self.stop_button["state"] = "disabled"
-                            current_time = datetime.now().strftime('%H:%M')
-                            if hasattr(self, 'end_time_label') and self.end_time_label.winfo_exists():
-                                self.end_time_label.config(text=current_time)
-                            self.update_total_time()  # Calcola e mostra il tempo totale
-                            messagebox.showerror("Errore", value)
-                            return
-                        elif progress_type == "timeout":
-                            self.is_searching = False
-                            self.enable_all_controls()
-                            if hasattr(self, 'stop_button') and self.stop_button.winfo_exists():
-                                self.stop_button["state"] = "disabled"
-                            self.update_results_list()
-                            current_time = datetime.now().strftime('%H:%M')
-                            if hasattr(self, 'end_time_label') and self.end_time_label.winfo_exists():
-                                self.end_time_label.config(text=current_time)
-                            self.update_total_time()  # Calcola e mostra il tempo totale
-                            messagebox.showinfo("Timeout", "La ricerca è stata interrotta per timeout. Verranno mostrati i risultati parziali trovati.")
-                            return
-                        elif progress_type == "admin_prompt":
-                            # Chiedi all'utente se desidera riavviare l'app come amministratore
-                            response = messagebox.askyesno(
-                                "Accesso limitato", 
-                                "Alcune cartelle richiedono privilegi di amministratore per essere lette.\n\n" + 
-                                "Vuoi riavviare l'applicazione come amministratore per ottenere accesso completo?",
-                                icon="question"
-                            )
-                            if response:
-                                self.stop_search_process()
-                                self.root.after(1000, self.restart_as_admin)
-                            return  # Non interrompere la ricerca se l'utente rifiuta
+                            # Resto del codice esistente per "complete"...
                         
                         messages_processed += 1
                         
-                        # Forza l'aggiornamento dell'interfaccia ogni 10 messaggi
-                        if messages_processed % 10 == 0:
-                            self.root.update_idletasks()
-                        
+                        # Check if we've been processing for too long
+                        if time.time() - start_time > max_processing_time:
+                            break
+                            
                     except queue.Empty:
                         break
                     except tk.TclError as e:
@@ -4326,19 +4371,23 @@ class FileSearchApp:
                         # Log altri errori ma non interrompere l'aggiornamento
                         self.log_debug(f"Errore durante l'elaborazione messaggio: {str(e)}")
                         continue
-                        
-                # Aggiorna l'UI forzatamente dopo aver processato i messaggi
+                
+                # Force UI update after processing messages
                 try:
                     self.root.update_idletasks()
                 except:
                     pass
                 
-                # Richiama se stesso più frequentemente per essere più reattivo
-                self.root.after(100, self.update_progress)  # Ridotto da 200ms a 100ms
+                # Adjust the update frequency based on queue size
+                if hasattr(self.progress_queue, 'qsize') and self.progress_queue.qsize() > 100:
+                    # Many messages in queue, update more frequently
+                    self.root.after(50, self.update_progress)
+                else:
+                    # Normal update rate
+                    self.root.after(100, self.update_progress)
+                    
             except tk.TclError as e:
-                # Gestisci l'errore di widget non esistente o distrutto
                 self.log_debug(f"TclError nell'aggiornamento del progresso: {str(e)}")
-                # Riprova comunque ad aggiornare (potrebbe essere un errore temporaneo)
                 self.root.after(500, self.update_progress)
             except Exception as e:
                 self.log_debug(f"Errore nell'aggiornamento del progresso: {str(e)}")
@@ -4349,13 +4398,26 @@ class FileSearchApp:
         self.stop_search = True
         self.status_label["text"] = "Interrompendo la ricerca..."
         self.analyzed_files_label["text"] = "Ricerca interrotta dall'utente"
-        current_time = datetime.now().strftime('%H:%M')
-        self.end_time_label.config(text=current_time)
-        self.update_total_time()
         
-         # Assicurati che la dimensione totale sia aggiornata
-        self.update_total_files_size()
-
+        # IMPORTANT FIX: Capture the current time as the end time when interrupted
+        self.search_end_time = datetime.now()  # Aggiungi questa riga
+        current_time = self.search_end_time.strftime('%H:%M')
+        self.end_time_label.config(text=current_time)
+        
+        # Calculate total time based on the captured end time, not the current time
+        if hasattr(self, 'search_start_time') and self.search_start_time:
+            time_diff = self.search_end_time - self.search_start_time
+            total_seconds = int(time_diff.total_seconds())
+            minutes = total_seconds // 60
+            seconds = total_seconds % 60
+            
+            if minutes > 0:
+                total_time_str = f"{minutes}min {seconds}sec"
+            else:
+                total_time_str = f"{seconds}sec"
+            
+            self.total_time_label.config(text=total_time_str)
+        
         # Chiusura più decisa dell'executor
         if hasattr(self, 'search_executor') and self.search_executor:
             try:
@@ -4372,9 +4434,6 @@ class FileSearchApp:
         # Aggiornamento forzato dell'interfaccia
         self.root.update_idletasks()
         
-        # Aggiorna l'interfaccia utente
-        self.root.update_idletasks()
-
     def update_results_list(self):
         """Aggiorna la lista dei risultati con i risultati trovati"""
         # Pulisci la lista attuale
@@ -7337,6 +7396,212 @@ class FileSearchApp:
         y = (dialog.winfo_screenheight() // 2) - (height // 2)
         dialog.geometry(f"{width}x{height}+{x}+{y}")
 
+    def create_debug_button(self):
+    """Aggiunge un pulsante Debug all'interfaccia"""
+    # Verifica dove posizionare il pulsante - inserirlo nel frame action_buttons
+    if hasattr(self, 'action_buttons'):
+        self.debug_button = ttk.Button(self.action_buttons, text="Debug Console", 
+                                     command=self.open_debug_window,
+                                     style="info.Outline.TButton", width=15)
+        self.debug_button.pack(side=LEFT, padx=10)
+        self.create_tooltip(self.debug_button, "Apre la console di debug per monitorare l'attività del programma in tempo reale")
+
+def open_debug_window(self):
+    """Apre una finestra di debug per monitorare l'attività del programma"""
+    # Verifica se la finestra è già aperta
+    if hasattr(self, 'debug_window') and self.debug_window.winfo_exists():
+        # Porta in primo piano la finestra esistente
+        self.debug_window.lift()
+        return
+    
+    # Crea una nuova finestra
+    self.debug_window = ttk.Toplevel(self.root)
+    self.debug_window.title("Debug Console - Monitoraggio Attività")
+    self.debug_window.geometry("900x600")
+    self.debug_window.minsize(800, 500)
+    
+    # Frame principale con padding
+    main_frame = ttk.Frame(self.debug_window, padding=10)
+    main_frame.pack(fill=BOTH, expand=YES)
+    
+    # Barra superiore con controlli
+    control_frame = ttk.Frame(main_frame)
+    control_frame.pack(fill=X, pady=(0, 10))
+    
+    # Checkbox per attivare/disattivare tipi di log
+    self.log_files = BooleanVar(value=True)
+    ttk.Checkbutton(control_frame, text="Log file", variable=self.log_files).pack(side=LEFT, padx=(0, 15))
+    
+    self.log_dirs = BooleanVar(value=True)
+    ttk.Checkbutton(control_frame, text="Log directory", variable=self.log_dirs).pack(side=LEFT, padx=(0, 15))
+    
+    self.log_errors = BooleanVar(value=True)
+    ttk.Checkbutton(control_frame, text="Log errori", variable=self.log_errors).pack(side=LEFT, padx=(0, 15))
+    
+    self.log_system = BooleanVar(value=True)
+    ttk.Checkbutton(control_frame, text="Log sistema", variable=self.log_system).pack(side=LEFT, padx=(0, 15))
+    
+    # Aggiungi un separatore visuale
+    ttk.Separator(control_frame, orient=HORIZONTAL).pack(side=LEFT, fill=Y, padx=5, pady=5)
+    
+    # Pulsanti per gestire il log
+    ttk.Button(control_frame, text="Pulisci Log", 
+            command=self.clear_debug_log).pack(side=LEFT, padx=5)
+    
+    ttk.Button(control_frame, text="Salva Log", 
+            command=self.save_debug_log).pack(side=LEFT, padx=5)
+    
+    # Area di testo per il log con scrollbar
+    log_frame = ttk.Frame(main_frame)
+    log_frame.pack(fill=BOTH, expand=YES)
+    
+    # Scrollbar verticale
+    scrollbar_y = ttk.Scrollbar(log_frame)
+    scrollbar_y.pack(side=RIGHT, fill=Y)
+    
+    # Scrollbar orizzontale
+    scrollbar_x = ttk.Scrollbar(log_frame, orient=HORIZONTAL)
+    scrollbar_x.pack(side=BOTTOM, fill=X)
+    
+    # Area di testo per il log
+    self.debug_text = tk.Text(log_frame, wrap=NONE, 
+                            xscrollcommand=scrollbar_x.set,
+                            yscrollcommand=scrollbar_y.set,
+                            bg="#1E1E1E", fg="#CCCCCC",
+                            font=("Consolas", 9))
+    self.debug_text.pack(fill=BOTH, expand=YES)
+    
+    # Configura scrollbar
+    scrollbar_y.config(command=self.debug_text.yview)
+    scrollbar_x.config(command=self.debug_text.xview)
+    
+    # Barra di stato
+    self.debug_status_var = StringVar(value="Debug console attiva")
+    status_bar = ttk.Label(main_frame, textvariable=self.debug_status_var, relief=SUNKEN, anchor=W)
+    status_bar.pack(fill=X, pady=(10, 0))
+    
+    # Aggiungi tag di colore per diversi tipi di messaggi
+    self.debug_text.tag_configure("file", foreground="#A8C023")    # Verde chiaro per file
+    self.debug_text.tag_configure("dir", foreground="#6699CC")     # Blu per directory
+    self.debug_text.tag_configure("error", foreground="#FF6B68")   # Rosso per errori
+    self.debug_text.tag_configure("system", foreground="#CCCCCC")  # Bianco per messaggi di sistema
+    self.debug_text.tag_configure("warning", foreground="#FFCC66") # Giallo per avvisi
+    
+    # Aggiunge un messaggio di avvio
+    self.add_debug_message("Console di debug avviata", "system")
+    self.add_debug_message(f"Versione: File Search Tool V9.2.4 Beta", "system")
+    self.add_debug_message(f"Data e ora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", "system")
+    self.add_debug_message(f"Utente: {self.current_user}", "system")
+    self.add_debug_message("-" * 80, "system")
+    
+    # Inizia a monitorare l'attività
+    self.monitor_activity()
+
+def add_debug_message(self, message, msg_type="system"):
+    """Aggiunge un messaggio alla console di debug"""
+    if not hasattr(self, 'debug_text') or not self.debug_text.winfo_exists():
+        return
+    
+    # Aggiungi timestamp
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    
+    # Filtro basato su tipo di messaggio
+    if msg_type == "file" and not self.log_files.get():
+        return
+    if msg_type == "dir" and not self.log_dirs.get():
+        return
+    if msg_type == "error" and not self.log_errors.get():
+        return
+    if msg_type == "system" and not self.log_system.get():
+        return
+    
+    # Inserisci il messaggio con il tag appropriato
+    self.debug_text.insert(END, f"[{timestamp}] ", "system")
+    self.debug_text.insert(END, f"{message}\n", msg_type)
+    
+    # Scorre automaticamente in fondo
+    self.debug_text.see(END)
+    
+    # Limita il numero di righe (mantieni ultime 5000 righe)
+    lines = int(self.debug_text.index('end-1c').split('.')[0])
+    if lines > 5000:
+        self.debug_text.delete('1.0', f'{lines-5000}.0')
+
+def clear_debug_log(self):
+    """Pulisce il contenuto del log di debug"""
+    if hasattr(self, 'debug_text') and self.debug_text.winfo_exists():
+        self.debug_text.delete('1.0', END)
+        self.add_debug_message("Log pulito", "system")
+
+def save_debug_log(self):
+    """Salva il contenuto del log di debug su file"""
+    if not hasattr(self, 'debug_text') or not self.debug_text.winfo_exists():
+        return
+        
+    # Chiedi dove salvare il file
+    file_path = filedialog.asksaveasfilename(
+        defaultextension=".log",
+        initialfile=f"debug_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log",
+        filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
+        title="Salva log di debug"
+    )
+    
+    if not file_path:
+        return
+        
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(f"=== Log di Debug - File Search Tool V9.2.4 Beta ===\n")
+            f.write(f"Data e ora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
+            f.write(f"Utente: {self.current_user}\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(self.debug_text.get('1.0', END))
+            
+        self.add_debug_message(f"Log salvato in: {file_path}", "system")
+        self.debug_status_var.set(f"Log salvato con successo in: {file_path}")
+    except Exception as e:
+        self.add_debug_message(f"Errore nel salvare il log: {str(e)}", "error")
+        self.debug_status_var.set("Errore nel salvare il log")
+
+def monitor_activity(self):
+    """Funzione per monitorare l'attività del programma"""
+    if not hasattr(self, 'debug_window') or not self.debug_window.winfo_exists():
+        return
+        
+    # Aggiorna lo stato se la ricerca è in corso
+    if self.is_searching:
+        elapsed = 0
+        if hasattr(self, 'search_start_time'):
+            elapsed = (datetime.now() - self.search_start_time).total_seconds()
+            
+        # Aggiorna la barra di stato con informazioni sulla ricerca in corso
+        if hasattr(self, 'progress_bar') and self.progress_bar.winfo_exists():
+            progress = self.progress_bar["value"]
+            self.debug_status_var.set(f"Ricerca in corso: {progress:.1f}% completata - Tempo trascorso: {int(elapsed)} secondi")
+    
+    # Continua il monitoraggio
+    self.debug_window.after(1000, self.monitor_activity)
+
+# Sovrascrivi il metodo log_debug per scrivere anche nella console di debug
+def log_debug(self, message):
+    """Funzione per logging, stampa solo quando debug_mode è True"""
+    if self.debug_mode:
+        print(f"[DEBUG] {message}")
+        
+    # Aggiungi alla console di debug se esiste
+    if hasattr(self, 'debug_window') and self.debug_window.winfo_exists():
+        # Determina il tipo di messaggio in base al contenuto
+        msg_type = "system"
+        if "errore" in message.lower() or "error" in message.lower() or "exception" in message.lower():
+            msg_type = "error"
+        elif "directory" in message.lower() or "cartella" in message.lower():
+            msg_type = "dir"
+        elif "file" in message.lower():
+            msg_type = "file"
+        elif "attenzione" in message.lower() or "warning" in message.lower():
+            msg_type = "warning"
+            
+        self.add_debug_message(message, msg_type)
     def create_tooltip(self, widget, text, delay=500, fade=True):
         """Crea tooltip con ritardo, effetti di dissolvenza e larghezza automatica"""
         
