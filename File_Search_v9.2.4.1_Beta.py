@@ -1283,135 +1283,141 @@ class FileSearchApp:
         return directories
 
     def start_search(self):
-        """Avvia una nuova ricerca con il supporto completo per il logging di debug"""
-        # Import necessari (se non presenti all'inizio del file)
-        import multiprocessing
-        import time
-        import os
-        import queue
-        from concurrent.futures import ThreadPoolExecutor
-        
-        # Controlla se una ricerca è già in corso
-        if self.is_searching:
-            messagebox.showinfo("Ricerca in corso", "Una ricerca è già in esecuzione. Attendere il completamento o interrompere.")
-            return
-        
-        # Ottieni i parametri di ricerca dall'interfaccia
-        # Uso i nomi corretti delle variabili per la tua applicazione
-        if hasattr(self, 'folder_path'):  # Verifica quale variabile è presente
-            search_path = self.folder_path.get().strip()
-        elif hasattr(self, 'search_path'):
+        """Avvia il processo di ricerca con gestione migliorata degli errori e delle risorse"""
+        try:
+            # ---------- INIZIALIZZAZIONE VARIABILI ----------
+            # Inizializza gli attributi importanti se non esistono
+            if not hasattr(self, 'search_results'):
+                self.search_results = []
+            if not hasattr(self, 'progress_queue'):
+                self.progress_queue = queue.Queue()
+            if not hasattr(self, 'search_executor'):
+                self.search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_threads.get())
+            
+            # Reset dello stato di ricerca
+            self.stop_search = False
+            self.search_in_progress = True
+            self.search_results = []
+            
+            # ---------- VALIDAZIONE INPUT ----------
+            # Standardizzazione sulla variabile search_path
+            if not hasattr(self, 'search_path'):
+                # Se search_path non esiste, creala
+                self.search_path = tk.StringVar()
+                
+                # Se folder_path esiste, copia il suo valore in search_path
+                if hasattr(self, 'folder_path'):
+                    self.search_path.set(self.folder_path.get())
+                    
+            # Ottieni e valida il percorso di ricerca
             search_path = self.search_path.get().strip()
-        else:
-            # Fallback se nessuno dei nomi comuni è trovato
-            messagebox.showerror("Errore applicazione", "Impossibile trovare il campo percorso. Contatta lo sviluppatore.")
-            return
+            if not search_path:
+                messagebox.showerror("Errore", "Inserire un percorso valido per la ricerca.")
+                self.search_in_progress = False
+                return
+                
+            # Verifica che il percorso esista
+            if not os.path.exists(search_path):
+                messagebox.showerror("Errore", f"Il percorso {search_path} non esiste.")
+                self.search_in_progress = False
+                return
+            
+            # Ottieni e valida le parole chiave
+            keywords = self.search_keywords.get().strip().split()
+            if not keywords:
+                messagebox.showerror("Errore", "Inserire almeno una parola chiave.")
+                self.search_in_progress = False
+                return
+            
+            # ---------- PREPARAZIONE UI ----------
+            # Aggiorna UI per indicare avvio ricerca
+            self.results_list.delete(*self.results_list.get_children())
+            self.status_label["text"] = "Ricerca in corso..."
+            self.analyzed_files_label["text"] = "File analizzati: 0 | Directory analizzate: 0"
+            self.disable_all_controls()
+            
+            # Mostra avviso per ricerca nei contenuti
+            if self.search_content.get():
+                self.show_content_search_warning()
+            
+            # ---------- PREPARAZIONE RICERCA ----------
+            # Inizializza le variabili di tracciamento
+            block_queue = queue.PriorityQueue()
+            visited_dirs = set()
+            files_checked = Value('i', 0)
+            dirs_checked = Value('i', 0)
+            last_update_time = Value('d', time.time())
+            start_time = time.time()
+            timeout = start_time + (3600 * 12)  # 12 ore max
+            is_system_search = self.is_system_path(search_path)
+            futures = []
+            
+            # ---------- LOGGING ----------
+            self.log_debug("Avvio ricerca con parametri:")
+            self.log_debug(f"Percorso: {search_path}")
+            self.log_debug(f"Parole chiave: {keywords}")
+            self.log_debug(f"Ricerca nei contenuti: {self.search_content.get()}")
+            self.log_debug(f"È una ricerca di sistema: {is_system_search}")
+            
+            # ---------- AVVIO DEI THREAD ----------
+            # Avvia l'osservatore della coda se non è già in esecuzione
+            if not hasattr(self, 'queue_watcher_active') or not self.queue_watcher_active:
+                self.queue_watcher_active = True
+                self.root.after(100, self.update_progress)
+            
+            # Avvia il timer di aggiornamento dello stato
+            self.search_start_time = time.time()
+            self.update_timer_id = self.root.after(1000, self.update_total_time)
+            
+            # Avvia il thread di monitoraggio
+            self.root.after(5000, self.start_search_watchdog)
+            
+            # Avvia il thread principale di ricerca
+            self.search_thread = threading.Thread(
+                target=self.search_worker,
+                args=(block_queue, visited_dirs, start_time, timeout,
+                    is_system_search, files_checked, dirs_checked,
+                    last_update_time, search_path, keywords,
+                    self.search_content.get(), futures),
+                daemon=True
+            )
+            
+            self.search_thread.start()
+            
+            # Aggiorna il pulsante di arresto
+            self.stop_button["state"] = "normal"
+            self.stop_button["text"] = "Interrompi Ricerca"
+            
+        except Exception as e:
+            # ---------- GESTIONE ERRORI ----------
+            self.log_debug(f"ERRORE in start_search: {str(e)}")
+            import traceback
+            self.log_debug(f"Traceback: {traceback.format_exc()}")
+            
+            # Notifica all'utente
+            messagebox.showerror("Errore", f"Si è verificato un errore durante l'avvio della ricerca: {str(e)}")
+            
+            # Ripristina l'interfaccia
+            self.search_in_progress = False
+            self.enable_all_controls()
+
+    def update_search_status(self, elapsed, files_checked, dirs_checked):
+        """Aggiorna lo stato della ricerca nell'interfaccia"""
+        # Formatta il tempo trascorso
+        minutes, seconds = divmod(elapsed, 60)
+        hours, minutes = divmod(minutes, 60)
+        time_str = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
         
-        # Ottieni parole chiave da cercare
-        if hasattr(self, 'search_term'):
-            keywords_input = self.search_term.get().strip()
-        elif hasattr(self, 'keywords_var'):
-            keywords_input = self.keywords_var.get().strip()
-        else:
-            # Fallback se nessuno dei nomi comuni è trovato
-            messagebox.showerror("Errore applicazione", "Impossibile trovare il campo parole chiave. Contatta lo sviluppatore.")
-            return
+        status_text = f"Tempo: {time_str} | File: {files_checked} | Directory: {dirs_checked}"
         
-        # Validazione dei parametri di ricerca
-        if not search_path:
-            messagebox.showerror("Percorso mancante", "Inserire un percorso valido per la ricerca.")
-            return
-        
-        if not keywords_input:
-            messagebox.showerror("Parole chiave mancanti", "Inserire almeno una parola chiave per la ricerca.")
-            return
-        
-        # Verifica che il percorso esista
-        if not os.path.exists(search_path):
-            messagebox.showerror("Percorso non valido", f"Il percorso '{search_path}' non esiste.")
-            return
-        
-        # Prepara le parole chiave (separando per virgola o spazio)
-        if "," in keywords_input:
-            keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
-        else:
-            keywords = [k.strip() for k in keywords_input.split() if k.strip()]
-        
-        # Ottieni timeout, o 0 se non specificato
-        timeout = self.timeout_var.get() if hasattr(self, 'timeout_var') else 0
-        
-        # Log di debug per l'avvio della ricerca
-        self.send_to_debug_console("Avvio nuova ricerca", "system")
-        self.send_to_debug_console(f"Percorso: {search_path}", "system")
-        self.send_to_debug_console(f"Parole chiave: {keywords}", "system")
-        self.send_to_debug_console(f"Ricerca nei contenuti: {self.search_content.get()}", "system")
-        self.send_to_debug_console(f"Timeout ricerca: {timeout if timeout > 0 else 'nessuno'} secondi", "system")
-        
-        # Resetta l'interfaccia per la nuova ricerca
-        self.clear_results_tree()
-        self.results_count = 0
-        self.stop_search = False
-        self.is_searching = True
-        
-        # Abilita pulsante interruzione e disabilita altri controlli
-        self.toggle_search_controls("disabled")
-        
-        # Resetta progress bar e status
-        self.progress_var.set(0)
-        self.status_var.set("Preparazione ricerca...")
-        
-        # Log di debug per la preparazione thread
-        self.send_to_debug_console("Configurazione thread e code", "system")
-        
-        # Crea le variabili condivise per i contatori
-        manager = multiprocessing.Manager() if hasattr(multiprocessing, 'Manager') else None
-        visited_dirs = manager.list([set()]) if manager else [set()]
-        
-        # Usa Value per contatori atomici
-        files_checked = multiprocessing.Value('i', 0)
-        dirs_checked = multiprocessing.Value('i', 0)
-        last_update_time = multiprocessing.Value('d', time.time())
-        
-        # Prepara il thread pool per l'elaborazione parallela
-        if not hasattr(self, 'thread_pool') or self.thread_pool._shutdown:
-            max_workers = min(32, (os.cpu_count() or 4) * 4)
-            self.thread_pool = ThreadPoolExecutor(max_workers=max_workers)
-        
-        # Determina il tipo di ricerca (sistema o locale)
-        is_system_search = search_path.startswith('\\\\') or ':' in search_path[:2]
-        
-        # Queue per i blocchi da processare con priorità
-        block_queue = queue.PriorityQueue()
-        block_queue.put((0, search_path))  # Priorità 0 per il percorso di partenza
-        
-        # Lista per tenere traccia dei future
-        futures = []
-        
-        # Registra ora di inizio
-        start_time = time.time()
-        self.search_start_time = start_time
-        
-        # Log di debug per l'avvio del thread
-        self.send_to_debug_console("Avvio del thread di ricerca", "system")
-        
-        # Avvia il thread di ricerca
-        self.search_thread = threading.Thread(
-            target=self.search_worker,
-            args=(block_queue, visited_dirs, start_time, timeout,
-                is_system_search, files_checked, dirs_checked,
-                last_update_time, search_path, keywords,
-                self.search_content.get(), futures),
-            daemon=True
-        )
-        
-        self.search_thread.start()
-        
-        # Aggiorna lo stato
-        self.status_var.set("Ricerca in corso...")
-        self.update_search_status(0, 0, 0)
-        
-        # Avvia il timer di aggiornamento UI
-        self.root.after(100, lambda: self.check_search_status(start_time, files_checked, dirs_checked))
+        # Aggiorna l'interfaccia in modo sicuro
+        try:
+            if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                self.status_label["text"] = status_text
+            if hasattr(self, 'analyzed_files_label') and self.analyzed_files_label.winfo_exists():
+                self.analyzed_files_label["text"] = f"File analizzati: {files_checked} | Directory analizzate: {dirs_checked}"
+        except Exception as e:
+            self.log_debug(f"Errore nell'aggiornamento dello stato: {str(e)}")
 
     def check_search_status(self, start_time, files_checked, dirs_checked):
         """Aggiorna l'interfaccia durante la ricerca con supporto debug"""
@@ -1566,6 +1572,10 @@ class FileSearchApp:
     
     def initialize_block_queue(self, root_path, block_queue, visited_dirs, files_checked, keywords, search_content, futures):
         """Inizializza la coda di blocchi con il percorso principale"""
+        # Verifica che search_executor sia inizializzato
+        if not hasattr(self, 'search_executor') or self.search_executor is None:
+            self.search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.worker_threads.get())
+    
         try:
             items = os.listdir(root_path)
             
@@ -2344,1713 +2354,501 @@ class FileSearchApp:
             self.log_debug(f"Errore nella visualizzazione del log: {str(e)}")
 
     def get_file_content(self, file_path):
-        """Estrae il contenuto testuale dai vari formati di file - versione completa"""
+        """Estrae il contenuto testuale dai file con gestione ottimizzata per tipo e supporto avanzato di formati"""
         try:
-            # Inizializza le variabili all'inizio per evitare problemi di scope
-            content = ""
-            text_content = ""
-            result = ""
-            # Controlli preliminari
-            if self.should_skip_file(file_path):
+            # Registra l'inizio dell'elaborazione con utente e timestamp
+            current_user = os.getenv('USERNAME', 'Nino19980')
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+            self.log_debug(f"[{current_time}][{current_user}] Estrazione contenuto da: {file_path} ({self._format_size(file_size)})")
+            
+            # Verifica che il file esista
+            if not os.path.exists(file_path) or not os.path.isfile(file_path):
+                self.log_debug(f"File non trovato o non è un file regolare: {file_path}")
                 return ""
-                    
+                
+            # Verifica dimensioni massime per evitare problemi di memoria
+            max_size = 50 * 1024 * 1024  # 50 MB
+            if file_size > max_size:
+                self.log_debug(f"File troppo grande per l'estrazione del contenuto ({self._format_size(file_size)}): {file_path}")
+                return f"[File troppo grande per l'estrazione - {self._format_size(file_size)}]"
+                
+            # Verifica se il file deve essere saltato
+            if self.should_skip_file(file_path):
+                self.log_debug(f"File saltato in base alle regole di esclusione: {file_path}")
+                return ""
+            
+            # Ottieni l'estensione in minuscolo
             ext = os.path.splitext(file_path)[1].lower()
             
-            # Log per debug
-            self.log_debug(f"Tentativo estrazione contenuto da: {os.path.basename(file_path)} ({ext})")
-            
-            # Controllo dimensione file
+            # Gestione in base al tipo di file con timeout di sicurezza
             try:
-                file_size = os.path.getsize(file_path)
-                if file_size > self.max_file_size_mb.get() * 1024 * 1024:
-                    self.log_debug(f"File {file_path} troppo grande per l'analisi del contenuto")
-                    return ""
+                result = self.run_with_timeout(
+                    func=self._detect_and_extract_content,
+                    args=(file_path, ext),
+                    timeout_sec=20  # Timeout di 20 secondi per l'estrazione
+                )
+                return result if result else ""
+            except TimeoutError:
+                self.log_debug(f"Timeout durante l'estrazione del contenuto: {file_path}")
+                return "[Timeout durante l'estrazione del contenuto]"
             except Exception as e:
-                self.log_debug(f"Errore nel controllo dimensione del file {file_path}: {str(e)}")
+                self.log_debug(f"Errore nell'estrazione del contenuto: {file_path} - {str(e)}")
                 return ""
+                
+        except Exception as e:
+            # Gestione errori globale
+            import traceback
+            error_msg = f"Errore critico in get_file_content: {file_path} - {str(e)}\n{traceback.format_exc()}"
+            self.log_debug(error_msg)
+            return ""
+
+    def _detect_and_extract_content(self, file_path, ext):
+        """Rileva il tipo di file ed estrae il contenuto usando il metodo appropriato"""
+        # File di testo e file di dati strutturati
+        if ext in ['.txt', '.log', '.csv', '.tsv', '.ini', '.cfg', '.conf']:
+            return self._extract_text_file_content(file_path)
             
-            # Word DOCX
+        # File XML e JSON
+        elif ext in ['.xml', '.json', '.html', '.htm', '.xhtml', '.svg']:
+            return self._extract_structured_content(file_path, ext)
+            
+        # Documenti Microsoft Office
+        elif ext in ['.docx', '.xlsx', '.pptx']:
+            return self._extract_office_content(file_path, ext)
+            
+        # Formati Office legacy
+        elif ext in ['.doc', '.xls', '.ppt']:
+            return self._extract_legacy_office_content(file_path, ext)
+            
+        # PDF
+        elif ext == '.pdf':
+            return self._extract_pdf_content(file_path)
+            
+        # File di email
+        elif ext in ['.eml', '.msg']:
+            return self._extract_email_content(file_path, ext)
+            
+        # File compressi (cerca solo nei nomi)
+        elif ext in ['.zip', '.rar', '.7z', '.tar', '.gz']:
+            return self._extract_archive_content(file_path, ext)
+            
+        # Immagini (estrai metadati EXIF)
+        elif ext in ['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.gif', '.bmp']:
+            return self._extract_image_metadata(file_path, ext)
+            
+        # Formati audio/video (estrai metadati)
+        elif ext in ['.mp3', '.wav', '.mp4', '.avi', '.mov', '.mkv']:
+            return self._extract_media_metadata(file_path, ext)
+            
+        # Altri formati non supportati
+        else:
+            self.log_debug(f"Formato file non supportato per estrazione contenuto: {ext} - {file_path}")
+            return ""
+
+    def _extract_text_file_content(self, file_path):
+        """Estrae il contenuto dai file di testo con rilevamento automatico dell'encoding"""
+        try:
+            # Lista di encoding da provare
+            encodings = ['utf-8', 'latin-1', 'windows-1252', 'utf-16', 'ascii']
+            content = ""
+            
+            # Prova ogni encoding fino a quando uno funziona
+            for encoding in encodings:
+                try:
+                    with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                        content = f.read(1024*1024)  # Leggi al massimo 1 MB
+                        break
+                except UnicodeDecodeError:
+                    continue
+                    
+            # Rimuovi caratteri non stampabili che potrebbero causare problemi
+            import re
+            content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', content)
+            return content
+            
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto dal file di testo {file_path}: {str(e)}")
+            return ""
+
+    def _extract_structured_content(self, file_path, ext):
+        """Estrae il contenuto da file strutturati (XML, JSON, HTML)"""
+        try:
+            # Gestione HTML
+            if ext in ['.html', '.htm', '.xhtml']:
+                try:
+                    from bs4 import BeautifulSoup
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        soup = BeautifulSoup(f.read(), 'html.parser')
+                        # Rimuovi script e stili per concentrarsi sul contenuto
+                        for script in soup(["script", "style"]):
+                            script.extract()
+                        return soup.get_text(separator=' ', strip=True)
+                except ImportError:
+                    # Fallback senza BeautifulSoup
+                    return self._extract_text_file_content(file_path)
+            
+            # Gestione JSON
+            elif ext == '.json':
+                import json
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                    data = json.load(f)
+                    # Converti dizionario in stringa
+                    return str(data)
+                    
+            # Gestione XML e SVG
+            elif ext in ['.xml', '.svg']:
+                try:
+                    import xml.etree.ElementTree as ET
+                    tree = ET.parse(file_path)
+                    root = tree.getroot()
+                    # Estrai tutti i testi presenti nei nodi
+                    return ' '.join(root.itertext())
+                except:
+                    # Fallback al testo semplice
+                    return self._extract_text_file_content(file_path)
+                    
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto strutturato {file_path}: {str(e)}")
+            return ""
+
+    def _extract_office_content(self, file_path, ext):
+        """Estrae il contenuto da documenti Microsoft Office moderni (docx, xlsx, pptx)"""
+        try:
+            # Word
             if ext == '.docx':
                 try:
                     import docx
-                    self.log_debug(f"Processando file DOCX: {file_path}")
                     doc = docx.Document(file_path)
                     content = []
                     for paragraph in doc.paragraphs:
                         if paragraph.text.strip():
                             content.append(paragraph.text)
-                    
-                    # Estrai anche il testo dalle tabelle
-                    for table in doc.tables:
-                        for row in table.rows:
-                            row_text = []
-                            for cell in row.cells:
-                                if cell.text.strip():
-                                    row_text.append(cell.text.strip())
-                            if row_text:
-                                content.append(" | ".join(row_text))
-                    
-                    result = '\n'.join(content)
-                    self.log_debug(f"Estratti {len(result)} caratteri da DOCX")
-                    return result
+                    return '\n'.join(content)
                 except ImportError:
-                    self.log_debug("Libreria python-docx non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file DOCX {file_path}: {str(e)}")
-                    return ""
+                    self.log_debug(f"Libreria python-docx non disponibile per elaborare file .docx: {file_path}")
+                    return "[Installare python-docx per visualizzare contenuto]"
             
-            # Word DOC (vecchio formato)
-            elif ext == '.doc':
-                try:
-                    # Prova prima con pywin32 (solo Windows)
-                    if os.name == 'nt':
-                        self.log_debug("Tentativo di estrazione da DOC con win32com...")
-                        try:
-                            import win32com.client
-                            import pythoncom
-                            
-                            # Inizializzazione necessaria per i thread
-                            pythoncom.CoInitialize()
-                            
-                            try:
-                                word = win32com.client.Dispatch("Word.Application")
-                                word.Visible = False
-                                word.DisplayAlerts = False
-                                
-                                # Apri il documento in modalità sola lettura
-                                doc = word.Documents.Open(os.path.abspath(file_path), ReadOnly=True)
-                                text = doc.Content.Text
-                                doc.Close(SaveChanges=False)
-                                word.Quit()
-                                
-                                pythoncom.CoUninitialize()
-                                
-                                if text:
-                                    self.log_debug(f"Estratti {len(text)} caratteri da DOC")
-                                    return text
-                                else:
-                                    self.log_debug("Nessun testo estratto dal file DOC")
-                                    return ""
-                            except Exception as e:
-                                self.log_debug(f"Errore nell'apertura del DOC con win32com: {str(e)}")
-                                # Cleanup in caso di errore
-                                try:
-                                    if 'doc' in locals() and doc:
-                                        doc.Close(SaveChanges=False)
-                                    if 'word' in locals() and word:
-                                        word.Quit()
-                                except:
-                                    pass
-                                
-                                pythoncom.CoUninitialize()
-                                return ""
-                        except ImportError:
-                            self.log_debug("win32com non disponibile per i file DOC")
-                            return ""
-                    else:
-                        self.log_debug("Estrazione da DOC non supportata su questa piattaforma")
-                        return ""
-                except Exception as e:
-                    self.log_debug(f"Errore generale nell'elaborazione del file DOC {file_path}: {str(e)}")
-                    return ""
-            
-            # Excel XLSX
+            # Excel
             elif ext == '.xlsx':
                 try:
                     import openpyxl
-                    self.log_debug(f"Processando file XLSX: {file_path}")
-                    
-                    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-                    texts = []
-                    
-                    for sheet_name in wb.sheetnames:
-                        sheet = wb[sheet_name]
-                        sheet_texts = []
-                        
-                        # Prima verifica il range utilizzato
-                        max_row = min(sheet.max_row, 500) if sheet.max_row else 0
-                        max_col = min(sheet.max_column, 50) if sheet.max_column else 0
-                        
-                        if max_row > 0 and max_col > 0:
-                            # Utilizza openpyxl 2.6+ con la sintassi più efficiente
-                            try:
-                                # Estrazione di righe specifiche
-                                for row_idx in range(1, max_row + 1):
-                                    row_values = []
-                                    for col_idx in range(1, max_col + 1):
-                                        cell = sheet.cell(row=row_idx, column=col_idx)
-                                        if cell.value:
-                                            row_values.append(str(cell.value))
-                                    
-                                    if row_values:
-                                        sheet_texts.append(" ".join(row_values))
-                            except Exception as e:
-                                self.log_debug(f"Errore nell'iterazione del foglio {sheet_name}: {str(e)}")
-                        
-                        if sheet_texts:
-                            texts.append(f"--- Foglio: {sheet_name} ---")
-                            texts.append("\n".join(sheet_texts))
-                    
-                    result = "\n".join(texts)
-                    self.log_debug(f"Estratti {len(result)} caratteri da XLSX")
-                    return result
-                    
+                    workbook = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+                    content = []
+                    # Limita a 5 fogli per prestazioni
+                    for sheet_name in list(workbook.sheetnames)[:5]:
+                        sheet = workbook[sheet_name]
+                        content.append(f"[Foglio: {sheet_name}]")
+                        # Leggi fino a 1000 celle per foglio
+                        cell_count = 0
+                        for row in sheet.iter_rows(max_row=100):
+                            row_values = []
+                            for cell in row[:10]:  # Limita a 10 colonne
+                                if cell.value:
+                                    row_values.append(str(cell.value))
+                            if row_values:
+                                content.append(" | ".join(row_values))
+                                cell_count += 1
+                                if cell_count >= 1000:
+                                    break
+                    return '\n'.join(content)
                 except ImportError:
-                    self.log_debug("Libreria openpyxl non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file XLSX {file_path}: {str(e)}")
-                    return ""
+                    self.log_debug(f"Libreria openpyxl non disponibile per elaborare file .xlsx: {file_path}")
+                    return "[Installare openpyxl per visualizzare contenuto]"
             
-            # Excel XLS (vecchio formato)
-            elif ext == '.xls':
-                try:
-                    # Prima prova con xlrd
-                    try:
-                        import xlrd
-                        self.log_debug(f"Processando file XLS con xlrd: {file_path}")
-                        
-                        book = xlrd.open_workbook(file_path, on_demand=True)
-                        texts = []
-                        
-                        for sheet_idx in range(book.nsheets):
-                            sheet = book.sheet_by_index(sheet_idx)
-                            sheet_texts = []
-                            
-                            # Limite a 500 righe per prestazioni
-                            for row_idx in range(min(sheet.nrows, 500)):
-                                row_values = sheet.row_values(row_idx)
-                                row_texts = [str(value) for value in row_values if value]
-                                if row_texts:
-                                    sheet_texts.append(" ".join(row_texts))
-                            
-                            if sheet_texts:
-                                texts.append(f"--- Foglio: {sheet.name} ---")
-                                texts.append("\n".join(sheet_texts))
-                        
-                        book.release_resources()
-                        result = "\n".join(texts)
-                        self.log_debug(f"Estratti {len(result)} caratteri da XLS")
-                        return result
-                        
-                    except ImportError:
-                        # Fallback a pywin32 se disponibile e su Windows
-                        if os.name == 'nt':
-                            try:
-                                import win32com.client
-                                import pythoncom
-                                
-                                # Inizializzazione necessaria per i thread
-                                pythoncom.CoInitialize()
-                                
-                                self.log_debug("Processando file XLS con win32com")
-                                
-                                try:
-                                    excel = win32com.client.Dispatch("Excel.Application")
-                                    excel.Visible = False
-                                    excel.DisplayAlerts = False
-                                    
-                                    workbook = excel.Workbooks.Open(os.path.abspath(file_path), ReadOnly=True)
-                                    texts = []
-                                    
-                                    for i in range(1, workbook.Sheets.Count + 1):
-                                        sheet = workbook.Sheets(i)
-                                        texts.append(f"--- Foglio: {sheet.Name} ---")
-                                        
-                                        # Verifica se c'è un range utilizzato
-                                        if sheet.UsedRange and sheet.UsedRange.Cells.Count > 0:
-                                            used_range = sheet.UsedRange
-                                            row_count = min(used_range.Rows.Count, 500)
-                                            col_count = min(used_range.Columns.Count, 50)
-                                            
-                                            for row_idx in range(1, row_count + 1):
-                                                row_texts = []
-                                                for col_idx in range(1, col_count + 1):
-                                                    cell_value = used_range.Cells(row_idx, col_idx).Value
-                                                    if cell_value:
-                                                        row_texts.append(str(cell_value))
-                                                
-                                                if row_texts:
-                                                    texts.append(" ".join(row_texts))
-                                    
-                                    workbook.Close(False)
-                                    excel.Quit()
-                                    
-                                    pythoncom.CoUninitialize()
-                                    
-                                    result = "\n".join(texts)
-                                    self.log_debug(f"Estratti {len(result)} caratteri da XLS con win32com")
-                                    return result
-                                    
-                                except Exception as e:
-                                    self.log_debug(f"Errore nell'apertura dell'XLS con win32com: {str(e)}")
-                                    
-                                    # Cleanup in caso di errore
-                                    try:
-                                        if 'workbook' in locals() and workbook:
-                                            workbook.Close(False)
-                                        if 'excel' in locals() and excel:
-                                            excel.Quit()
-                                    except:
-                                        pass
-                                    
-                                    pythoncom.CoUninitialize()
-                                    return ""
-                                    
-                            except ImportError:
-                                self.log_debug("Nessuna libreria disponibile per i file XLS")
-                                return ""
-                        else:
-                            self.log_debug("Nessuna libreria disponibile per i file XLS su questa piattaforma")
-                            return ""
-                            
-                except Exception as e:
-                    self.log_debug(f"Errore generale nell'elaborazione del file XLS {file_path}: {str(e)}")
-                    return ""
-            
-            # PowerPoint PPTX
+            # PowerPoint
             elif ext == '.pptx':
                 try:
                     import pptx
-                    self.log_debug(f"Processando file PPTX: {file_path}")
-                    
                     presentation = pptx.Presentation(file_path)
-                    texts = []
-                    
-                    for i, slide in enumerate(presentation.slides):
-                        slide_text = []
-                        texts.append(f"--- Diapositiva {i+1} ---")
-                        
-                        for shape in slide.shapes:
-                            if hasattr(shape, "text") and shape.text:
-                                slide_text.append(shape.text)
-                        
-                        if slide_text:
-                            texts.append("\n".join(slide_text))
-                    
-                    result = "\n".join(texts)
-                    self.log_debug(f"Estratti {len(result)} caratteri da PPTX")
-                    return result
-                    
-                except ImportError:
-                    self.log_debug("Libreria python-pptx non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file PPTX {file_path}: {str(e)}")
-                    return ""
-            
-            # PowerPoint PPT (vecchio formato)
-            elif ext == '.ppt':
-                # Su Windows, prova con pywin32
-                if os.name == 'nt':
-                    try:
-                        import win32com.client
-                        import pythoncom
-                        
-                        # Inizializzazione necessaria per i thread
-                        pythoncom.CoInitialize()
-                        
-                        self.log_debug(f"Processando file PPT: {file_path}")
-                        
-                        try:
-                            powerpoint = win32com.client.Dispatch("PowerPoint.Application")
-                            powerpoint.Visible = False
-                            
-                            presentation = powerpoint.Presentations.Open(os.path.abspath(file_path), WithWindow=False)
-                            texts = []
-                            
-                            for slide_idx in range(1, presentation.Slides.Count + 1):
-                                slide = presentation.Slides.Item(slide_idx)
-                                texts.append(f"--- Diapositiva {slide_idx} ---")
-                                slide_text = []
-                                
-                                for shape_idx in range(1, slide.Shapes.Count + 1):
-                                    shape = slide.Shapes.Item(shape_idx)
-                                    if shape.HasTextFrame:
-                                        if shape.TextFrame.HasText:
-                                            slide_text.append(shape.TextFrame.TextRange.Text)
-                                
-                                if slide_text:
-                                    texts.append("\n".join(slide_text))
-                            
-                            presentation.Close()
-                            powerpoint.Quit()
-                            
-                            pythoncom.CoUninitialize()
-                            
-                            result = "\n".join(texts)
-                            self.log_debug(f"Estratti {len(result)} caratteri da PPT")
-                            return result
-                            
-                        except Exception as e:
-                            self.log_debug(f"Errore nell'apertura del PPT con win32com: {str(e)}")
-                            
-                            # Cleanup in caso di errore
-                            try:
-                                if 'presentation' in locals() and presentation:
-                                    presentation.Close()
-                                if 'powerpoint' in locals() and powerpoint:
-                                    powerpoint.Quit()
-                            except:
-                                pass
-                            
-                            pythoncom.CoUninitialize()
-                            return ""
-                            
-                    except ImportError:
-                        self.log_debug("win32com non disponibile per i file PPT")
-                        return ""
-                else:
-                    self.log_debug("Estrazione di testo dai file PPT non supportata su questa piattaforma")
-                    return ""
-            
-            # Rich Text Format (RTF) - NUOVO
-            elif ext == '.rtf':
-                try:
-                    from striprtf.striprtf import rtf_to_text
-                    self.log_debug(f"Processando file RTF: {file_path}")
-                    
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        rtf_content = f.read()
-                        content = rtf_to_text(rtf_content)
-                        self.log_debug(f"Estratti {len(content)} caratteri da RTF")
-                        return content
-                except ImportError:
-                    self.log_debug("Libreria striprtf non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file RTF {file_path}: {str(e)}")
-                    return ""
-                    
-            # OpenDocument Text (ODT) - NUOVO
-            elif ext == '.odt':
-                try:
-                    from odf import opendocument, text
-                    self.log_debug(f"Processando file ODT: {file_path}")
-                    
-                    doc = opendocument.load(file_path)
-                    paragraphs = []
-                    
-                    # Estrai tutto il testo dai paragrafi
-                    for element in doc.getElementsByType(text.P):
-                        paragraphs.append(element.firstChild.data if element.firstChild else "")
-                        
-                    content = "\n".join(paragraphs)
-                    self.log_debug(f"Estratti {len(content)} caratteri da ODT")
-                    return content
-                except ImportError:
-                    self.log_debug("Libreria odf non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file ODT {file_path}: {str(e)}")
-                    return ""
-                    
-            # OpenDocument Spreadsheet (ODS) - NUOVO
-            elif ext == '.ods':
-                try:
-                    from odf import opendocument, table, text
-                    self.log_debug(f"Processando file ODS: {file_path}")
-                    
-                    doc = opendocument.load(file_path)
-                    sheets = []
-                    
-                    # Estrai tutte le tabelle e celle
-                    for sheet in doc.getElementsByType(table.Table):
-                        sheet_rows = []
-                        sheet_name = sheet.getAttribute('table:name')
-                        sheets.append(f"--- Foglio: {sheet_name} ---")
-                        
-                        for row in sheet.getElementsByType(table.TableRow):
-                            row_cells = []
-                            for cell in row.getElementsByType(table.TableCell):
-                                cell_text = ""
-                                for p in cell.getElementsByType(text.P):
-                                    cell_text += p.firstChild.data if p.firstChild else ""
-                                row_cells.append(cell_text)
-                            if row_cells:
-                                sheet_rows.append(" | ".join(row_cells))
-                                
-                        sheets.append("\n".join(sheet_rows))
-                        
-                    content = "\n".join(sheets)
-                    self.log_debug(f"Estratti {len(content)} caratteri da ODS")
-                    return content
-                except ImportError:
-                    self.log_debug("Libreria odf non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file ODS {file_path}: {str(e)}")
-                    return ""
-
-            # OpenDocument Presentation (ODP) - NUOVO
-            elif ext == '.odp':
-                try:
-                    from odf import opendocument, draw, text
-                    self.log_debug(f"Processando file ODP: {file_path}")
-                    
-                    doc = opendocument.load(file_path)
-                    slides = []
-                    
-                    # Estrai tutte le diapositive
-                    for page in doc.getElementsByType(draw.Page):
-                        slide_text = []
-                        slide_name = page.getAttribute('draw:name')
-                        slides.append(f"--- Diapositiva: {slide_name} ---")
-                        
-                        # Estrai il testo dai frame e forme
-                        for element in page.getElementsByType(draw.Frame):
-                            for p in element.getElementsByType(text.P):
-                                if p.firstChild:
-                                    slide_text.append(p.firstChild.data)
-                                    
-                        slides.append("\n".join(slide_text))
-                        
-                    content = "\n".join(slides)
-                    self.log_debug(f"Estratti {len(content)} caratteri da ODP")
-                    return content
-                except ImportError:
-                    self.log_debug("Libreria odf non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file ODP {file_path}: {str(e)}")
-                    return ""
-                    
-            # EPUB - NUOVO
-            elif ext == '.epub':
-                try:
-                    import ebooklib
-                    from ebooklib import epub
-                    from bs4 import BeautifulSoup
-                    self.log_debug(f"Processando file EPUB: {file_path}")
-                    
-                    # Funzione per estrarre testo dall'HTML
-                    def chapter_to_text(content):
-                        soup = BeautifulSoup(content, 'html.parser')
-                        return soup.get_text()
-                    
-                    book = epub.read_epub(file_path)
-                    chapters = []
-                    
-                    # Estrai metadati
-                    title = book.get_metadata('DC', 'title')
-                    if title:
-                        chapters.append(f"Titolo: {title[0][0]}")
-                    
-                    authors = book.get_metadata('DC', 'creator')
-                    if authors:
-                        chapters.append(f"Autore: {authors[0][0]}")
-                        
-                    # Estrai contenuto
-                    for item in book.get_items():
-                        if item.get_type() == ebooklib.ITEM_DOCUMENT:
-                            chapters.append(chapter_to_text(item.get_content()))
-                            
-                    content = "\n".join(chapters)
-                    self.log_debug(f"Estratti {len(content)} caratteri da EPUB")
-                    return content
-                except ImportError:
-                    self.log_debug("Librerie ebooklib o bs4 non disponibili")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file EPUB {file_path}: {str(e)}")
-                    return ""
-
-            # MOBI - NUOVO
-            elif ext == '.mobi':
-                try:
-                    import mobi
-                    import tempfile
-                    import shutil
-                    self.log_debug(f"Processando file MOBI: {file_path}")
-                    
-                    tempdir = tempfile.mkdtemp()
-                    try:
-                        # Estrai il contenuto del file MOBI
-                        extractor = mobi.Mobi(file_path)
-                        extractor.extract(tempdir)
-                        
-                        # Leggi il testo estratto
-                        text_content = []
-                        for filename in os.listdir(tempdir):
-                            if filename.endswith('.txt'):
-                                with open(os.path.join(tempdir, filename), 'r', encoding='utf-8', errors='replace') as f:
-                                    text_content.append(f.read())
-                        
-                        content = "\n".join(text_content)
-                        self.log_debug(f"Estratti {len(content)} caratteri da MOBI")
-                        return content
-                    finally:
-                        # Pulisci i file temporanei
-                        shutil.rmtree(tempdir)
-                except ImportError:
-                    self.log_debug("Libreria mobi non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file MOBI {file_path}: {str(e)}")
-                    return ""
-                    
-            # LaTeX - NUOVO
-            elif ext == '.tex':
-                try:
-                    self.log_debug(f"Processando file LaTeX: {file_path}")
-                    
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        
-                    # Rimuovi i comandi LaTeX più comuni
-                    import re
-                    # Rimuovi i comandi
-                    content = re.sub(r'\\[a-zA-Z]+(\{[^}]*\}|\[[^\]]*\])*', ' ', content)
-                    # Rimuovi gli ambienti
-                    content = re.sub(r'\\begin\{[^}]*\}(.*?)\\end\{[^}]*\}', ' ', content, flags=re.DOTALL)
-                    # Rimuovi i commenti
-                    content = re.sub(r'%.*?(\n|$)', ' ', content)
-                    # Rimuovi le graffe
-                    content = re.sub(r'\{|\}', '', content)
-                    # Sostituisci più spazi con uno solo
-                    content = re.sub(r'\s+', ' ', content)
-                    
-                    self.log_debug(f"Estratti {len(content)} caratteri da LaTeX")
-                    return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file LaTeX {file_path}: {str(e)}")
-                    return ""
-
-            # reStructuredText - NUOVO
-            elif ext == '.rst':
-                try:
-                    self.log_debug(f"Processando file reStructuredText: {file_path}")
-                    
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        
-                    # Rimuovi gli elementi di markup più comuni
-                    import re
-                    # Rimuovi i titoli
-                    content = re.sub(r'(=+|-+|~+|\^+|"+)\n', ' ', content)
-                    # Rimuovi i link
-                    content = re.sub(r'`[^`]*`_', ' ', content)
-                    # Rimuovi i riferimenti alle direttive
-                    content = re.sub(r'\.\. [a-z]+::', ' ', content)
-                    
-                    self.log_debug(f"Estratti {len(content)} caratteri da RST")
-                    return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file RST {file_path}: {str(e)}")
-                    return ""
-                    
-            # SQLite database (.db, .sqlite, .sqlite3) - NUOVO
-            elif ext in ['.db', '.sqlite', '.sqlite3']:
-                try:
-                    import sqlite3
-                    self.log_debug(f"Processando file SQLite: {file_path}")
-                    
-                    # Verifica che sia un file SQLite valido
-                    if not os.path.getsize(file_path) > 100:
-                        return ""
-                        
-                    try:
-                        # Connetti al database
-                        conn = sqlite3.connect(file_path)
-                        cursor = conn.cursor()
-                        
-                        # Ottieni la lista delle tabelle
-                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                        tables = cursor.fetchall()
-                        
-                        content_parts = []
-                        content_parts.append(f"Database SQLite: {os.path.basename(file_path)}")
-                        content_parts.append(f"Numero di tabelle: {len(tables)}")
-                        
-                        # Estrai struttura e campione di dati da ogni tabella
-                        for table in tables:
-                            table_name = table[0]
-                            content_parts.append(f"\n--- Tabella: {table_name} ---")
-                            
-                            # Ottieni struttura della tabella
-                            cursor.execute(f"PRAGMA table_info({table_name});")
-                            columns = cursor.fetchall()
-                            col_names = [col[1] for col in columns]
-                            content_parts.append("Colonne: " + ", ".join(col_names))
-                            
-                            # Ottieni un campione di dati (massimo 10 righe)
-                            try:
-                                cursor.execute(f"SELECT * FROM {table_name} LIMIT 10;")
-                                rows = cursor.fetchall()
-                                if rows:
-                                    content_parts.append(f"Campione dati ({len(rows)} righe):")
-                                    for row in rows:
-                                        content_parts.append(str(row))
-                            except:
-                                content_parts.append("Errore nell'estrazione del campione dati")
-                        
-                        conn.close()
-                        content = "\n".join(content_parts)
-                        self.log_debug(f"Estratti {len(content)} caratteri da SQLite")
-                        return content
-                        
-                    except sqlite3.Error:
-                        # Non è un database SQLite valido o è cifrato
-                        return ""
-                except ImportError:
-                    self.log_debug("Libreria sqlite3 non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file SQLite {file_path}: {str(e)}")
-                    return ""
-
-            # Microsoft Access (.mdb, .accdb) - NUOVO
-            elif ext in ['.mdb', '.accdb']:
-                try:
-                    import pyodbc
-                    self.log_debug(f"Processando file Access: {file_path}")
-                    
-                    # Verifica che siamo su Windows
-                    if os.name != 'nt':
-                        self.log_debug("L'accesso ai file MDB/ACCDB è supportato solo su Windows")
-                        return ""
-                    
-                    # Connetti al database Access
-                    driver = "Microsoft Access Driver (*.mdb, *.accdb)"
-                    conn_str = f"Driver={{{driver}}};DBQ={file_path};"
-                    
-                    try:
-                        conn = pyodbc.connect(conn_str)
-                        cursor = conn.cursor()
-                        
-                        # Ottieni l'elenco delle tabelle
-                        tables = []
-                        for row in cursor.tables():
-                            if row.table_type == 'TABLE':
-                                tables.append(row.table_name)
-                        
-                        content_parts = []
-                        content_parts.append(f"Database Access: {os.path.basename(file_path)}")
-                        content_parts.append(f"Numero di tabelle: {len(tables)}")
-                        
-                        # Estrai struttura e campione di dati da ogni tabella
-                        for table in tables:
-                            content_parts.append(f"\n--- Tabella: {table} ---")
-                            
-                            # Ottieni struttura della tabella
-                            columns = cursor.columns(table=table)
-                            col_names = [col.column_name for col in columns]
-                            content_parts.append("Colonne: " + ", ".join(col_names))
-                            
-                            # Ottieni un campione di dati (massimo 10 righe)
-                            try:
-                                cursor.execute(f"SELECT * FROM [{table}] LIMIT 10")
-                                rows = cursor.fetchall()
-                                if rows:
-                                    content_parts.append(f"Campione dati ({len(rows)} righe):")
-                                    for row in rows:
-                                        content_parts.append(str(row))
-                            except:
-                                content_parts.append("Errore nell'estrazione del campione dati")
-                        
-                        conn.close()
-                        content = "\n".join(content_parts)
-                        self.log_debug(f"Estratti {len(content)} caratteri da Access")
-                        return content
-                        
-                    except pyodbc.Error as e:
-                        self.log_debug(f"Errore di accesso al database: {str(e)}")
-                        return ""
-                except ImportError:
-                    self.log_debug("Libreria pyodbc non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file Access {file_path}: {str(e)}")
-                    return ""
-
-            # OpenDocument Database (.odb) - NUOVO
-            elif ext == '.odb':
-                try:
-                    import zipfile
-                    import xml.etree.ElementTree as ET
-                    self.log_debug(f"Processando file ODB: {file_path}")
-                    
-                    # ODB è essenzialmente un file ZIP con file XML all'interno
-                    if zipfile.is_zipfile(file_path):
-                        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                            content_parts = []
-                            
-                            # Estrai il file contenente lo schema
-                            try:
-                                with zip_ref.open('content.xml') as content_file:
-                                    tree = ET.parse(content_file)
-                                    root = tree.getroot()
-                                    
-                                    # Cerca namespace
-                                    ns = {'db': 'urn:oasis:names:tc:opendocument:xmlns:database:1.0',
-                                        'office': 'urn:oasis:names:tc:opendocument:xmlns:office:1.0'}
-                                    
-                                    # Estrai informazioni sulle tabelle
-                                    tables = root.findall('.//db:table', ns)
-                                    content_parts.append(f"Database ODB: {os.path.basename(file_path)}")
-                                    content_parts.append(f"Numero di tabelle trovate: {len(tables)}")
-                                    
-                                    for table in tables:
-                                        if 'db:name' in table.attrib:
-                                            table_name = table.get('{urn:oasis:names:tc:opendocument:xmlns:database:1.0}name')
-                                            content_parts.append(f"\n--- Tabella: {table_name} ---")
-                                            
-                                            # Estrai colonne
-                                            columns = table.findall('.//db:column', ns)
-                                            col_names = []
-                                            for column in columns:
-                                                if 'db:name' in column.attrib:
-                                                    col_name = column.get('{urn:oasis:names:tc:opendocument:xmlns:database:1.0}name')
-                                                    col_names.append(col_name)
-                                            
-                                            content_parts.append("Colonne: " + ", ".join(col_names))
-                            except Exception as e:
-                                content_parts.append(f"Errore nell'estrazione dello schema: {str(e)}")
-                            
-                            content = "\n".join(content_parts)
-                            self.log_debug(f"Estratti {len(content)} caratteri da ODB")
-                            return content
-                    else:
-                        return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file ODB {file_path}: {str(e)}")
-                    return ""
-                    
-            # Tab-Separated Values (.tsv) - NUOVO
-            elif ext == '.tsv':
-                try:
-                    import csv
-                    self.log_debug(f"Processando file TSV: {file_path}")
-                    
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        reader = csv.reader(f, delimiter='\t')
-                        rows = []
-                        
-                        # Limita a 1000 righe per file grandi
-                        for i, row in enumerate(reader):
-                            if i >= 1000:
-                                rows.append("... (file troncato, troppe righe)")
-                                break
-                            rows.append("\t".join(row))
-                            
-                    content = "\n".join(rows)
-                    self.log_debug(f"Estratti {len(content)} caratteri da TSV")
-                    return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file TSV {file_path}: {str(e)}")
-                    return ""
-
-            # dBase format (.dbf) - NUOVO
-            elif ext == '.dbf':
-                try:
-                    import dbfread
-                    self.log_debug(f"Processando file DBF: {file_path}")
-                    
-                    table = dbfread.DBF(file_path)
-                    records = []
-                    
-                    # Ottieni nomi delle colonne
-                    headers = table.field_names
-                    records.append("Colonne: " + ", ".join(headers))
-                    
-                    # Ottieni un campione di dati
-                    for i, record in enumerate(table):
-                        if i >= 50:  # Limita a 50 record
-                            records.append("... (file troncato, troppi record)")
-                            break
-                            
-                        record_data = []
-                        for field in headers:
-                            record_data.append(f"{field}: {record[field]}")
-                        records.append(" | ".join(record_data))
-                        
-                    content = "\n".join(records)
-                    self.log_debug(f"Estratti {len(content)} caratteri da DBF")
-                    return content
-                except ImportError:
-                    self.log_debug("Libreria dbfread non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file DBF {file_path}: {str(e)}")
-                    return ""
-
-            # Data Interchange Format (.dif) - NUOVO
-            elif ext == '.dif':
-                try:
-                    self.log_debug(f"Processando file DIF: {file_path}")
-                    
-                    # I file DIF hanno una struttura specifica
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        lines = f.readlines()
-                        
-                    if len(lines) < 3:
-                        return ""
-                        
-                    content_lines = []
-                    i = 0
-                    
-                    # Salta l'intestazione
-                    while i < len(lines) and not lines[i].strip().startswith('DATA'):
-                        i += 1
-                        
-                    # Estrai i dati
-                    data_mode = False
-                    current_row = []
-                    
-                    while i < len(lines):
-                        line = lines[i].strip()
-                        
-                        if line.startswith('BOT'):  # Beginning of tuple
-                            current_row = []
-                        elif line.startswith('EOD'):  # End of data
-                            break
-                        elif not data_mode and line.startswith('1,0'):
-                            data_mode = True
-                        elif data_mode and line.startswith('V') or line.startswith('C'):
-                            # La prossima riga contiene il valore
-                            i += 1
-                            if i < len(lines):
-                                value = lines[i].strip().strip('"')
-                                current_row.append(value)
-                        elif line.startswith('EOT'):  # End of tuple
-                            content_lines.append(",".join(current_row))
-                            data_mode = False
-                            
-                        i += 1
-                        
-                    content = "\n".join(content_lines)
-                    self.log_debug(f"Estratti {len(content)} caratteri da DIF")
-                    return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file DIF {file_path}: {str(e)}")
-                    return ""
-            
-            # Testo semplice
-            elif ext in ['.txt', '.csv', '.log', '.ini', '.xml', '.json', '.md', '.html', '.htm',
-                        '.py', '.js', '.java', '.cpp', '.c', '.cs', '.php', '.rb', '.go', '.swift', 
-                        '.sql', '.sh', '.bat', '.ps1', '.vbs', '.pl', '.ts', '.kt', '.scala',
-                        '.h', '.hpp', '.vb', '.lua', '.rs', '.groovy', '.yml', '.yaml', '.toml',
-                        '.properties', '.conf', '.config', '.cfg', '.reg']:
-                try:
-                    # Apri con diverse codifiche per essere robusto
-                    encodings = ['utf-8', 'latin-1', 'windows-1252']
-                    content = ""
-                    
-                    for encoding in encodings:
-                        try:
-                            with open(file_path, 'r', encoding=encoding, errors='replace') as f:
-                                content = f.read(1024*1024)  # Leggi al massimo 1 MB
-                                break
-                        except UnicodeDecodeError:
-                            continue
-                        except Exception as e:
-                            self.log_debug(f"Errore con codifica {encoding}: {str(e)}")
-                    
-                    if content:
-                        self.log_debug(f"Estratti {len(content)} caratteri da file di testo")
-                        return content
-                    else:
-                        self.log_debug("Nessun contenuto estratto dal file di testo")
-                        return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nella lettura del file di testo {file_path}: {str(e)}")
-                    return ""
-            
-            # PDF (aggiunto per completezza)
-            elif ext == '.pdf':
-                try:
-                    import PyPDF2
-                    self.log_debug(f"Processando file PDF: {file_path}")
-                    
                     content = []
-                    with open(file_path, 'rb') as f:
-                        try:
-                            reader = PyPDF2.PdfReader(f)
-                            num_pages = min(len(reader.pages), 50)  # Limita a 50 pagine
-                            
-                            for page_num in range(num_pages):
-                                try:
-                                    page_text = reader.pages[page_num].extract_text()
-                                    if page_text and page_text.strip():
-                                        content.append(f"--- Pagina {page_num+1} ---")
-                                        content.append(page_text)
-                                except Exception as e:
-                                    self.log_debug(f"Errore nell'estrazione testo pagina {page_num}: {str(e)}")
-                        except Exception as e:
-                            self.log_debug(f"Errore nell'apertura del PDF: {str(e)}")
-                    
-                    result = "\n".join(content)
-                    self.log_debug(f"Estratti {len(result)} caratteri da PDF")
-                    return result
-                    
+                    for i, slide in enumerate(presentation.slides):
+                        content.append(f"[Slide {i+1}]")
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text") and shape.text.strip():
+                                content.append(shape.text.strip())
+                    return '\n'.join(content)
                 except ImportError:
-                    self.log_debug("Libreria PyPDF2 non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nella lettura del file PDF: {str(e)}")
-                    return ""
-            
-            # ===== EMAIL E CALENDARIO =====
-            # File Email (.eml)
-            elif ext == '.eml':
+                    self.log_debug(f"Libreria python-pptx non disponibile per elaborare file .pptx: {file_path}")
+                    return "[Installare python-pptx per visualizzare contenuto]"
+                    
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto Office {file_path}: {str(e)}")
+            return ""
+
+    def _extract_legacy_office_content(self, file_path, ext):
+        """Gestisce formati Office legacy (.doc, .xls, .ppt)"""
+        try:
+            # Usa textract quando disponibile
+            if 'textract' in sys.modules or importlib.util.find_spec('textract') is not None:
+                import textract
                 try:
-                    self.log_debug(f"Processando file Email: {file_path}")
-                    import email
-                    import base64
-                    import quopri
-                    from email.header import decode_header
-                    
-                    # Leggi il file come binario per gestire correttamente tutti i tipi di codifica
-                    with open(file_path, 'rb') as f:
-                        msg_data = f.read()
-                        
-                    # Verifica che abbiamo letto dei dati
-                    if not msg_data:
-                        self.log_debug(f"File EML vuoto: {file_path}")
-                        return ""
-                        
-                    self.log_debug(f"Letti {len(msg_data)} bytes dal file EML")
-                    
-                    # Analizza il messaggio email
-                    msg = email.message_from_bytes(msg_data)
-                    content_parts = []
-                    
-                    # Estrai intestazioni
-                    self.log_debug("Estrazione intestazioni email")
-                    for header in ['From', 'To', 'Subject', 'Date']:
-                        if msg[header]:
-                            # Decodifica l'intestazione se necessario
-                            try:
-                                header_parts = decode_header(msg[header])
-                                decoded_header = ""
-                                for part, encoding in header_parts:
-                                    if isinstance(part, bytes):
-                                        decoded_header += part.decode(encoding or 'utf-8', errors='replace')
-                                    else:
-                                        decoded_header += part
-                                content_parts.append(f"{header}: {decoded_header}")
-                            except:
-                                content_parts.append(f"{header}: {msg[header]}")
-                    
-                    # Aggiungi un separatore dopo le intestazioni
-                    if content_parts:
-                        content_parts.append("-" * 40)
-                    
-                    # Estrai corpo del messaggio e allegati
-                    attachment_count = 0
-                    self.log_debug("Inizio analisi parti dell'email")
-                    
-                    # Elabora tutte le parti del messaggio
-                    for part in msg.walk():
-                        content_type = part.get_content_type()
-                        self.log_debug(f"Elaborazione parte email: {content_type}")
-                        
-                        # Estrai testo semplice dal corpo dell'email
-                        if content_type == "text/plain" and not part.get_filename():
-                            try:
-                                payload = part.get_payload(decode=True)
-                                if payload:
-                                    charset = part.get_content_charset() or 'utf-8'
-                                    text = payload.decode(charset, errors='replace')
-                                    content_parts.append(text)
-                                    self.log_debug(f"Estratti {len(text)} caratteri di testo")
-                            except Exception as e:
-                                self.log_debug(f"Errore nell'estrazione del testo: {str(e)}")
-                                try:
-                                    # Fallback a utf-8
-                                    content_parts.append(payload.decode('utf-8', errors='replace'))
-                                except:
-                                    pass
-                                    
-                        # Estrai HTML dal corpo dell'email
-                        elif content_type == "text/html" and not part.get_filename():
-                            try:
-                                payload = part.get_payload(decode=True)
-                                if payload:
-                                    charset = part.get_content_charset() or 'utf-8'
-                                    html_content = payload.decode(charset, errors='replace')
-                                    
-                                    # Opzionalmente, prova a estrarre il testo dall'HTML
-                                    try:
-                                        from bs4 import BeautifulSoup
-                                        soup = BeautifulSoup(html_content, 'html.parser')
-                                        text_content = soup.get_text(separator=' ', strip=True)
-                                        content_parts.append(text_content)
-                                        self.log_debug(f"Estratti {len(text_content)} caratteri da HTML")
-                                    except ImportError:
-                                        # Se BeautifulSoup non è disponibile, usa l'HTML grezzo
-                                        content_parts.append(html_content)
-                                        self.log_debug(f"BeautifulSoup non disponibile, usato HTML grezzo ({len(html_content)} caratteri)")
-                            except Exception as e:
-                                self.log_debug(f"Errore nell'estrazione HTML: {str(e)}")
-                        
-                        # Gestisci gli allegati
-                        elif part.get('Content-Disposition') or part.get_filename():
-                            try:
-                                # Ottieni il nome dell'allegato
-                                filename = part.get_filename()
-                                attachment_count += 1
-                                
-                                # Normalizza il nome dell'allegato
-                                if not filename:
-                                    filename = f"allegato_{attachment_count}"
-                                
-                                # Decodifica il nome dell'allegato se necessario
-                                if isinstance(filename, bytes):
-                                    try:
-                                        filename = filename.decode('utf-8', errors='replace')
-                                    except:
-                                        filename = f"allegato_{attachment_count}"
-                                
-                                # Decodifica header encodati se necessario
-                                try:
-                                    decoded_parts = decode_header(filename)
-                                    decoded_filename = ""
-                                    for part_data, charset in decoded_parts:
-                                        if isinstance(part_data, bytes):
-                                            decoded_filename += part_data.decode(charset or 'utf-8', errors='replace')
-                                        else:
-                                            decoded_filename += part_data
-                                    filename = decoded_filename
-                                except:
-                                    pass
-                                
-                                self.log_debug(f"Allegato trovato: {filename}")
-                                
-                                # Aggiungi informazioni sull'allegato
-                                content_parts.append(f"\n--- ALLEGATO {attachment_count}: {filename} ---\n")
-                                
-                                # METODO 1: Usa get_payload(decode=True) che dovrebbe gestire automaticamente la decodifica
-                                payload = part.get_payload(decode=True)
-                                
-                                # METODO 2: se il primo metodo fallisce, prova con decodifica manuale
-                                if not payload:
-                                    encoding = part.get('Content-Transfer-Encoding', '').lower()
-                                    raw_payload = part.get_payload()
-                                    
-                                    if encoding == 'base64' and isinstance(raw_payload, str):
-                                        try:
-                                            payload = base64.b64decode(raw_payload)
-                                            self.log_debug("Allegato decodificato con base64")
-                                        except:
-                                            self.log_debug("Errore nella decodifica base64")
-                                    elif encoding == 'quoted-printable' and isinstance(raw_payload, str):
-                                        try:
-                                            payload = quopri.decodestring(raw_payload.encode('utf-8'))
-                                            self.log_debug("Allegato decodificato con quoted-printable")
-                                        except:
-                                            self.log_debug("Errore nella decodifica quoted-printable")
-                                    elif isinstance(raw_payload, str):
-                                        try:
-                                            payload = raw_payload.encode('utf-8', errors='replace')
-                                            self.log_debug("Allegato convertito da stringa a bytes")
-                                        except:
-                                            self.log_debug("Errore nella conversione della stringa a bytes")
-                                
-                                if payload and len(payload) > 0:
-                                    self.log_debug(f"Analisi contenuto allegato: {filename} ({len(payload)} bytes)")
-                                    
-                                    # IMPORTANTE: CHIAMA IL METODO PER ELABORARE L'ALLEGATO
-                                    attachment_content = self.process_email_attachment(
-                                        payload, filename, part.get_content_type())
-                                    
-                                    if attachment_content:
-                                        content_parts.append(attachment_content)
-                                        self.log_debug(f"Contenuto allegato {filename} aggiunto ({len(attachment_content)} caratteri)")
-                                    else:
-                                        content_parts.append(f"[Allegato {filename}: nessun contenuto estraibile]")
-                                        self.log_debug(f"Nessun contenuto estraibile dall'allegato {filename}")
-                                else:
-                                    content_parts.append(f"[Allegato {filename}: vuoto o non decodificabile]")
-                                    self.log_debug(f"Allegato vuoto o non decodificabile: {filename}")
-                                    
-                            except Exception as e:
-                                self.log_debug(f"Errore nell'elaborazione dell'allegato: {str(e)}")
-                                content_parts.append(f"[Errore nell'elaborazione dell'allegato: {str(e)}]")
-                    
-                    self.log_debug(f"Totale allegati trovati: {attachment_count}")
-                    
-                    # Se non è stato trovato alcun contenuto, prova un metodo più semplice
-                    if not content_parts:
-                        self.log_debug("Nessun contenuto trovato, tentativo con metodo alternativo")
-                        try:
-                            if msg.is_multipart():
-                                for part in msg.walk():
-                                    content_type = part.get_content_type()
-                                    if content_type == "text/plain":
-                                        payload = part.get_payload(decode=True)
-                                        if payload:
-                                            content_parts.append(payload.decode('utf-8', errors='replace'))
-                            else:
-                                payload = msg.get_payload(decode=True)
-                                if payload:
-                                    content_parts.append(payload.decode('utf-8', errors='replace'))
-                        except Exception as e:
-                            self.log_debug(f"Errore nel metodo alternativo: {str(e)}")
-                    
-                    content = "\n".join(content_parts)
-                    self.log_debug(f"Estratti in totale {len(content)} caratteri da EML (inclusi allegati)")
+                    content = textract.process(file_path, encoding='utf-8').decode('utf-8')
                     return content
-                except ImportError as e:
-                    self.log_debug(f"Modulo necessario non disponibile: {str(e)}")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file EML {file_path}: {str(e)}")
-                    return ""
+                except:
+                    self.log_debug(f"Errore con textract per {file_path}")
+                    return "[Errore nell'estrazione del contenuto]"
+            else:
+                self.log_debug(f"Libreria textract non disponibile per elaborare formato legacy {ext}: {file_path}")
+                return f"[Installare textract per elaborare file {ext}]"
+                    
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto Office legacy {file_path}: {str(e)}")
+            return ""
 
-            # File vCard (.vcf)
-            elif ext == '.vcf':
-                try:
-                    self.log_debug(f"Processando file vCard: {file_path}")
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        # Estrai campi più importanti per la ricerca
-                        processed_content = []
-                        for line in content.splitlines():
-                            if line.startswith(('FN:', 'N:', 'EMAIL:', 'TEL:', 'ADR:', 'ORG:', 'TITLE:', 'NOTE:')):
-                                processed_content.append(line)
-                        
-                        result = "\n".join(processed_content)
-                        self.log_debug(f"Estratti {len(result)} caratteri da vCard")
-                        return result
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file vCard {file_path}: {str(e)}")
-                    return ""
-
-            # File iCalendar (.ics)
-            elif ext == '.ics':
-                try:
-                    self.log_debug(f"Processando file iCalendar: {file_path}")
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        # Estrai campi più importanti per la ricerca
-                        processed_content = []
-                        current_event = []
-                        in_event = False
-                        
-                        for line in content.splitlines():
-                            line = line.strip()
-                            if line == "BEGIN:VEVENT":
-                                in_event = True
-                                current_event = []
-                            elif line == "END:VEVENT":
-                                in_event = False
-                                processed_content.append("\n".join(current_event))
-                                processed_content.append("---")
-                            elif in_event and line.startswith(('SUMMARY:', 'DESCRIPTION:', 'LOCATION:', 
-                                                            'ORGANIZER:', 'ATTENDEE:', 'DTSTART:', 
-                                                            'DTEND:', 'CATEGORIES:')):
-                                current_event.append(line)
-                        
-                        result = "\n".join(processed_content)
-                        self.log_debug(f"Estratti {len(result)} caratteri da iCalendar")
-                        return result
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file iCalendar {file_path}: {str(e)}")
-                    return ""
-
-            # ===== PRESENTAZIONI =====
-            # File PowerPoint Show (.pps)
-            elif ext == '.pps':
-                try:
-                    # Utilizziamo la stessa implementazione di PPT dato che hanno lo stesso formato
-                    if os.name == 'nt':
-                        import win32com.client
-                        import pythoncom
-                        
-                        # Inizializzazione necessaria per i thread
-                        pythoncom.CoInitialize()
-                        
-                        self.log_debug(f"Processando file PowerPoint Show: {file_path}")
-                        
+    def _extract_pdf_content(self, file_path):
+        """Estrae il contenuto da file PDF"""
+        try:
+            # Prima prova con PyPDF2
+            if 'PyPDF2' in sys.modules or importlib.util.find_spec('PyPDF2') is not None:
+                import PyPDF2
+                content = []
+                with open(file_path, 'rb') as file:
+                    reader = PyPDF2.PdfReader(file)
+                    # Limita a 10 pagine per prestazioni
+                    for page_num in range(min(10, len(reader.pages))):
+                        page = reader.pages[page_num]
                         try:
-                            powerpoint = win32com.client.Dispatch("PowerPoint.Application")
-                            powerpoint.Visible = False
-                            
-                            presentation = powerpoint.Presentations.Open(os.path.abspath(file_path), WithWindow=False)
-                            texts = []
-                            
-                            for slide_idx in range(1, presentation.Slides.Count + 1):
-                                slide = presentation.Slides.Item(slide_idx)
-                                texts.append(f"--- Diapositiva {slide_idx} ---")
-                                slide_text = []
-                                
-                                for shape_idx in range(1, slide.Shapes.Count + 1):
-                                    shape = slide.Shapes.Item(shape_idx)
-                                    if shape.HasTextFrame:
-                                        if shape.TextFrame.HasText:
-                                            slide_text.append(shape.TextFrame.TextRange.Text)
-                                
-                                if slide_text:
-                                    texts.append("\n".join(slide_text))
-                            
-                            presentation.Close()
-                            powerpoint.Quit()
-                            
-                            pythoncom.CoUninitialize()
-                            
-                            result = "\n".join(texts)
-                            self.log_debug(f"Estratti {len(result)} caratteri da PPS")
-                            return result
-                            
-                        except Exception as e:
-                            self.log_debug(f"Errore nell'apertura del PPS con win32com: {str(e)}")
-                            
-                            # Cleanup in caso di errore
-                            try:
-                                if 'presentation' in locals() and presentation:
-                                    presentation.Close()
-                                if 'powerpoint' in locals() and powerpoint:
-                                    powerpoint.Quit()
-                            except:
-                                pass
-                            
-                            pythoncom.CoUninitialize()
-                            return ""
-                    else:
-                        self.log_debug("Estrazione di testo dai file PPS non supportata su questa piattaforma")
-                        return ""
-                except ImportError:
-                    self.log_debug("win32com non disponibile per i file PPS")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore generale nell'elaborazione del file PPS {file_path}: {str(e)}")
-                    return ""
+                            content.append(page.extract_text())
+                        except:
+                            content.append(f"[Errore estrazione pagina {page_num+1}]")
+                return '\n'.join(content)
+                
+            # Fallback a pdfminer se PyPDF2 non è disponibile
+            elif 'pdfminer' in sys.modules or importlib.util.find_spec('pdfminer') is not None:
+                from pdfminer.high_level import extract_text
+                return extract_text(file_path)
+                
+            else:
+                self.log_debug(f"Nessuna libreria PDF disponibile per elaborare: {file_path}")
+                return "[Installare PyPDF2 o pdfminer per visualizzare contenuto PDF]"
+                
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto dal file PDF {file_path}: {str(e)}")
+            return ""
 
-            # File Keynote (.key)
-            elif ext == '.key':
-                try:
-                    self.log_debug(f"Processando file Keynote: {file_path}")
-                    # Keynote è essenzialmente un pacchetto compresso con file XML all'interno
-                    if not zipfile.is_zipfile(file_path):
-                        self.log_debug(f"File Keynote non valido (non è un file zip): {file_path}")
-                        return ""
-                        
-                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                        content_parts = []
-                        
-                        # Cerca file di testo nel pacchetto Keynote
-                        for file_info in zip_ref.infolist():
-                            if file_info.filename.endswith(('.xml', '.txt')):
-                                try:
-                                    with zip_ref.open(file_info) as content_file:
-                                        content = content_file.read().decode('utf-8', errors='replace')
-                                        # Estrai solo il testo dalle presentazioni, rimuovendo i tag
-                                        import re
-                                        text_content = re.sub(r'<[^>]+>', ' ', content)
-                                        text_content = re.sub(r'\s+', ' ', text_content).strip()
-                                        if text_content:
-                                            content_parts.append(text_content)
-                                except:
-                                    continue
-                                    
-                        result = "\n".join(content_parts)
-                        self.log_debug(f"Estratti {len(result)} caratteri da Keynote")
-                        return result
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file Keynote {file_path}: {str(e)}")
-                    return ""
-
-            # ===== FILE DI CONFIGURAZIONE =====
-            # File YAML (.yml, .yaml)
-            elif ext in ['.yml', '.yaml']:
-                try:
-                    self.log_debug(f"Processando file YAML: {file_path}")
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        self.log_debug(f"Estratti {len(content)} caratteri da YAML")
-                        return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file YAML {file_path}: {str(e)}")
-                    return ""
-
-            # File TOML (.toml)
-            elif ext == '.toml':
-                try:
-                    self.log_debug(f"Processando file TOML: {file_path}")
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        self.log_debug(f"Estratti {len(content)} caratteri da TOML")
-                        return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file TOML {file_path}: {str(e)}")
-                    return ""
-
-            # File Registry Windows (.reg)
-            elif ext == '.reg':
-                try:
-                    self.log_debug(f"Processando file Registry: {file_path}")
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        self.log_debug(f"Estratti {len(content)} caratteri da Registry")
-                        return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file Registry {file_path}: {str(e)}")
-                    return ""
-
-            # File plist (.plist)
-            elif ext == '.plist':
-                try:
-                    self.log_debug(f"Processando file Property List: {file_path}")
-                    # Prova a leggere come XML
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        # Rimuovi i tag XML per estrarre solo il testo
-                        import re
-                        text_content = re.sub(r'<[^>]+>', ' ', content)
-                        text_content = re.sub(r'\s+', ' ', text_content).strip()
-                        self.log_debug(f"Estratti {len(text_content)} caratteri da plist")
-                        return text_content
-                except UnicodeDecodeError:
-                    try:
-                        # Potrebbe essere un file plist binario
-                        self.log_debug("Tentativo di lettura come plist binario")
-                        with open(file_path, 'rb') as f:
-                            content = f.read().decode('latin-1', errors='replace')
-                            # Estrai stringhe leggibili
-                            printable = ''.join(c for c in content if c.isprintable() and len(c.strip()) > 0)
-                            self.log_debug(f"Estratti {len(printable)} caratteri da plist binario")
-                            return printable
-                    except Exception as inner_e:
-                        self.log_debug(f"Errore nella lettura del plist binario: {str(inner_e)}")
-                        return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file plist {file_path}: {str(e)}")
-                    return ""
-
-            # File Properties (.properties)
-            elif ext == '.properties':
-                try:
-                    self.log_debug(f"Processando file Properties: {file_path}")
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        self.log_debug(f"Estratti {len(content)} caratteri da Properties")
-                        return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file Properties {file_path}: {str(e)}")
-                    return ""
-
-            # File htaccess (.htaccess)
-            elif file_path.endswith('.htaccess'):
-                try:
-                    self.log_debug(f"Processando file htaccess: {file_path}")
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        self.log_debug(f"Estratti {len(content)} caratteri da htaccess")
-                        return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file htaccess {file_path}: {str(e)}")
-                    return ""
-
-            # ===== LINGUAGGI DI PROGRAMMAZIONE =====
-            # I vari linguaggi di programmazione possono usare lo stesso parser di testo
-            elif ext in ['.h', '.hpp', '.vb', '.lua', '.rs', '.groovy']:
-                try:
-                    self.log_debug(f"Processando file di codice {ext}: {file_path}")
-                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                        content = f.read()
-                        self.log_debug(f"Estratti {len(content)} caratteri da file {ext}")
-                        return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file {ext} {file_path}: {str(e)}")
-                    return ""
-            
-            # File MSG (Outlook)
+    def _extract_email_content(self, file_path, ext):
+        """Estrae il contenuto da file di email"""
+        try:
+            if ext == '.eml':
+                import email
+                with open(file_path, 'rb') as f:
+                    msg = email.message_from_binary_file(f)
+                    
+                subject = msg.get('Subject', '')
+                sender = msg.get('From', '')
+                date = msg.get('Date', '')
+                
+                content = [
+                    f"Oggetto: {subject}",
+                    f"Da: {sender}",
+                    f"Data: {date}",
+                    "---------------------"
+                ]
+                
+                # Estrai il corpo dell'email
+                if msg.is_multipart():
+                    for part in msg.walk():
+                        if part.get_content_type() == "text/plain":
+                            text = part.get_payload(decode=True).decode(part.get_content_charset('utf-8'), errors='replace')
+                            content.append(text)
+                else:
+                    text = msg.get_payload(decode=True).decode(msg.get_content_charset('utf-8'), errors='replace')
+                    content.append(text)
+                    
+                return '\n'.join(content)
+                
             elif ext == '.msg':
                 try:
-                    self.log_debug(f"Processando file MSG Outlook: {file_path}")
-                    try:
-                        import extract_msg
-                        msg = extract_msg.Message(file_path)
-                        
-                        content_parts = []
-                        
-                        # Estrai intestazioni principali
-                        from_address = msg.sender if hasattr(msg, 'sender') else "N/A"
-                        to_address = msg.to if hasattr(msg, 'to') else "N/A"
-                        subject = msg.subject if hasattr(msg, 'subject') else "N/A"
-                        msg_date = msg.date if hasattr(msg, 'date') else "N/A"
-                        
-                        # Aggiungi intestazioni al contenuto
-                        content_parts.append(f"Da: {from_address}")
-                        content_parts.append(f"A: {to_address}")
-                        content_parts.append(f"Oggetto: {subject}")
-                        content_parts.append(f"Data: {msg_date}")
-                        content_parts.append("-" * 40)  # Separatore
-                        
-                        # Estrai corpo del messaggio
-                        msg_body = msg.body if hasattr(msg, 'body') else ""
-                        if msg_body:
-                            content_parts.append(msg_body)
-                        
-                        # Contatori per monitoraggio allegati
-                        attachment_count = 0
-                        
-                        # Processa allegati esattamente come fatto per gli EML
-                        for attachment in msg.attachments:
-                            if not hasattr(attachment, 'name') or not attachment.name:
-                                continue
-                            
-                            attachment_count += 1
-                            filename = attachment.name
-                            content_parts.append(f"\n--- ALLEGATO {attachment_count}: {filename} ---\n")
-                            
-                            try:
-                                # Ottieni i dati binari dell'allegato
-                                attachment_data = None
-                                if hasattr(attachment, 'data'):
-                                    attachment_data = attachment.data
-                                elif hasattr(attachment, 'getBytes'):
-                                    attachment_data = attachment.getBytes()
-                                
-                                if not attachment_data:
-                                    content_parts.append(f"[Allegato vuoto o non leggibile]")
-                                    continue
-                                
-                                # Ottieni il tipo di contenuto (MIME type)
-                                content_type = ""
-                                if hasattr(attachment, 'mimetype') and attachment.mimetype:
-                                    content_type = attachment.mimetype
-                                
-                                # IMPORTANTE: Usa esattamente la stessa funzione di EML
-                                # per processare l'allegato ed estrarre il contenuto
-                                attachment_content = self.process_email_attachment(
-                                    attachment_data, filename, content_type)
-                                
-                                if attachment_content:
-                                    # Aggiungi il contenuto estratto ai risultati
-                                    content_parts.append(attachment_content)
-                                    self.log_debug(f"Estratto contenuto da allegato '{filename}': {len(attachment_content)} caratteri")
-                                else:
-                                    content_parts.append(f"[Allegato {filename}: nessun contenuto estraibile]")
-                                    
-                            except Exception as e:
-                                self.log_debug(f"Errore nell'elaborazione dell'allegato {filename}: {str(e)}")
-                                content_parts.append(f"[Errore nell'elaborazione dell'allegato: {str(e)}]")
-                        
-                        content = "\n".join(content_parts)
-                        self.log_debug(f"Estratti {len(content)} caratteri da MSG (inclusi {attachment_count} allegati)")
-                        return content
-                        
-                    except ImportError:
-                        self.log_debug("Libreria extract_msg non disponibile")
-                        # Metodo fallback - estrai contenuto usando regexp base
-                        with open(file_path, 'rb') as f:
-                            binary_content = f.read()
-                            text_content = ""
-                            # Cerca stringhe ASCII leggibili nel file binario
-                            import re
-                            text_chunks = re.findall(b'[\x20-\x7E\r\n]{4,}', binary_content)
-                            for chunk in text_chunks:
-                                try:
-                                    text_content += chunk.decode('utf-8', errors='replace') + "\n"
-                                except:
-                                    pass
-                            
-                            if text_content:
-                                self.log_debug(f"Estratti {len(text_content)} caratteri da MSG (metodo fallback)")
-                                return text_content
-                            return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file MSG {file_path}: {str(e)}")
-                    return ""
-
-            # File PST/OST (Outlook database) - versione semplificata senza dipendenze esterne
-            elif ext in ['.pst', '.ost']:
-                try:
-                    self.log_debug(f"Processando file {ext} Outlook: {file_path}")
-                    
-                    # Estrai metadati di base
-                    file_size = os.path.getsize(file_path)
-                    content_parts = []
-                    
-                    content_parts.append(f"File {ext.upper()} Outlook")
-                    content_parts.append(f"Percorso: {file_path}")
-                    content_parts.append(f"Dimensione: {self._format_size(file_size)}")
-                    content_parts.append(f"Data modifica: {datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%d/%m/%Y %H:%M')}")
-                    
-                    # Estrai stringhe di testo leggibili (approccio base)
-                    try:
-                        with open(file_path, 'rb') as f:
-                            binary_content = f.read(1024*1024)  # Leggi solo il primo MB
-                            
-                            # Usa espressione regolare per trovare stringhe ASCII leggibili
-                            import re
-                            # Trova stringhe alfanumeriche con spazi/punteggiatura di almeno 5 caratteri
-                            pattern = re.compile(b'[a-zA-Z0-9\\s\\.,@\\-_:;\'"/]{5,}')
-                            matches = pattern.findall(binary_content)
-                            
-                            # Filtra e converte le stringhe trovate
-                            strings = []
-                            for match in matches:
-                                try:
-                                    text = match.decode('utf-8', errors='replace')
-                                    # Filtra stringhe che sembrano email valide o messaggi
-                                    if ('@' in text or 
-                                        text.startswith("To:") or 
-                                        text.startswith("From:") or 
-                                        text.startswith("Subject:")):
-                                        strings.append(text)
-                                    # O stringhe abbastanza lunghe da essere significative
-                                    elif len(text) > 15:
-                                        strings.append(text)
-                                except:
-                                    pass
-                            
-                            # Aggiungi i risultati all'output
-                            if strings:
-                                content_parts.append("\n--- Contenuto estratto ---\n")
-                                content_parts.extend(strings)
-                    except Exception as e:
-                        self.log_debug(f"Errore nell'estrazione del testo: {str(e)}")
-                    
-                    content = "\n".join(content_parts)
-                    self.log_debug(f"Estratti {len(content)} caratteri da {ext}")
-                    return content
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file {ext} {file_path}: {str(e)}")
-                    return ""
-
-            # File MBOX - usa il modulo mailbox standard
-            elif ext == '.mbox':
-                try:
-                    self.log_debug(f"Processando file MBOX: {file_path}")
-                    import mailbox
-                    import email
-                    
-                    # Apri il file MBOX
-                    mbox = mailbox.mbox(file_path)
-                    content_parts = []
-                    
-                    # Limita il numero di messaggi da processare
-                    max_messages = 50
-                    processed = 0
-                    
-                    content_parts.append(f"File MBOX: {os.path.basename(file_path)}")
-                    content_parts.append(f"Totale messaggi: {len(mbox)}")
-                    content_parts.append("-" * 40)
-                    
-                    # Itera attraverso i messaggi
-                    for key, msg in mbox.items():
-                        if processed >= max_messages:
-                            content_parts.append(f"[Limitato a {max_messages} messaggi]")
-                            break
-                        
-                        try:
-                            # Estrai le intestazioni principali
-                            headers = []
-                            for header in ['From', 'To', 'Subject', 'Date']:
-                                if msg[header]:
-                                    headers.append(f"{header}: {msg[header]}")
-                            
-                            content_parts.append(f"\n--- MESSAGGIO {processed+1} ---")
-                            content_parts.extend(headers)
-                            
-                            # Estrai corpo del messaggio
-                            if msg.is_multipart():
-                                for part in msg.walk():
-                                    content_type = part.get_content_type()
-                                    if content_type == "text/plain" and not part.get_filename():
-                                        try:
-                                            payload = part.get_payload(decode=True)
-                                            if payload:
-                                                charset = part.get_content_charset() or 'utf-8'
-                                                text = payload.decode(charset, errors='replace')
-                                                content_parts.append(text)
-                                        except:
-                                            pass
-                            else:
-                                payload = msg.get_payload(decode=True)
-                                if payload:
-                                    charset = msg.get_content_charset() or 'utf-8'
-                                    try:
-                                        text = payload.decode(charset, errors='replace')
-                                        content_parts.append(text)
-                                    except:
-                                        pass
-                            
-                            processed += 1
-                        except Exception as e:
-                            self.log_debug(f"Errore nel processare il messaggio MBOX: {str(e)}")
-                    
-                    mbox.close()
-                    content = "\n".join(content_parts)
-                    self.log_debug(f"Estratti {len(content)} caratteri da MBOX")
-                    return content
+                    import extract_msg
+                    msg = extract_msg.Message(file_path)
+                    content = [
+                        f"Oggetto: {msg.subject}",
+                        f"Da: {msg.sender}",
+                        f"Data: {msg.date}",
+                        "---------------------",
+                        msg.body
+                    ]
+                    return '\n'.join(content)
                 except ImportError:
-                    self.log_debug("Libreria mailbox non disponibile")
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file MBOX {file_path}: {str(e)}")
-                    return ""
+                    self.log_debug(f"Libreria extract_msg non disponibile per file .msg: {file_path}")
+                    return "[Installare extract_msg per elaborare file .msg]"
+                    
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto dall'email {file_path}: {str(e)}")
+            return ""
 
-            # File EMLX (Apple Mail)
-            elif ext == '.emlx':
+    def _extract_archive_content(self, file_path, ext):
+        """Estrae l'elenco dei file dagli archivi compressi"""
+        try:
+            content = ["[Elenco dei file nell'archivio]"]
+            
+            if ext == '.zip':
+                import zipfile
                 try:
-                    self.log_debug(f"Processando file EMLX: {file_path}")
-                    import email
+                    with zipfile.ZipFile(file_path, 'r') as archive:
+                        for item in archive.namelist():
+                            content.append(item)
+                except zipfile.BadZipFile:
+                    content.append("[Archivio zip danneggiato o non valido]")
                     
-                    # I file EMLX hanno un formato particolare: prima riga è un numero, poi segue il messaggio email
-                    with open(file_path, 'rb') as f:
-                        content = f.read()
-                        
-                    # Separa il numero iniziale dal resto del contenuto email
-                    try:
-                        # La prima riga è un numero seguito da una nuova riga
-                        parts = content.split(b'\n', 1)
-                        if len(parts) > 1:
-                            email_content = parts[1]
-                            
-                            # Parse dell'email con il modulo email standard
-                            msg = email.message_from_bytes(email_content)
-                            
-                            # Da qui in poi possiamo usare lo stesso codice per gestire il messaggio
-                            # come facciamo per i file EML standard
-                            content_parts = []
-                            
-                            # Estrai intestazioni
-                            for header in ['From', 'To', 'Subject', 'Date']:
-                                if msg[header]:
-                                    content_parts.append(f"{header}: {msg[header]}")
-                            
-                            # Estrai corpo del messaggio
-                            if msg.is_multipart():
-                                for part in msg.walk():
-                                    content_type = part.get_content_type()
-                                    if content_type == "text/plain" and not part.get_filename():
-                                        payload = part.get_payload(decode=True)
-                                        if payload:
-                                            charset = part.get_content_charset() or 'utf-8'
-                                            try:
-                                                text = payload.decode(charset, errors='replace')
-                                                content_parts.append(text)
-                                            except:
-                                                pass
-                            else:
-                                payload = msg.get_payload(decode=True)
-                                if payload:
-                                    try:
-                                        text = payload.decode('utf-8', errors='replace')
-                                        content_parts.append(text)
-                                    except:
-                                        pass
-                            
-                            result = "\n".join(content_parts)
-                            self.log_debug(f"Estratti {len(result)} caratteri da EMLX")
-                            return result
-                    except Exception as e:
-                        self.log_debug(f"Errore nell'analisi del file EMLX: {str(e)}")
+            elif ext == '.tar' or ext.endswith('gz'):
+                import tarfile
+                try:
+                    with tarfile.open(file_path, 'r:*') as archive:
+                        for item in archive.getnames():
+                            content.append(item)
+                except tarfile.ReadError:
+                    content.append("[Archivio tar danneggiato o non valido]")
                     
-                    return ""
-                except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file EMLX {file_path}: {str(e)}")
-                    return ""
+            # Considera altri tipi di archivio se necessario
+            return '\n'.join(content[:1001])  # Limita l'elenco a 1000 file
             
         except Exception as e:
-            self.log_debug(f"Errore generale nella lettura del file {file_path}: {str(e)}")
+            self.log_debug(f"Errore nell'estrazione dell'elenco file dall'archivio {file_path}: {str(e)}")
             return ""
-        
+
+    def _extract_image_metadata(self, file_path, ext):
+        """Estrae i metadati EXIF dalle immagini"""
+        try:
+            # Usa PIL/Pillow per i metadati delle immagini
+            from PIL import Image, ExifTags
+            
+            metadata = ["[Metadati immagine]"]
+            
+            try:
+                with Image.open(file_path) as img:
+                    metadata.append(f"Dimensioni: {img.width}x{img.height}")
+                    metadata.append(f"Formato: {img.format}")
+                    metadata.append(f"Modalità: {img.mode}")
+                    
+                    # Estrai dati EXIF se disponibili
+                    if hasattr(img, '_getexif') and img._getexif():
+                        exif = {
+                            ExifTags.TAGS[k]: v
+                            for k, v in img._getexif().items()
+                            if k in ExifTags.TAGS
+                        }
+                        # Aggiungi dati EXIF selezionati
+                        for tag in ['DateTimeOriginal', 'Make', 'Model', 'GPSInfo', 
+                                'XResolution', 'YResolution', 'Software']:
+                            if tag in exif:
+                                metadata.append(f"{tag}: {exif[tag]}")
+            except:
+                metadata.append("[Impossibile leggere i metadati dell'immagine]")
+                
+            return '\n'.join(metadata)
+            
+        except ImportError:
+            self.log_debug(f"Libreria PIL/Pillow non disponibile per i metadati dell'immagine: {file_path}")
+            return "[Installare Pillow per visualizzare i metadati dell'immagine]"
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione dei metadati dell'immagine {file_path}: {str(e)}")
+            return ""
+
+    def _extract_media_metadata(self, file_path, ext):
+        """Estrae i metadati da file audio/video"""
+        try:
+            metadata = ["[Metadati media]"]
+            
+            # Ottieni le informazioni base sul file
+            file_size = os.path.getsize(file_path)
+            metadata.append(f"Dimensione: {self._format_size(file_size)}")
+            
+            # Usa librerie specializzate per i metadati quando disponibili
+            if any(module in sys.modules or importlib.util.find_spec(module) for module in ['mutagen', 'tinytag']):
+                if 'mutagen' in sys.modules or importlib.util.find_spec('mutagen'):
+                    import mutagen
+                    try:
+                        media = mutagen.File(file_path)
+                        if media:
+                            for key, value in media.items():
+                                metadata.append(f"{key}: {value}")
+                    except:
+                        pass
+                elif 'tinytag' in sys.modules or importlib.util.find_spec('tinytag'):
+                    from tinytag import TinyTag
+                    try:
+                        tag = TinyTag.get(file_path)
+                        metadata.append(f"Titolo: {tag.title}")
+                        metadata.append(f"Artista: {tag.artist}")
+                        metadata.append(f"Album: {tag.album}")
+                        metadata.append(f"Anno: {tag.year}")
+                        metadata.append(f"Durata: {int(tag.duration)} secondi")
+                    except:
+                        pass
+                        
+            return '\n'.join(metadata)
+            
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione dei metadati multimediali {file_path}: {str(e)}")
+            return ""
+
+    def extract_text_file_content(self, file_path):
+        """Estrae il contenuto dai file di testo semplice"""
+        try:
+            encodings = ['utf-8', 'latin-1', 'windows-1252']
+            content = ""
+            
+            for encoding in encodings:
+                try:
+                    with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                        content = f.read(1024*1024)  # Leggi al massimo 1 MB
+                        break
+                except UnicodeDecodeError:
+                    continue
+                    
+            return content
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto dal file di testo {file_path}: {str(e)}")
+            return ""
+
+    def extract_word_content(self, file_path):
+        """Estrae il contenuto dai file Word"""
+        ext = os.path.splitext(file_path)[1].lower()
+        try:
+            if ext == '.docx':
+                # Codice per docx
+                import docx
+                doc = docx.Document(file_path)
+                content = []
+                for paragraph in doc.paragraphs:
+                    if paragraph.text.strip():
+                        content.append(paragraph.text)
+                return '\n'.join(content)
+            elif ext == '.doc':
+                # Codice per doc vecchio formato
+                if 'textract' in sys.modules or importlib.util.find_spec('textract') is not None:
+                    import textract
+                    content = textract.process(file_path, encoding='utf-8').decode('utf-8')
+                    return content
+                else:
+                    self.log_debug(f"Libreria textract non disponibile per elaborare file .doc: {file_path}")
+                    return "Contenuto non disponibile - installare textract per elaborare file .doc"
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto dal file Word {file_path}: {str(e)}")
+            return ""
+
+    def extract_word_content(self, file_path):
+        """Estrae il contenuto dai file Word"""
+        ext = os.path.splitext(file_path)[1].lower()
+        try:
+            if ext == '.docx':
+                # Codice per docx
+                import docx
+                doc = docx.Document(file_path)
+                content = []
+                for paragraph in doc.paragraphs:
+                    if paragraph.text.strip():
+                        content.append(paragraph.text)
+                return '\n'.join(content)
+            elif ext == '.doc':
+                # Codice per doc
+                # ...
+        except Exception as e:
+            self.log_debug(f"Errore nell'estrazione del contenuto dal file Word {file_path}: {str(e)}")
+            return ""
+      
     def process_email_attachment(self, attachment_data, attachment_name, content_type):
         """Process an email attachment and extract its content"""
         temp_dir = None
@@ -7903,71 +6701,6 @@ class FileSearchApp:
         # Invia il messaggio alla console di debug se aperta
         if hasattr(self, 'debug_window') and self.debug_window.winfo_exists():
             self.add_debug_message(message, msg_type)
-
-    def process_debug_queue(self):
-        """Processa i messaggi di debug dalla coda, limitando l'impatto sulle prestazioni"""
-        if not hasattr(self, 'debug_text') or not self.debug_text.winfo_exists():
-            self.debug_queue_processor_active = False
-            return
-        
-        try:
-            # Elabora fino a 20 messaggi alla volta per limitare l'impatto sulle prestazioni
-            processed = 0
-            max_to_process = 20
-            batch_update = ""
-            batch_tags = []
-            
-            while not self.debug_message_queue.empty() and processed < max_to_process:
-                timestamp, message, msg_type = self.debug_message_queue.get_nowait()
-                # Prepariamo gli inserimenti in batch invece di aggiornare la UI ad ogni messaggio
-                batch_update += f"[{timestamp}] "
-                start_pos = len(batch_update)
-                batch_update += f"{message}\n"
-                end_pos = len(batch_update)
-                # Salviamo le posizioni e i tag per applicarli dopo
-                batch_tags.append((start_pos, end_pos, msg_type))
-                processed += 1
-            
-            if batch_update:
-                # Inseriamo tutto il testo in una volta
-                current_end = self.debug_text.index('end-1c')
-                self.debug_text.insert(END, batch_update)
-                
-                # Poi applichiamo i tag
-                for start_pos, end_pos, tag in batch_tags:
-                    line_start = int(current_end.split('.')[0])
-                    # Calcoliamo le posizioni relative
-                    self.debug_text.tag_add(tag, f"{line_start}.{start_pos}", f"{line_start}.{end_pos}")
-                
-                # Scorre automaticamente in fondo
-                self.debug_text.see(END)
-            
-            # Limita il numero di righe (mantieni ultime 5000 righe) ogni 100 messaggi elaborati
-            if hasattr(self, 'debug_messages_count'):
-                self.debug_messages_count += processed
-            else:
-                self.debug_messages_count = processed
-                
-            if self.debug_messages_count > 100:
-                self.debug_messages_count = 0
-                lines = int(self.debug_text.index('end-1c').split('.')[0])
-                if lines > 5000:
-                    self.debug_text.delete('1.0', f'{lines-5000}.0')
-            
-            # Programma il prossimo aggiornamento con un ritardo che dipende dallo stato della ricerca
-            if self.is_searching:
-                # Durante la ricerca, aggiorna meno frequentemente
-                delay = 250 if self.debug_message_queue.qsize() > 100 else 500
-            else:
-                # Quando non c'è una ricerca in corso, aggiorna più frequentemente
-                delay = 100
-                
-            self.debug_window.after(delay, self.process_debug_queue)
-            
-        except Exception as e:
-            print(f"Errore nell'elaborazione della coda di debug: {str(e)}")
-            # Riprova dopo un po'
-            self.debug_window.after(1000, self.process_debug_queue)
 
     def process_debug_queue(self):
         """Processa i messaggi di debug dalla coda, limitando l'impatto sulle prestazioni"""
