@@ -1220,6 +1220,9 @@ class FileSearchApp:
         return directories
 
     def start_search(self):
+        # Assicurati che qualsiasi ricerca precedente sia completamente terminata
+        self.reset_search_state()
+        
         # Reset the total files size label at the start of a new search
         if hasattr(self, 'total_files_size_label'):
             self.total_files_size_label.config(text="Dimensione totale: 0 B (0 file)")
@@ -1278,9 +1281,17 @@ class FileSearchApp:
         
         # Reset per la nuova ricerca
         self.stop_search = False
-        self.stop_button["state"] = "normal"
+        
+        # IMPORTANTE: Imposta is_searching PRIMA di disabilitare i controlli
+        self.is_searching = True
+        
+        # CRITICO: Crea un nuovo executor per questa ricerca
+        max_workers = max(1, min(32, self.worker_threads.get()))
+        self.search_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        
         original_params = self.optimize_system_search(self.search_path.get())
         self.start_search_watchdog()
+        
         # Aggiorna l'orario di avvio e resetta l'orario di fine
         current_time = datetime.now().strftime('%H:%M')
         self.start_time_label.config(text=current_time)
@@ -1301,9 +1312,15 @@ class FileSearchApp:
             if len(self.search_history) > 10:  # Mantieni solo le ultime 10 ricerche
                 self.search_history.pop(0)
         
-        self.is_searching = True
-        self.disable_all_controls()  # Disabilita tutti i controlli
-        self.stop_button["state"] = "normal"  # Solo questo è abilitato durante la ricerca
+        # Disabilita i controlli
+        self.disable_all_controls()
+        
+        # IMPORTANTE: Il pulsante di interruzione deve essere abilitato DOPO aver disabilitato tutti i controlli
+        if hasattr(self, 'stop_button'):
+            self.stop_button["state"] = "normal"
+            # Forza aggiornamento immediato del bottone
+            self.stop_button.update()
+        
         self.progress_bar["value"] = 0
         self.status_label["text"] = "Ricerca in corso..."
         
@@ -1320,6 +1337,10 @@ class FileSearchApp:
         
         # Ottieni le parole chiave di ricerca
         search_terms = [term.strip() for term in self.keywords.get().split(',') if term.strip()]
+        
+        # DEBUG: Verifica che la ricerca sia correttamente impostata
+        self.log_debug(f"STATO RICERCA: is_searching={self.is_searching}, stop_search={self.stop_search}")
+        self.log_debug(f"Stato pulsante interruzione: {self.stop_button['state']}")
             
         # Avvia la ricerca in un thread separato
         self.search_results = []  # Resetta i risultati
@@ -1337,12 +1358,18 @@ class FileSearchApp:
 
         # Avvia l'aggiornamento della progress bar
         self.update_progress()
+        
         # Salva original_params come attributo per ripristinarli dopo la ricerca
         if original_params:
             self.original_system_search_params = original_params
 
-        current_theme = "dark"  # Sostituisci con la logica per determinare il tema corrente
-        self.update_theme_colors(current_theme)
+        # IMPORTANTE: Doppio controllo del pulsante di interruzione dopo aver iniziato la ricerca
+        if hasattr(self, 'stop_button'):
+            # Usa un approccio a ritardo doppio per garantire che sia abilitato
+            self.root.after(100, lambda: self.stop_button.configure(state="normal"))
+            self.root.after(500, lambda: self.stop_button.configure(state="normal"))
+        
+        self.log_debug("Ricerca avviata correttamente con pulsante interruzione abilitato")
 
     def start_search_watchdog(self):
         """Avvia un timer di controllo per rilevare se la ricerca si è bloccata"""
@@ -4521,12 +4548,58 @@ class FileSearchApp:
                 self.log_debug(f"Errore nell'aggiornamento del progresso: {str(e)}")
                 self.root.after(500, self.update_progress)
             
+    def reset_search_state(self):
+        """Reimpostazione completa dello stato di ricerca per garantire coerenza"""
+        self.log_debug("Reimpostazione dello stato di ricerca")
+        
+        # Variabili di controllo principali
+        self.is_searching = False
+        self.stop_search = False
+        
+        # Elimina flag temporanei di interruzione se presenti
+        if hasattr(self, '_stopping_in_progress'):
+            delattr(self, '_stopping_in_progress')
+        
+        # Chiudi executor se ancora esistente
+        if hasattr(self, 'search_executor') and self.search_executor:
+            try:
+                self.search_executor.shutdown(wait=False)
+            except:
+                pass
+            self.search_executor = None
+        
+        # Ferma il watchdog
+        self.watchdog_active = False
+        
+        # Svuota le code
+        try:
+            while not self.progress_queue.empty():
+                try:
+                    self.progress_queue.get_nowait()
+                    self.progress_queue.task_done()
+                except:
+                    break
+        except:
+            pass
+        
+        # Aggiorna UI per riflettere lo stato corretto
+        if hasattr(self, 'stop_button'):
+            self.stop_button["state"] = "disabled"
+        
+        self.log_debug("Stato di ricerca reimpostato correttamente")
+
     def stop_search_process(self):
         """Ferma il processo di ricerca in corso in modo aggressivo"""
+        # Verificare se una ricerca è effettivamente in corso
+        if not self.is_searching:
+            self.log_debug("Tentativo di interruzione ma nessuna ricerca in corso")
+            return
+        
+        self.log_debug("INTERRUZIONE: Stop ricerca richiesto dall'utente")
+        
         # 1. Imposta i flag di interruzione
         self.stop_search = True
         self.is_searching = False
-        self.log_debug("INTERRUZIONE: Stop ricerca richiesto dall'utente")
         
         # 2. Aggiorna l'interfaccia
         self.status_label["text"] = "Interruzione ricerca in corso... attendere"
@@ -4539,81 +4612,58 @@ class FileSearchApp:
         self.end_time_label.config(text=current_time)
         self.update_total_time()  # Aggiorna il tempo totale
         
-        # 4. CRITICO: Interrompe i thread in esecuzione in modo aggressivo
+        # 4. CRITICO: Ferma tutti i thread in modo aggressivo
         if hasattr(self, 'search_executor') and self.search_executor:
             try:
-                # Prima tenta una chiusura pulita dell'executor
-                self.log_debug("INTERRUZIONE: Tentativo di chiusura dell'executor...")
+                self.log_debug("INTERRUZIONE: Chiusura dell'executor...")
                 
-                # Usa un approccio più aggressivo per le versioni recenti di Python
-                # che supportano cancel_futures (Python 3.9+)
+                # Ferma l'executor nel modo più aggressivo possibile
                 try:
                     import sys
                     if sys.version_info >= (3, 9):
                         self.search_executor.shutdown(wait=False, cancel_futures=True)
-                        self.log_debug("INTERRUZIONE: Futures cancellate (Python 3.9+)")
                     else:
-                        # Per versioni precedenti, chiudiamo senza attendere
                         self.search_executor.shutdown(wait=False)
-                        self.log_debug("INTERRUZIONE: Executor chiuso senza attesa")
                         
-                except Exception as e:
-                    self.log_debug(f"INTERRUZIONE: Errore nella chiusura dell'executor: {str(e)}")
-                
-                # 5. NUOVO: Forzatura ancora più aggressiva
-                try:
-                    # Rimuovi tutti i riferimenti all'executor
-                    executor_ref = self.search_executor
+                    # Crea un nuovo executor per le future ricerche
                     self.search_executor = None
                     
-                    # Tenta di svuotare la coda di lavoro dell'executor
-                    if hasattr(executor_ref, '_work_queue'):
-                        executor_ref._work_queue.queue.clear()
-                        self.log_debug("INTERRUZIONE: Coda di lavoro dell'executor svuotata")
-                        
-                    # Forza la chiusura del thread pool
-                    if hasattr(executor_ref, '_threads'):
-                        for thread in executor_ref._threads:
-                            try:
-                                thread._tstate_lock = None
-                                thread._stop()
-                                self.log_debug(f"INTERRUZIONE: Thread {thread.name} forzatamente interrotto")
-                            except Exception:
-                                pass
-                    
-                    # Nullifica definitivamente l'executor per garantire la garbage collection
-                    executor_ref = None
-                    
-                except Exception as ex:
-                    self.log_debug(f"INTERRUZIONE: Errore nella forzatura interruzione thread: {str(ex)}")
-            
+                except Exception as e:
+                    self.log_debug(f"Errore nella chiusura dell'executor: {str(e)}")
+                    self.search_executor = None  # Forza nullificazione
+                
             except Exception as e:
-                self.log_debug(f"INTERRUZIONE: Errore generale nella gestione executor: {str(e)}")
+                self.log_debug(f"Errore generale nell'interruzione: {str(e)}")
                 self.search_executor = None
         
-        # 6. NUOVO: Interrompe attivamente il thread watchdog
-        self.watchdog_active = False
+        # 5. NUOVO: Visualizza risultati parziali trovati
+        self.root.after(500, self.update_results_list)
         
-        # 7. Svuota le code per evitare update residui
+        # 6. Riabilita l'interfaccia utente dopo l'interruzione
+        self.root.after(1000, self._complete_interrupt_process)
+        
+        # 7. Forza aggiornamento GUI
         try:
-            while not self.progress_queue.empty():
-                self.progress_queue.get_nowait()
-                self.progress_queue.task_done()
+            self.root.update_idletasks()
         except:
             pass
         
-        # 8. IMPORTANTE: Visualizza risultati parziali trovati prima dell'interruzione
-        self.root.after(500, self.update_results_list)
-        
-        # 9. Riabilita l'interfaccia utente
-        self.root.after(1000, self.enable_all_controls)
-        self.stop_button["state"] = "disabled"
-        
-        # 10. Forza aggiornamento GUI
-        self.root.update_idletasks()
-        
         self.log_debug("INTERRUZIONE: Processo di interruzione ricerca completato")
-        
+    
+    def _complete_interrupt_process(self):
+        """Completa il processo di interruzione ripristinando l'interfaccia"""
+        try:
+            # Riabilita tutti i controlli
+            self.enable_all_controls()
+            
+            # Reimpostazione completa dello stato
+            self.reset_search_state()
+            
+            self.status_label["text"] = "Ricerca interrotta dall'utente"
+            self.log_debug("Interfaccia ripristinata dopo interruzione")
+        except Exception as e:
+            self.log_debug(f"Errore nel completamento dell'interruzione: {str(e)}")
+
     def update_results_list(self):
         """Aggiorna la lista dei risultati con i risultati trovati"""
         # Pulisci la lista attuale
