@@ -93,6 +93,9 @@ class FileSearchApp:
             
     def _init_essential_variables(self):
         """Inizializza solo le variabili essenziali per l'avvio"""
+        # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
+        self.datetime_var = StringVar()
+        
         # Variabili principali per la ricerca
         self.search_content = BooleanVar(value=True)
         self.search_path = StringVar()
@@ -104,8 +107,7 @@ class FileSearchApp:
         self.progress_queue = queue.Queue()
         self.search_depth = StringVar(value="base") 
 
-        # Variabili per data/ora e utente
-        self.datetime_var = StringVar()
+        # Variabili per data/ora e utente (datetime_var già inizializzato)
         self.user_var = StringVar(value=getpass.getuser())
         
         # Variabili essenziali per l'interfaccia
@@ -116,10 +118,17 @@ class FileSearchApp:
         self.dir_size_calculation = StringVar(value="disabilitato")
         
         # Variabili per la visualizzazione
+        self.directory_calculation_enabled = False
         self.dir_size_var = StringVar(value="")
         self.total_disk_var = StringVar(value="")
         self.used_disk_var = StringVar(value="")
         self.free_disk_var = StringVar(value="")
+        
+        # Add a queue for debug logs
+        self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
+        
+        # Aggiungi questa riga: lista permanente per i log completi dalla creazione dell'app
+        self.complete_debug_log_history = []
 
     def _init_remaining_variables(self):
         """Inizializza le variabili non essenziali per l'avvio"""
@@ -806,8 +815,29 @@ class FileSearchApp:
 
     def log_debug(self, message):
         """Funzione per logging, stampa solo quando debug_mode è True"""
+        timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]  # Include milliseconds
+        log_entry = f"[{timestamp}] {message}"
+        
         if self.debug_mode:
             print(f"[DEBUG] {message}")
+            
+            try:
+                # Aggiungi sempre alla cronologia completa
+                if hasattr(self, 'complete_debug_log_history'):
+                    self.complete_debug_log_history.append(log_entry)
+                
+                # Add to the debug logs queue with a timestamp (per la visualizzazione live)
+                if hasattr(self, 'debug_logs_queue'):
+                    # Add a simple lock to prevent rare race conditions
+                    with threading.Lock():
+                        if self.debug_logs_queue.full():
+                            try:
+                                self.debug_logs_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                        self.debug_logs_queue.put_nowait(log_entry)
+            except Exception as e:
+                print(f"Error adding to debug queue: {str(e)}")
 
     def log_file_processing(self, file_path, content_length=0, found=False, error=None):
         """Log dettagliato dell'elaborazione dei file per debug"""
@@ -1333,16 +1363,22 @@ class FileSearchApp:
         self.progress_bar["value"] = 0
         self.status_label["text"] = "Ricerca in corso..."
         
-        # Aggiorna il valore della profondità massima
+        # Aggiorna il valore della profondità massima - FIX
         try:
-            if hasattr(self, 'depth_spinbox'):
-                self.max_depth = int(self.depth_spinbox.get())
+            if hasattr(self, 'depth_spinbox') and self.depth_spinbox.winfo_exists():
+                try:
+                    self.max_depth = int(self.depth_spinbox.get())
+                except (ValueError, tk.TclError) as e:
+                    self.log_debug(f"Errore nell'accesso al depth_spinbox: {str(e)}")
+                    self.max_depth = getattr(self, 'max_depth', 0)  # Usa il valore esistente o default
             else:
-                # Se depth_spinbox non esiste, usa il valore predefinito 
-                # memorizzato nella variabile self.max_depth
-                pass  # Mantiene il valore self.max_depth esistente
-        except ValueError:
-            self.max_depth = 0  # Valore predefinito se non valido
+                # Se il widget non esiste, usa il valore memorizzato come attributo 
+                # o il valore predefinito se non esiste
+                self.max_depth = getattr(self, 'max_depth', 0)
+                self.log_debug(f"Widget depth_spinbox non disponibile, usando valore: {self.max_depth}")
+        except Exception as e:
+            self.log_debug(f"Errore generale nell'aggiornamento della profondità: {str(e)}")
+            self.max_depth = 0  # Valore predefinito sicuro
         
         # Ottieni le parole chiave di ricerca
         search_terms = [term.strip() for term in self.keywords.get().split(',') if term.strip()]
@@ -6057,11 +6093,18 @@ class FileSearchApp:
                 total_formatted = self._format_size(total)
                 free_formatted = self._format_size(free)
                 
-                self.disk_info_label.config(text=f"Disco: {total_formatted} totali, {free_formatted} liberi ({percent_used:.1f}% usato)")
+                # CORREZIONE: Verifica se il widget esiste prima di usarlo
+                if hasattr(self, 'disk_info_label') and self.disk_info_label.winfo_exists():
+                    self.disk_info_label.config(text=f"Disco: {total_formatted} totali, {free_formatted} liberi ({percent_used:.1f}% usato)")
+                else:
+                    self.log_debug("Widget disk_info_label non disponibile")
                 
                 # Importante: NON avviare il thread di calcolo della directory
-                if hasattr(self, 'dir_size_label'):
+                # CORREZIONE: Verifica se il widget esiste prima di usarlo
+                if hasattr(self, 'dir_size_label') and self.dir_size_label.winfo_exists():
                     self.dir_size_label.config(text="Dimensione directory: calcolo disabilitato")
+                else:
+                    self.log_debug("Widget dir_size_label non disponibile")
             except Exception as e:
                 self.log_debug(f"Errore nell'aggiornamento info disco: {str(e)}")
             
@@ -6154,6 +6197,15 @@ class FileSearchApp:
         
     def _calculate_dir_size_thread(self, path):
         """Thread function to calculate directory size"""
+        # Limita il carico di lavoro per evitare blocchi del sistema
+        import threading
+        try:
+            # Imposta una priorità più bassa per questo thread
+            if hasattr(threading.current_thread(), "setName"):
+                threading.current_thread().setName("LowPriority_DirSize")
+        except:
+            pass
+            
         calculation_mode = self.dir_size_calculation.get()
         dir_size = 0
         
@@ -6167,13 +6219,15 @@ class FileSearchApp:
             else:  # incrementale o fallback
                 dir_size = self.get_directory_size(path)
                 
-            # Update the UI from the main thread
-            self.root.after(0, lambda: self.dir_size_var.set(self._format_size(dir_size)))
-            self.root.after(0, lambda: self.status_label.config(text="In attesa..."))
+            # Update the UI from the main thread - CORREZIONE con check
+            if self.root and self.root.winfo_exists():
+                self.root.after(0, lambda: self.dir_size_var.set(self._format_size(dir_size)))
+                self.root.after(0, lambda: self.status_label.config(text="In attesa...") if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
         except Exception as e:
             self.log_debug(f"Errore nel calcolo della dimensione: {str(e)}")
-            self.root.after(0, lambda: self.dir_size_var.set("Errore"))
-            self.root.after(0, lambda: self.status_label.config(text="In attesa..."))
+            if self.root and self.root.winfo_exists():
+                self.root.after(0, lambda: self.dir_size_var.set("Errore"))
+                self.root.after(0, lambda: self.status_label.config(text="In attesa...") if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
 
     def refresh_directory_size(self):
         """Aggiorna manualmente il calcolo della dimensione della directory"""
@@ -6429,20 +6483,7 @@ class FileSearchApp:
         # Cancella sempre le date precedenti
         min_date.entry.delete(0, "end")
         max_date.entry.delete(0, "end")
-        
-        # NUOVO: Aggiungi frame per le estensioni
-        ext_frame = ttk.LabelFrame(dialog, text="Estensioni file")
-        ext_frame.pack(fill=X, padx=10, pady=5)
-        
-        ttk.Label(ext_frame, text="Estensioni (separate da virgola):").pack(side=LEFT, padx=5, pady=5)
-        
-        # Inizializza con estensioni esistenti
-        current_exts = ", ".join([ext.lstrip('.') for ext in self.advanced_filters.get("extensions", [])])
-        extensions = ttk.Entry(ext_frame, width=30)
-        extensions.pack(side=LEFT, fill=X, expand=YES, padx=5, pady=5)
-        extensions.insert(0, current_exts)
-        self.create_tooltip(extensions, "Esempio: txt, pdf, docx (senza il punto iniziale)")
-        
+              
         # Aggiungiamo un frame di debug per vedere i filtri correnti
         debug_frame = ttk.LabelFrame(dialog, text="Debug - Stato filtri correnti")
         debug_frame.pack(fill=X, padx=10, pady=5)
@@ -6499,10 +6540,6 @@ class FileSearchApp:
                 # Salva le date validate
                 self.advanced_filters["date_min"] = min_date_value
                 self.advanced_filters["date_max"] = max_date_value
-                
-                # Analizza le estensioni
-                exts = [e.strip() for e in extensions.get().split(",") if e.strip()]
-                self.advanced_filters["extensions"] = [f".{e.lstrip('.')}" for e in exts]
                 
                 print(f"Filtri salvati: {self.advanced_filters}")  # Debug info
                 dialog.destroy()
@@ -7397,7 +7434,7 @@ class FileSearchApp:
 
     def show_advanced_options(self):
         """Mostra una finestra di dialogo unificata per tutte le opzioni avanzate"""
-        dialog = ttk.Toplevel(self.root)
+        dialog = tk.Toplevel(self.root)
         dialog.title("Impostazioni avanzate")
         dialog.geometry("800x650")
         dialog.transient(self.root)
@@ -7429,20 +7466,28 @@ class FileSearchApp:
         depth_control.pack(fill=X)
         
         ttk.Label(depth_control, text="Profondità:").pack(side=LEFT)
-        depth_spinbox = ttk.Spinbox(depth_control, from_=0, to=20, width=3, textvariable=self.max_depth)
+        
+        # Creiamo una StringVar per facilitare il reset dei valori
+        depth_var = StringVar(value=str(self.max_depth))
+        depth_spinbox = ttk.Spinbox(depth_control, from_=0, to=20, width=3, textvariable=depth_var)
         depth_spinbox.pack(side=LEFT, padx=5)
         self.depth_spinbox = depth_spinbox  # Salva riferimento
-        depth_spinbox.set(self.max_depth)
         ttk.Label(depth_control, text="(0 = illimitata)", foreground="gray").pack(side=LEFT)
         
         # Contenuti da cercare
         content_frame = ttk.LabelFrame(search_options_frame, text="Contenuti da cercare", padding=10)
         content_frame.pack(fill=X, pady=10)
         
-        ttk.Checkbutton(content_frame, text="Cerca nei file", variable=self.search_files).pack(anchor=W, pady=2)
-        ttk.Checkbutton(content_frame, text="Cerca nelle cartelle", variable=self.search_folders).pack(anchor=W, pady=2)
-        ttk.Checkbutton(content_frame, text="Cerca nei contenuti dei file", variable=self.search_content).pack(anchor=W, pady=2)
-        ttk.Checkbutton(content_frame, text="Cerca parole intere", variable=self.whole_word_search).pack(anchor=W, pady=2)
+        # Creiamo copie locali delle variabili per poterle resettare
+        search_files_var = BooleanVar(value=self.search_files.get())
+        search_folders_var = BooleanVar(value=self.search_folders.get())
+        search_content_var = BooleanVar(value=self.search_content.get())
+        whole_word_var = BooleanVar(value=self.whole_word_search.get())
+        
+        ttk.Checkbutton(content_frame, text="Cerca nei file", variable=search_files_var).pack(anchor=W, pady=2)
+        ttk.Checkbutton(content_frame, text="Cerca nelle cartelle", variable=search_folders_var).pack(anchor=W, pady=2)
+        ttk.Checkbutton(content_frame, text="Cerca nei contenuti dei file", variable=search_content_var).pack(anchor=W, pady=2)
+        ttk.Checkbutton(content_frame, text="Cerca parole intere", variable=whole_word_var).pack(anchor=W, pady=2)
         
         # ================= Scheda 2: Filtri avanzati =================
         filters_frame = ttk.Frame(notebook, padding=15)
@@ -7457,15 +7502,19 @@ class FileSearchApp:
         size_grid = ttk.Frame(size_frame)
         size_grid.pack(fill=X)
         
+        # Verifica che advanced_filters esista e inizializzalo se necessario
+        if not hasattr(self, 'advanced_filters'):
+            self.advanced_filters = {"size_min": 0, "size_max": 0, "date_min": "", "date_max": "", "extensions": []}
+        
         ttk.Label(size_grid, text="Dimensione minima (KB):").grid(row=0, column=0, padx=5, pady=5, sticky=W)
-        min_size = ttk.Entry(size_grid, width=10)
+        min_size_var = StringVar(value=str(self.advanced_filters.get("size_min", 0) // 1024))
+        min_size = ttk.Entry(size_grid, width=10, textvariable=min_size_var)
         min_size.grid(row=0, column=1, padx=5, pady=5)
-        min_size.insert(0, str(self.advanced_filters["size_min"] // 1024))
         
         ttk.Label(size_grid, text="Dimensione massima (KB):").grid(row=1, column=0, padx=5, pady=5, sticky=W)
-        max_size = ttk.Entry(size_grid, width=10)
+        max_size_var = StringVar(value=str(self.advanced_filters.get("size_max", 0) // 1024 if self.advanced_filters.get("size_max", 0) else 0))
+        max_size = ttk.Entry(size_grid, width=10, textvariable=max_size_var)
         max_size.grid(row=1, column=1, padx=5, pady=5)
-        max_size.insert(0, str(self.advanced_filters["size_max"] // 1024 if self.advanced_filters["size_max"] else 0))
         
         # Filtri data
         date_frame = ttk.LabelFrame(filters_frame, text="Data di modifica", padding=10)
@@ -7477,26 +7526,20 @@ class FileSearchApp:
         date_grid.pack(fill=X)
         
         ttk.Label(date_grid, text="Data inizio (DD-MM-YYYY):").grid(row=0, column=0, padx=5, pady=5, sticky=W)
+        min_date_var = StringVar(value=self.advanced_filters.get("date_min", ""))
         min_date = ttk.DateEntry(date_grid, dateformat="%d-%m-%Y")
         min_date.grid(row=0, column=1, padx=5, pady=5)
         min_date.entry.delete(0, 'end')
+        if min_date_var.get():
+            min_date.entry.insert(0, min_date_var.get())
         
         ttk.Label(date_grid, text="Data fine (DD-MM-YYYY):").grid(row=1, column=0, padx=5, pady=5, sticky=W)
+        max_date_var = StringVar(value=self.advanced_filters.get("date_max", ""))
         max_date = ttk.DateEntry(date_grid, dateformat="%d-%m-%Y")
         max_date.grid(row=1, column=1, padx=5, pady=5)
         max_date.entry.delete(0, 'end')
-        
-        # Aggiunto: Filtri per estensioni
-        ext_frame = ttk.LabelFrame(filters_frame, text="Estensioni file", padding=10)
-        ext_frame.pack(fill=X, pady=10)
-
-        ttk.Label(ext_frame, text="Filtra i file per estensione (separate da virgola, es: .txt, .pdf):").pack(anchor=W, pady=(0, 10))
-
-        # Inizializza con estensioni esistenti
-        current_exts = ", ".join([ext.lstrip('.') for ext in self.advanced_filters.get("extensions", [])])
-        extensions = ttk.Entry(ext_frame, width=50)
-        extensions.pack(fill=X, padx=5)
-        extensions.insert(0, current_exts)
+        if max_date_var.get():
+            max_date.entry.insert(0, max_date_var.get())
         
         # ================= Scheda 3: Gestione esclusioni =================
         exclusions_frame = ttk.Frame(notebook, padding=15)
@@ -7506,7 +7549,7 @@ class FileSearchApp:
         
         # Lista dei percorsi esclusi
         list_frame = ttk.Frame(exclusions_frame)
-        list_frame.pack(fill=BOTH, expand=NO, pady=5)
+        list_frame.pack(fill=BOTH, expand=YES, pady=5)
         
         scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side=RIGHT, fill=Y)
@@ -7519,10 +7562,13 @@ class FileSearchApp:
         
         scrollbar.config(command=excluded_list.yview)
         
+        # Inizializza excluded_paths se non esiste
+        if not hasattr(self, 'excluded_paths'):
+            self.excluded_paths = []
+        
         # Aggiungi i percorsi esclusi alla lista
-        if hasattr(self, 'excluded_paths'):
-            for path in self.excluded_paths:
-                excluded_list.insert("", "end", values=(path,))
+        for path in self.excluded_paths:
+            excluded_list.insert("", "end", values=(path,))
         
         # Frame per aggiungere nuovi percorsi
         add_frame = ttk.Frame(exclusions_frame)
@@ -7571,23 +7617,43 @@ class FileSearchApp:
         size_grid = ttk.Frame(size_frame)
         size_grid.pack(fill=X)
         
+        # Inizializza variabili se non esistono
+        if not hasattr(self, 'max_files_per_block'):
+            self.max_files_per_block = IntVar(value=1000)
+        if not hasattr(self, 'max_parallel_blocks'):
+            self.max_parallel_blocks = IntVar(value=4)
+            
+        # Crea copie locali per il reset
+        files_block_var = IntVar(value=self.max_files_per_block.get())
+        parallel_var = IntVar(value=self.max_parallel_blocks.get())
+        
         ttk.Label(size_grid, text="Max file per blocco:").grid(row=0, column=0, sticky=W, padx=5, pady=5)
-        files_block = ttk.Spinbox(size_grid, from_=100, to=10000, increment=100, width=7, textvariable=self.max_files_per_block)
+        files_block = ttk.Spinbox(size_grid, from_=100, to=10000, increment=100, width=7, textvariable=files_block_var)
         files_block.grid(row=0, column=1, padx=5, pady=5)
         
         ttk.Label(size_grid, text="Blocchi paralleli:").grid(row=0, column=2, sticky=W, padx=(20, 5), pady=5)
-        parallel = ttk.Spinbox(size_grid, from_=1, to=16, increment=1, width=5, textvariable=self.max_parallel_blocks)
+        parallel = ttk.Spinbox(size_grid, from_=1, to=16, increment=1, width=5, textvariable=parallel_var)
         parallel.grid(row=0, column=3, padx=5, pady=5)
         
         # Opzioni aggiuntive
         options_frame = ttk.LabelFrame(blocks_frame, text="Ottimizzazioni", padding=10)
         options_frame.pack(fill=X, pady=10)
         
+        # Inizializza se non esistono
+        if not hasattr(self, 'block_size_auto_adjust'):
+            self.block_size_auto_adjust = BooleanVar(value=True)
+        if not hasattr(self, 'prioritize_user_folders'):
+            self.prioritize_user_folders = BooleanVar(value=True)
+            
+        # Crea copie locali per il reset
+        auto_adjust_var = BooleanVar(value=self.block_size_auto_adjust.get())
+        prioritize_var = BooleanVar(value=self.prioritize_user_folders.get())
+        
         ttk.Checkbutton(options_frame, text="Adatta automaticamente la dimensione dei blocchi", 
-                    variable=self.block_size_auto_adjust).pack(anchor=W, pady=2)
+                    variable=auto_adjust_var).pack(anchor=W, pady=2)
         
         ttk.Checkbutton(options_frame, text="Dare priorità alle cartelle utente", 
-                    variable=self.prioritize_user_folders).pack(anchor=W, pady=2)
+                    variable=prioritize_var).pack(anchor=W, pady=2)
         
         # ================= Scheda 5: Performance =================
         performance_frame = ttk.Frame(notebook, padding=15)
@@ -7601,20 +7667,36 @@ class FileSearchApp:
         timeout_grid = ttk.Frame(timeout_frame)
         timeout_grid.pack(fill=X, pady=5)
 
+        # Inizializza variabili se non esistono
+        if not hasattr(self, 'timeout_enabled'):
+            self.timeout_enabled = BooleanVar(value=False)
+        if not hasattr(self, 'timeout_seconds'):
+            self.timeout_seconds = IntVar(value=300)
+        if not hasattr(self, 'max_files_to_check'):
+            self.max_files_to_check = IntVar(value=100000)
+        if not hasattr(self, 'max_results'):
+            self.max_results = IntVar(value=10000)
+            
+        # Crea copie locali per il reset
+        timeout_enabled_var = BooleanVar(value=self.timeout_enabled.get())
+        timeout_seconds_var = IntVar(value=self.timeout_seconds.get())
+        max_files_var = IntVar(value=self.max_files_to_check.get())
+        max_results_var = IntVar(value=self.max_results.get())
+
         # Riga 0: Checkbox e secondi nella stessa riga
-        timeout_check = ttk.Checkbutton(timeout_grid, text="Attiva timeout ricerca", variable=self.timeout_enabled)
+        timeout_check = ttk.Checkbutton(timeout_grid, text="Attiva timeout ricerca", variable=timeout_enabled_var)
         timeout_check.grid(row=0, column=0, sticky=W, padx=5, pady=2)
 
         ttk.Label(timeout_grid, text="Secondi:").grid(row=0, column=1, sticky=W, padx=(55, 5), pady=2)
-        timeout_spin = ttk.Spinbox(timeout_grid, from_=10, to=3600, width=5, textvariable=self.timeout_seconds)
+        timeout_spin = ttk.Spinbox(timeout_grid, from_=10, to=3600, width=5, textvariable=timeout_seconds_var)
         timeout_spin.grid(row=0, column=2, padx=5, pady=2, sticky=W)
         
         ttk.Label(timeout_grid, text="Max file da controllare:").grid(row=1, column=0, sticky=W, padx=5, pady=5)
-        max_files = ttk.Spinbox(timeout_grid, from_=1000, to=10000000, width=8, textvariable=self.max_files_to_check)
+        max_files = ttk.Spinbox(timeout_grid, from_=1000, to=10000000, width=8, textvariable=max_files_var)
         max_files.grid(row=1, column=1, padx=5, pady=5, sticky=W)
         
         ttk.Label(timeout_grid, text="Max risultati:").grid(row=1, column=2, sticky=W, padx=5, pady=5)
-        max_results = ttk.Spinbox(timeout_grid, from_=500, to=100000, width=8, textvariable=self.max_results)
+        max_results = ttk.Spinbox(timeout_grid, from_=500, to=100000, width=8, textvariable=max_results_var)
         max_results.grid(row=1, column=3, padx=5, pady=5, sticky=W)
         
         # Processamento
@@ -7624,20 +7706,37 @@ class FileSearchApp:
         process_grid = ttk.Frame(process_frame)
         process_grid.pack(fill=X)
         
+        # Inizializza variabili se non esistono
+        if not hasattr(self, 'worker_threads'):
+            self.worker_threads = IntVar(value=4)
+        if not hasattr(self, 'max_file_size_mb'):
+            self.max_file_size_mb = IntVar(value=50)
+            
+        # Crea copie locali per il reset
+        threads_var = IntVar(value=self.worker_threads.get())
+        max_size_mb_var = IntVar(value=self.max_file_size_mb.get())
+        
         ttk.Label(process_grid, text="Thread paralleli:").grid(row=0, column=0, sticky=W, padx=5, pady=5)
-        threads = ttk.Spinbox(process_grid, from_=1, to=16, width=3, textvariable=self.worker_threads)
+        threads = ttk.Spinbox(process_grid, from_=1, to=16, width=3, textvariable=threads_var)
         threads.grid(row=0, column=1, padx=5, pady=5, sticky=W)
         
         ttk.Label(process_grid, text="Dimensione max file (MB):").grid(row=0, column=2, sticky=W, padx=5, pady=5)
-        max_size = ttk.Spinbox(process_grid, from_=1, to=1000, width=5, textvariable=self.max_file_size_mb)
+        max_size = ttk.Spinbox(process_grid, from_=1, to=1000, width=5, textvariable=max_size_mb_var)
         max_size.grid(row=0, column=3, padx=5, pady=5, sticky=W)
         
         # Calcolo dimensioni
         calc_frame = ttk.LabelFrame(performance_frame, text="Calcolo dimensioni", padding=10)
         calc_frame.pack(fill=X, pady=10)
         
+        # Inizializza se non esiste
+        if not hasattr(self, 'dir_size_calculation'):
+            self.dir_size_calculation = StringVar(value="disabilitato")
+            
+        # Crea copia locale per il reset
+        dir_size_calc_var = StringVar(value=self.dir_size_calculation.get())
+        
         ttk.Label(calc_frame, text="Modalità di calcolo:").pack(side=LEFT, padx=5)
-        calc_combo = ttk.Combobox(calc_frame, textvariable=self.dir_size_calculation, 
+        calc_combo = ttk.Combobox(calc_frame, textvariable=dir_size_calc_var, 
                             values=["incrementale", "preciso", "stimato", "sistema", "disabilitato"], 
                             width=12, state="readonly")
         calc_combo.pack(side=LEFT, padx=5)
@@ -7646,43 +7745,113 @@ class FileSearchApp:
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=X, pady=(15, 0))
         
-        def save_options():
-            # Aggiorna max_depth dal valore dello spinbox
-            try:
-                self.max_depth = int(depth_spinbox.get())
-            except ValueError:
-                self.max_depth = 0
+        # CORREZIONE: Implementazione corretta della funzione restore_defaults
+        def restore_defaults():
+            # Scheda 1: Opzioni di ricerca
+            depth_var.set("0")  # Profondità illimitata
+            search_files_var.set(True)
+            search_folders_var.set(True)
+            search_content_var.set(True)
+            whole_word_var.set(False)
             
-            # Aggiorna le impostazioni degli advanced filters
+            # Scheda 2: Filtri avanzati
+            min_size_var.set("0")
+            max_size_var.set("0")
+            min_date.entry.delete(0, END)
+            max_date.entry.delete(0, END)
+            
+            # Scheda 3: Esclusioni
+            for item in excluded_list.get_children():
+                excluded_list.delete(item)
+                
+            # Valori predefiniti per le esclusioni di sistema
+            default_exclusions = [
+                "C:\\Windows",
+                "C:\\Program Files",
+                "C:\\Program Files (x86)",
+                "C:\\$Recycle.Bin"
+            ]
+            for path in default_exclusions:
+                excluded_list.insert("", "end", values=(path,))
+            
+            # Scheda 4: Opzioni a blocchi
+            files_block_var.set(1000)  # Valore predefinito
+            parallel_var.set(4)        # Valore predefinito
+            auto_adjust_var.set(True)
+            prioritize_var.set(True)
+            
+            # Scheda 5: Performance
+            timeout_enabled_var.set(False)
+            timeout_seconds_var.set(300)
+            max_files_var.set(100000)
+            max_results_var.set(10000)
+            threads_var.set(min(8, os.cpu_count() or 4))  # Valore predefinito per CPU
+            max_size_mb_var.set(50)
+            dir_size_calc_var.set("disabilitato")
+            
+            messagebox.showinfo("Impostazioni", "Valori predefiniti ripristinati.")
+        
+        # CORREZIONE: Implementazione corretta di save_options che salva effettivamente le impostazioni
+        def save_options():
+            # Salva le opzioni di ricerca
             try:
-                min_kb = int(min_size.get() or 0)
-                max_kb = int(max_size.get() or 0)
+                self.max_depth = int(depth_var.get())
+                self.search_files.set(search_files_var.get())
+                self.search_folders.set(search_folders_var.get())
+                self.search_content.set(search_content_var.get())
+                self.whole_word_search.set(whole_word_var.get())
+                
+                # Salva i filtri avanzati
+                min_kb = int(min_size_var.get() or 0)
+                max_kb = int(max_size_var.get() or 0)
                 self.advanced_filters["size_min"] = min_kb * 1024
-                self.advanced_filters["size_max"] = max_kb * 1024
+                self.advanced_filters["size_max"] = max_kb * 1024 if max_kb > 0 else 0
                 
-                min_date_val = min_date.entry.get().strip()
-                max_date_val = max_date.entry.get().strip()
+                self.advanced_filters["date_min"] = min_date.entry.get().strip()
+                self.advanced_filters["date_max"] = max_date.entry.get().strip()
                 
-                self.advanced_filters["date_min"] = min_date_val
-                self.advanced_filters["date_max"] = max_date_val
+                # Salva i percorsi esclusi
+                self.excluded_paths = []
+                for item in excluded_list.get_children():
+                    values = excluded_list.item(item)["values"]
+                    if values:
+                        self.excluded_paths.append(values[0])
                 
-                exts = [e.strip() for e in extensions.get().split(",") if e.strip()]
-                self.advanced_filters["extensions"] = [f".{e.lstrip('.')}" for e in exts]
+                # Salva le opzioni a blocchi
+                self.max_files_per_block.set(files_block_var.get())
+                self.max_parallel_blocks.set(parallel_var.get())
+                self.block_size_auto_adjust.set(auto_adjust_var.get())
+                self.prioritize_user_folders.set(prioritize_var.get())
+                
+                # Salva le opzioni di performance
+                self.timeout_enabled.set(timeout_enabled_var.get())
+                self.timeout_seconds.set(timeout_seconds_var.get())
+                self.max_files_to_check.set(max_files_var.get())
+                self.max_results.set(max_results_var.get())
+                self.worker_threads.set(threads_var.get())
+                self.max_file_size_mb.set(max_size_mb_var.get())
+                self.dir_size_calculation.set(dir_size_calc_var.get())
+                
+                # CORREZIONE: Salva effettivamente le impostazioni su file
+                if hasattr(self, 'save_settings_to_file'):
+                    self.save_settings_to_file()
+                    self.log_debug("Impostazioni avanzate salvate su file")
+                else:
+                    self.log_debug("Metodo save_settings_to_file non disponibile, salvataggio permanente non effettuato")
+                
+                messagebox.showinfo("Impostazioni", "Opzioni salvate con successo!")
+                dialog.destroy()
+                
             except ValueError as e:
                 messagebox.showerror("Errore", f"Valore non valido: {str(e)}")
                 return
-                
-            # Aggiorna i percorsi esclusi
-            self.excluded_paths = []
-            for item in excluded_list.get_children():
-                values = excluded_list.item(item)["values"]
-                if values:
-                    self.excluded_paths.append(values[0])
-            
-            dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("Errore", f"Errore durante il salvataggio: {str(e)}")
+                self.log_debug(f"Errore nel salvataggio delle opzioni avanzate: {str(e)}")
+                return
         
-        ttk.Button(btn_frame, text="Ripristina valori predefiniti", 
-            command=lambda: messagebox.showinfo("Info", "Funzione non implementata")).pack(side=LEFT)
+        # CORREZIONE: Pulsanti correttamente configurati
+        ttk.Button(btn_frame, text="Ripristina valori predefiniti", command=restore_defaults).pack(side=LEFT)
         ttk.Button(btn_frame, text="Annulla", command=dialog.destroy).pack(side=RIGHT, padx=5)
         ttk.Button(btn_frame, text="Salva", command=save_options).pack(side=RIGHT, padx=5)
         
@@ -7942,31 +8111,51 @@ class FileSearchApp:
     # Modify the existing log_debug method to also store logs in the queue
     def log_debug(self, message):
         """Funzione per logging, stampa solo quando debug_mode è True"""
+        # Inizializza gli attributi necessari se mancanti
+        if not hasattr(self, 'complete_debug_log_history'):
+            self.complete_debug_log_history = []
+        
+        if not hasattr(self, 'debug_logs_queue'):
+            self.debug_logs_queue = queue.Queue(maxsize=5000)
+        
+        # Mantieni la logica originale
         timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]  # Include milliseconds
         log_entry = f"[{timestamp}] {message}"
         
-        if self.debug_mode:
+        if getattr(self, 'debug_mode', True):  # Default a True se debug_mode non è definito
             print(f"[DEBUG] {message}")
             
-            # Add to the debug logs queue with a timestamp
             try:
-                if hasattr(self, 'debug_logs_queue'):
-                    # Add a simple lock to prevent rare race conditions
-                    with threading.Lock():
-                        if self.debug_logs_queue.full():
-                            try:
-                                self.debug_logs_queue.get_nowait()
-                            except queue.Empty:
-                                pass
-                        self.debug_logs_queue.put_nowait(log_entry)
+                # Aggiungi sempre alla cronologia completa
+                self.complete_debug_log_history.append(log_entry)
+                
+                # Add to the debug logs queue with a timestamp (per la visualizzazione live)
+                # Add a simple lock to prevent rare race conditions
+                with threading.Lock():
+                    if self.debug_logs_queue.full():
+                        try:
+                            self.debug_logs_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                    self.debug_logs_queue.put_nowait(log_entry)
             except Exception as e:
                 print(f"Error adding to debug queue: {str(e)}")
 
     # Show debug log window with export functionality
     def show_debug_log(self):
         """Displays a window with real-time debug logs and export functionality"""
+        # Verifica e inizializza l'attributo se mancante
+        if not hasattr(self, 'complete_debug_log_history'):
+            self.complete_debug_log_history = []
+            self.log_debug("Inizializzato complete_debug_log_history (era mancante)")
+        
+        # Verifica e inizializza la coda di debug se mancante
+        if not hasattr(self, 'debug_logs_queue'):
+            self.debug_logs_queue = queue.Queue(maxsize=5000)
+            self.log_debug("Inizializzato debug_logs_queue (era mancante)")
+            
         # Create a new toplevel window
-        log_window = ttk.Toplevel(self.root)
+        log_window = tk.Toplevel(self.root)
         log_window.title("Debug Log")
         log_window.geometry("900x600")
         log_window.transient(self.root)
@@ -7979,7 +8168,10 @@ class FileSearchApp:
         header_frame = ttk.Frame(main_frame)
         header_frame.pack(fill=X, pady=(0, 10))
         
-        ttk.Label(header_frame, text="Registro di debug - Operazioni di ricerca in tempo reale", 
+        # Mostra il conteggio dei log totali
+        total_entries = len(self.complete_debug_log_history)
+        ttk.Label(header_frame, 
+                text=f"Registro di debug - {total_entries} messaggi totali", 
                 font=("", 11, "bold")).pack(side=LEFT)
         
         # Auto-scroll and control buttons
@@ -7994,7 +8186,7 @@ class FileSearchApp:
             log_text.delete(1.0, END)
             log_text.config(state=DISABLED)
         
-        # Function to export log contents to a text file
+        # Function to export log contents to a text file - MODIFICATA per usare la cronologia completa
         def export_log_to_txt():
             # Ask user for save location
             file_path = filedialog.asksaveasfilename(
@@ -8007,13 +8199,14 @@ class FileSearchApp:
                 return
                 
             try:
-                # Get current content from text widget
-                log_content = log_text.get(1.0, END)
+                # Usa la lista di cronologia completa (o una lista vuota se non esiste)
+                log_content = "\n".join(self.complete_debug_log_history)
                 
                 # Add header with timestamp and user info
                 header = f"Debug Log - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
-                header += f"Utente: {self.current_user}\n"
+                header += f"Utente: {getattr(self, 'current_user', getpass.getuser())}\n"
                 header += f"Applicazione: File Search Tool V9.2.4 Beta\n"
+                header += f"Numero totale messaggi: {len(self.complete_debug_log_history)}\n"
                 header += "-" * 80 + "\n\n"
                 
                 # Write to file
@@ -8021,7 +8214,8 @@ class FileSearchApp:
                     f.write(header + log_content)
                     
                 messagebox.showinfo("Esportazione completata", 
-                                f"Log salvato con successo in:\n{file_path}")
+                                f"Log salvato con successo in:\n{file_path}\n\n"
+                                f"Il file contiene {len(self.complete_debug_log_history)} messaggi di log dall'avvio dell'applicazione.")
             except Exception as e:
                 messagebox.showerror("Errore esportazione", 
                                 f"Si è verificato un errore durante l'esportazione:\n{str(e)}")
@@ -8056,26 +8250,24 @@ class FileSearchApp:
         # Make text read-only
         log_text.config(state=DISABLED)
         
-        # Dump existing logs into the window
-        if hasattr(self, 'debug_logs_queue'):
-            logs = []
-            # Get all current logs from queue without removing them
-            try:
-                while True:
-                    logs.append(self.debug_logs_queue.get_nowait())
-                    self.debug_logs_queue.task_done()  # Mark as done to keep queue healthy
-            except queue.Empty:
-                pass
-            
-            # Add logs back to queue and display in window
-            log_text.config(state=NORMAL)
-            for log_entry in logs:
-                self.debug_logs_queue.put(log_entry)
-                log_text.insert(END, log_entry + "\n")
-            log_text.config(state=DISABLED)
-            
-            # Scroll to the end
-            log_text.see(END)
+        # MODIFICA: Carichiamo tutti i log dalla cronologia completa
+        log_text.config(state=NORMAL)
+        
+        # Limita a mostrare solo gli ultimi 5000 log per evitare di bloccare l'interfaccia
+        max_log_display = 5000
+        log_entries = self.complete_debug_log_history[-max_log_display:] if len(self.complete_debug_log_history) > max_log_display else self.complete_debug_log_history
+        
+        if len(self.complete_debug_log_history) > max_log_display:
+            log_text.insert(END, f"[Mostrando solo gli ultimi {max_log_display} di {len(self.complete_debug_log_history)} messaggi...]\n\n")
+        
+        # Inserisci i log effettivi
+        for log_entry in log_entries:
+            log_text.insert(END, log_entry + "\n")
+        
+        log_text.config(state=DISABLED)
+        
+        # Scroll to the end
+        log_text.see(END)
         
         # Function to update log display
         def update_log_display():
@@ -8200,4 +8392,3 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
-
