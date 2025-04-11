@@ -410,6 +410,8 @@ class FileSearchApp:
 
     def process_file(self, file_path, keywords, search_content=True):
         """Processa un singolo file per verificare corrispondenze"""
+        if self.stop_search:
+            return None
         try:
             # Verifica nome file
             file_name = os.path.basename(file_path)
@@ -2353,6 +2355,8 @@ class FileSearchApp:
                 self.log_debug(f"Errore nel controllo dimensione del file {file_path}: {str(e)}")
                 return ""
             
+            if self.stop_search:
+                return ""
             # Word DOCX
             if ext == '.docx':
                 try:
@@ -2384,6 +2388,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file DOCX {file_path}: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # Word DOC (vecchio formato)
             elif ext == '.doc':
                 try:
@@ -2439,6 +2445,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore generale nell'elaborazione del file DOC {file_path}: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # Excel XLSX
             elif ext == '.xlsx':
                 try:
@@ -2487,6 +2495,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file XLSX {file_path}: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # Excel XLS (vecchio formato)
             elif ext == '.xls':
                 try:
@@ -2593,6 +2603,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore generale nell'elaborazione del file XLS {file_path}: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # PowerPoint PPTX
             elif ext == '.pptx':
                 try:
@@ -2624,6 +2636,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file PPTX {file_path}: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # PowerPoint PPT (vecchio formato)
             elif ext == '.ppt':
                 # Su Windows, prova con pywin32
@@ -2689,6 +2703,8 @@ class FileSearchApp:
                     self.log_debug("Estrazione di testo dai file PPT non supportata su questa piattaforma")
                     return ""
             
+            if self.stop_search:
+                return ""
             # Rich Text Format (RTF) - NUOVO
             elif ext == '.rtf':
                 try:
@@ -2706,7 +2722,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file RTF {file_path}: {str(e)}")
                     return ""
-                    
+
+            if self.stop_search:
+                return ""        
             # OpenDocument Text (ODT) - NUOVO
             elif ext == '.odt':
                 try:
@@ -2729,7 +2747,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file ODT {file_path}: {str(e)}")
                     return ""
-                    
+
+            if self.stop_search:
+                return ""       
             # OpenDocument Spreadsheet (ODS) - NUOVO
             elif ext == '.ods':
                 try:
@@ -2767,6 +2787,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file ODS {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # OpenDocument Presentation (ODP) - NUOVO
             elif ext == '.odp':
                 try:
@@ -2799,7 +2821,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file ODP {file_path}: {str(e)}")
                     return ""
-                    
+            
+            if self.stop_search:
+                return ""        
             # EPUB - NUOVO
             elif ext == '.epub':
                 try:
@@ -2840,6 +2864,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file EPUB {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # MOBI - NUOVO
             elif ext == '.mobi':
                 try:
@@ -2873,7 +2899,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file MOBI {file_path}: {str(e)}")
                     return ""
-                    
+
+            if self.stop_search:
+                return ""       
             # LaTeX - NUOVO
             elif ext == '.tex':
                 try:
@@ -2901,6 +2929,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file LaTeX {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # reStructuredText - NUOVO
             elif ext == '.rst':
                 try:
@@ -2923,7 +2953,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file RST {file_path}: {str(e)}")
                     return ""
-                    
+
+            if self.stop_search:
+                return ""        
             # SQLite database (.db, .sqlite, .sqlite3) - NUOVO
             elif ext in ['.db', '.sqlite', '.sqlite3']:
                 try:
@@ -2984,6 +3016,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file SQLite {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # Microsoft Access (.mdb, .accdb) - NUOVO
             elif ext in ['.mdb', '.accdb']:
                 try:
@@ -3048,6 +3082,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file Access {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # OpenDocument Database (.odb) - NUOVO
             elif ext == '.odb':
                 try:
@@ -3100,7 +3136,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file ODB {file_path}: {str(e)}")
                     return ""
-                    
+
+            if self.stop_search:
+                return ""       
             # Tab-Separated Values (.tsv) - NUOVO
             elif ext == '.tsv':
                 try:
@@ -3124,7 +3162,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file TSV {file_path}: {str(e)}")
                     return ""
-
+            
+            if self.stop_search:
+                return ""
             # dBase format (.dbf) - NUOVO
             elif ext == '.dbf':
                 try:
@@ -3159,6 +3199,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file DBF {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # Data Interchange Format (.dif) - NUOVO
             elif ext == '.dif':
                 try:
@@ -3210,6 +3252,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file DIF {file_path}: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # Testo semplice
             elif ext in ['.txt', '.csv', '.log', '.ini', '.xml', '.json', '.md', '.html', '.htm',
                         '.py', '.js', '.java', '.cpp', '.c', '.cs', '.php', '.rb', '.go', '.swift', 
@@ -3241,6 +3285,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nella lettura del file di testo {file_path}: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # PDF (aggiunto per completezza)
             elif ext == '.pdf':
                 try:
@@ -3275,6 +3321,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nella lettura del file PDF: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # ===== EMAIL E CALENDARIO =====
             # File Email (.eml)
             elif ext == '.eml':
@@ -3483,6 +3531,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file EML {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # File vCard (.vcf)
             elif ext == '.vcf':
                 try:
@@ -3502,6 +3552,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file vCard {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # File iCalendar (.ics)
             elif ext == '.ics':
                 try:
@@ -3534,6 +3586,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file iCalendar {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # ===== PRESENTAZIONI =====
             # File PowerPoint Show (.pps)
             elif ext == '.pps':
@@ -3602,6 +3656,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore generale nell'elaborazione del file PPS {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # File Keynote (.key)
             elif ext == '.key':
                 try:
@@ -3636,6 +3692,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file Keynote {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # ===== FILE DI CONFIGURAZIONE =====
             # File YAML (.yml, .yaml)
             elif ext in ['.yml', '.yaml']:
@@ -3649,6 +3707,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file YAML {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # File TOML (.toml)
             elif ext == '.toml':
                 try:
@@ -3660,7 +3720,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file TOML {file_path}: {str(e)}")
                     return ""
-
+            
+            if self.stop_search:
+                return ""
             # File Registry Windows (.reg)
             elif ext == '.reg':
                 try:
@@ -3673,6 +3735,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file Registry {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # File plist (.plist)
             elif ext == '.plist':
                 try:
@@ -3702,7 +3766,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file plist {file_path}: {str(e)}")
                     return ""
-
+            
+            if self.stop_search:
+                return ""
             # File Properties (.properties)
             elif ext == '.properties':
                 try:
@@ -3715,6 +3781,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file Properties {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # File htaccess (.htaccess)
             elif file_path.endswith('.htaccess'):
                 try:
@@ -3727,6 +3795,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file htaccess {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # ===== LINGUAGGI DI PROGRAMMAZIONE =====
             # I vari linguaggi di programmazione possono usare lo stesso parser di testo
             elif ext in ['.h', '.hpp', '.vb', '.lua', '.rs', '.groovy']:
@@ -3740,6 +3810,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file {ext} {file_path}: {str(e)}")
                     return ""
             
+            if self.stop_search:
+                return ""
             # File MSG (Outlook)
             elif ext == '.msg':
                 try:
@@ -3840,6 +3912,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file MSG {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # File PST/OST (Outlook database) - versione semplificata senza dipendenze esterne
             elif ext in ['.pst', '.ost']:
                 try:
@@ -3896,6 +3970,8 @@ class FileSearchApp:
                     self.log_debug(f"Errore nell'analisi del file {ext} {file_path}: {str(e)}")
                     return ""
 
+            if self.stop_search:
+                return ""
             # File MBOX - usa il modulo mailbox standard
             elif ext == '.mbox':
                 try:
@@ -3968,7 +4044,9 @@ class FileSearchApp:
                 except Exception as e:
                     self.log_debug(f"Errore nell'analisi del file MBOX {file_path}: {str(e)}")
                     return ""
-
+            
+            if self.stop_search:
+                return ""
             # File EMLX (Apple Mail)
             elif ext == '.emlx':
                 try:
@@ -4444,45 +4522,97 @@ class FileSearchApp:
                 self.root.after(500, self.update_progress)
             
     def stop_search_process(self):
-        """Ferma il processo di ricerca in corso"""
+        """Ferma il processo di ricerca in corso in modo aggressivo"""
+        # 1. Imposta i flag di interruzione
         self.stop_search = True
-        self.status_label["text"] = "Interrompendo la ricerca..."
-        self.analyzed_files_label["text"] = "Ricerca interrotta dall'utente"
+        self.is_searching = False
+        self.log_debug("INTERRUZIONE: Stop ricerca richiesto dall'utente")
         
-        # IMPORTANT FIX: Capture the current time as the end time when interrupted
-        self.search_end_time = datetime.now()  # Aggiungi questa riga
+        # 2. Aggiorna l'interfaccia
+        self.status_label["text"] = "Interruzione ricerca in corso... attendere"
+        self.analyzed_files_label["text"] = "Ricerca interrotta dall'utente"
+        self.progress_bar["value"] = 100
+        
+        # 3. Cattura il tempo di fine
+        self.search_end_time = datetime.now()
         current_time = self.search_end_time.strftime('%H:%M')
         self.end_time_label.config(text=current_time)
+        self.update_total_time()  # Aggiorna il tempo totale
         
-        # Calculate total time based on the captured end time, not the current time
-        if hasattr(self, 'search_start_time') and self.search_start_time:
-            time_diff = self.search_end_time - self.search_start_time
-            total_seconds = int(time_diff.total_seconds())
-            minutes = total_seconds // 60
-            seconds = total_seconds % 60
-            
-            if minutes > 0:
-                total_time_str = f"{minutes}min {seconds}sec"
-            else:
-                total_time_str = f"{seconds}sec"
-            
-            self.total_time_label.config(text=total_time_str)
-        
-        # Chiusura più decisa dell'executor
+        # 4. CRITICO: Interrompe i thread in esecuzione in modo aggressivo
         if hasattr(self, 'search_executor') and self.search_executor:
             try:
-                self.search_executor.shutdown(wait=False, cancel_futures=True)
-                self.search_executor = None
+                # Prima tenta una chiusura pulita dell'executor
+                self.log_debug("INTERRUZIONE: Tentativo di chiusura dell'executor...")
+                
+                # Usa un approccio più aggressivo per le versioni recenti di Python
+                # che supportano cancel_futures (Python 3.9+)
+                try:
+                    import sys
+                    if sys.version_info >= (3, 9):
+                        self.search_executor.shutdown(wait=False, cancel_futures=True)
+                        self.log_debug("INTERRUZIONE: Futures cancellate (Python 3.9+)")
+                    else:
+                        # Per versioni precedenti, chiudiamo senza attendere
+                        self.search_executor.shutdown(wait=False)
+                        self.log_debug("INTERRUZIONE: Executor chiuso senza attesa")
+                        
+                except Exception as e:
+                    self.log_debug(f"INTERRUZIONE: Errore nella chiusura dell'executor: {str(e)}")
+                
+                # 5. NUOVO: Forzatura ancora più aggressiva
+                try:
+                    # Rimuovi tutti i riferimenti all'executor
+                    executor_ref = self.search_executor
+                    self.search_executor = None
+                    
+                    # Tenta di svuotare la coda di lavoro dell'executor
+                    if hasattr(executor_ref, '_work_queue'):
+                        executor_ref._work_queue.queue.clear()
+                        self.log_debug("INTERRUZIONE: Coda di lavoro dell'executor svuotata")
+                        
+                    # Forza la chiusura del thread pool
+                    if hasattr(executor_ref, '_threads'):
+                        for thread in executor_ref._threads:
+                            try:
+                                thread._tstate_lock = None
+                                thread._stop()
+                                self.log_debug(f"INTERRUZIONE: Thread {thread.name} forzatamente interrotto")
+                            except Exception:
+                                pass
+                    
+                    # Nullifica definitivamente l'executor per garantire la garbage collection
+                    executor_ref = None
+                    
+                except Exception as ex:
+                    self.log_debug(f"INTERRUZIONE: Errore nella forzatura interruzione thread: {str(ex)}")
+            
             except Exception as e:
-                self.log_debug(f"Errore nella chiusura dell'executor: {str(e)}")
+                self.log_debug(f"INTERRUZIONE: Errore generale nella gestione executor: {str(e)}")
                 self.search_executor = None
         
-        # Ritardo per evitare problemi con l'interfaccia
-        self.root.after(100, self.enable_all_controls)
+        # 6. NUOVO: Interrompe attivamente il thread watchdog
+        self.watchdog_active = False
+        
+        # 7. Svuota le code per evitare update residui
+        try:
+            while not self.progress_queue.empty():
+                self.progress_queue.get_nowait()
+                self.progress_queue.task_done()
+        except:
+            pass
+        
+        # 8. IMPORTANTE: Visualizza risultati parziali trovati prima dell'interruzione
+        self.root.after(500, self.update_results_list)
+        
+        # 9. Riabilita l'interfaccia utente
+        self.root.after(1000, self.enable_all_controls)
         self.stop_button["state"] = "disabled"
-    
-        # Aggiornamento forzato dell'interfaccia
+        
+        # 10. Forza aggiornamento GUI
         self.root.update_idletasks()
+        
+        self.log_debug("INTERRUZIONE: Processo di interruzione ricerca completato")
         
     def update_results_list(self):
         """Aggiorna la lista dei risultati con i risultati trovati"""
@@ -5870,18 +6000,38 @@ class FileSearchApp:
             self.root.after(0, lambda: self.used_disk_var.set(self._format_size(used)))
             self.root.after(0, lambda: self.free_disk_var.set(self._format_size(free)))
             self.root.after(0, lambda: self.status_label.config(text="In attesa..."))
+            
+            # Log per debug
+            self.log_debug(f"Info disco aggiornate: Totale={self._format_size(total)}, Libero={self._format_size(free)}")
+            
         except Exception as e:
             self.log_debug(f"Errore nel calcolo dello spazio disco: {str(e)}")
             self.root.after(0, lambda: self.total_disk_var.set("Errore"))
             self.root.after(0, lambda: self.used_disk_var.set("Errore"))
             self.root.after(0, lambda: self.free_disk_var.set("Errore"))
         
-        # Calcola dimensione directory solo se richiesto
-        if calculate_dir_size:
-            calculation_mode = self.dir_size_calculation.get()
-            if calculation_mode != "disabilitato" and not self.is_searching:
-                self.root.after(0, lambda: self.dir_size_var.set("Calcolo in corso..."))
-                self._calculate_dir_size_thread(path)
+        # Controlla esplicitamente le impostazioni per il calcolo della directory
+        calculation_mode = self.dir_size_calculation.get()
+        
+        # Gestisce il caso in cui non si deve calcolare la dimensione
+        if not calculate_dir_size or calculation_mode == "disabilitato" or self.is_searching:
+            # Se il calcolo è disabilitato o stiamo cercando, mostra "N/D" invece di calcolare
+            self.log_debug("Calcolo dimensione directory saltato: " + 
+                        ("parametro disabilitato" if not calculate_dir_size else 
+                        "impostazione disabilitata" if calculation_mode == "disabilitato" else 
+                        "ricerca in corso"))
+            
+            self.root.after(0, lambda: self.dir_size_var.set("N/D"))
+            return
+        
+        # Se arriviamo qui, dobbiamo calcolare la dimensione
+        try:
+            self.log_debug(f"Avvio calcolo dimensione directory: {path} (modalità: {calculation_mode})")
+            self.root.after(0, lambda: self.dir_size_var.set("Calcolo in corso..."))
+            self._calculate_dir_size_thread(path)
+        except Exception as e:
+            self.log_debug(f"Errore nell'avvio del calcolo dimensione directory: {str(e)}")
+            self.root.after(0, lambda: self.dir_size_var.set("Errore"))
 
     def _async_update_disk_info(self, path, calculate_dir_size):
         """Esegue il calcolo delle informazioni del disco in background"""
@@ -7033,7 +7183,7 @@ class FileSearchApp:
         files_row.pack(fill=X, pady=2)
 
         ttk.Label(files_row, text="File analizzati:", width=12, anchor=W, font=("", 9, "bold")).pack(side=LEFT, padx=5)
-        self.analyzed_files_label = ttk.Label(files_row, text="Nessuna ricerca avviata", wraplength=1000)
+        self.analyzed_files_label = ttk.Label(files_row, text="Nessuna ricerca avviata", wraplength=2000)
         self.analyzed_files_label.pack(side=LEFT, fill=X, expand=YES, padx=5)
         # ==========================================================
         # SEZIONE RISULTATI 
@@ -7719,13 +7869,14 @@ class FileSearchApp:
             # Add to the debug logs queue with a timestamp
             try:
                 if hasattr(self, 'debug_logs_queue'):
-                    # Use put_nowait to avoid blocking if queue is full (just drop oldest entries)
-                    if self.debug_logs_queue.full():
-                        try:
-                            self.debug_logs_queue.get_nowait()  # Remove oldest entry
-                        except queue.Empty:
-                            pass
-                    self.debug_logs_queue.put_nowait(log_entry)
+                    # Add a simple lock to prevent rare race conditions
+                    with threading.Lock():
+                        if self.debug_logs_queue.full():
+                            try:
+                                self.debug_logs_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                        self.debug_logs_queue.put_nowait(log_entry)
             except Exception as e:
                 print(f"Error adding to debug queue: {str(e)}")
 
