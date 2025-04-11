@@ -1268,7 +1268,9 @@ class FileSearchApp:
             return  # Interrompi se l'utente annulla
         
         # Aggiorna le informazioni del disco qui, quando l'utente clicca su cerca
-        self.update_disk_info()
+        calculation_mode = self.dir_size_calculation.get()
+        should_calculate = calculation_mode != "disabilitato"
+        self.update_disk_info(path=search_path, calculate_dir_size=should_calculate)
 
         self.show_optimization_tips(self.search_path.get())
         
@@ -1729,6 +1731,38 @@ class FileSearchApp:
                         self.root.update_idletasks()
                     except:
                         pass
+    
+    # Funzione per calcolare il tempo rimanente stimato
+    def calculate_remaining_time(self, files_processed, max_files, elapsed_time):
+        """Calcola il tempo rimanente stimato in base al progresso attuale"""
+        if files_processed == 0 or elapsed_time == 0:
+            return "Calcolo..."
+            
+        try:
+            # Calcola la velocità di elaborazione (files/secondo)
+            files_per_second = files_processed / elapsed_time
+            
+            if files_per_second > 0:
+                # Calcola il tempo rimanente stimato
+                remaining_files = max_files - files_processed
+                remaining_seconds = remaining_files / files_per_second
+                
+                # Formatta il risultato
+                if remaining_seconds < 60:
+                    return f"{int(remaining_seconds)} secondi"
+                elif remaining_seconds < 3600:
+                    minutes = int(remaining_seconds // 60)
+                    seconds = int(remaining_seconds % 60)
+                    return f"{minutes}m {seconds}s"
+                else:
+                    hours = int(remaining_seconds // 3600)
+                    minutes = int((remaining_seconds % 3600) // 60)
+                    return f"{hours}h {minutes}m"
+            else:
+                return "Calcolo..."
+        except Exception as e:
+            self.log_debug(f"Errore nel calcolo del tempo rimanente: {str(e)}")
+            return "N/A"
 
     def _search_thread(self, path, keywords, search_content):
         try:
@@ -4353,7 +4387,23 @@ class FileSearchApp:
                             if hasattr(self, 'stop_button') and self.stop_button.winfo_exists():
                                 self.stop_button["state"] = "disabled"
                             
-                            # Resto del codice esistente per "complete"...
+                            # IMPORTANTE: Aggiunta questa chiamata per aggiornare i risultati nella TreeView
+                            self.update_results_list()
+                            
+                            # Aggiorna il tempo finale
+                            if hasattr(self, 'search_start_time') and self.search_start_time:
+                                # Imposta il timestamp di fine ricerca
+                                self.search_end_time = datetime.now()
+                                current_time = self.search_end_time.strftime('%H:%M')
+                                
+                                if hasattr(self, 'end_time_label') and self.end_time_label.winfo_exists():
+                                    self.end_time_label.config(text=current_time)
+                                    
+                                # Aggiorna il tempo totale
+                                self.update_total_time()
+                                
+                                # Aggiorna il debug log
+                                self.log_debug(f"Ricerca completata. Trovati {len(self.search_results)} risultati")
                         
                         messages_processed += 1
                         
@@ -5785,10 +5835,7 @@ class FileSearchApp:
             return (0, 0, 0)
 
     def update_disk_info(self, path=None, calculate_dir_size=True):
-        """
-        Aggiorna le informazioni del disco.
-        Funzione wrapper che mantiene compatibilità con le chiamate esistenti.
-        """
+        """Aggiorna le informazioni del disco. Funzione wrapper che mantiene compatibilità con le chiamate esistenti."""
         # Se non viene specificato un percorso, usa quello corrente
         if path is None:
             path = self.search_path.get()
@@ -5797,6 +5844,13 @@ class FileSearchApp:
         if not path or not os.path.exists(path):
             self.log_debug(f"Percorso non valido per update_disk_info: {path}")
             return
+        
+        # Verifica se il calcolo è disabilitato
+        if self.dir_size_calculation.get() == "disabilitato":
+            self.log_debug(f"update_disk_info: calcolo dimensione directory disabilitato nelle impostazioni")
+            calculate_dir_size = False
+        
+        self.log_debug(f"update_disk_info: aggiornamento info disco per {path}, calcola_dimensione={calculate_dir_size}")
         
         # Avvia un thread separato per calcolare le informazioni del disco
         threading.Thread(
@@ -5845,11 +5899,13 @@ class FileSearchApp:
             self.root.after(0, lambda: self.used_disk_var.set("Errore"))
             self.root.after(0, lambda: self.free_disk_var.set("Errore"))
         
-        # MODIFICA QUI: Verifica modalità di calcolo dimensione
+        # Verifica modalità di calcolo dimensione
         calculation_mode = self.dir_size_calculation.get()
         
+        # Rispetta sempre l'impostazione disabilitato, indipendentemente dal valore di calculate_dir_size
         if calculation_mode == "disabilitato":
             self.root.after(0, lambda: self.dir_size_var.set("Calcolo disattivato"))
+            self.log_debug("Calcolo dimensione directory disattivato nelle impostazioni")
             return
         
         # Se è incrementale e siamo in fase di ricerca, non fare niente qui
@@ -6949,25 +7005,36 @@ class FileSearchApp:
         # Contenitore per le informazioni di stato sopra i risultati
         status_frame = ttk.LabelFrame(main_container, text="Stato ricerca", padding=5)
         status_frame.pack(fill=X, padx=10, pady=5)
-        
+
         # Progress bar
         self.progress_bar = ttk.Progressbar(status_frame, mode='determinate')
         self.progress_bar.pack(fill=X, pady=5)
-        
-        # Status grid per organizzare le informazioni
+
+        # Status grid with improved layout
         status_grid = ttk.Frame(status_frame)
         status_grid.pack(fill=X)
-        
-        # Riga 1: Status
-        ttk.Label(status_grid, text="Analisi:", width=12, anchor=W, font=("", 9, "bold")).grid(row=0, column=0, sticky=W, padx=5, pady=2)
-        self.status_label = ttk.Label(status_grid, text="In attesa...", wraplength=1000)
-        self.status_label.grid(row=0, column=1, sticky=W+E, padx=5, pady=2)
-        
-        # Riga 2: File analizzati
-        ttk.Label(status_grid, text="File analizzati:", width=12, anchor=W, font=("", 9, "bold")).grid(row=1, column=0, sticky=W, padx=5, pady=2)
-        self.analyzed_files_label = ttk.Label(status_grid, text="Nessuna ricerca avviata", wraplength=1000)
-        self.analyzed_files_label.grid(row=1, column=1, sticky=W+E, padx=5, pady=2)
-        
+
+        # Row 1: Status with debug button
+        status_row = ttk.Frame(status_grid)
+        status_row.pack(fill=X, pady=2)
+
+        ttk.Label(status_row, text="Analisi:", width=12, anchor=W, font=("", 9, "bold")).pack(side=LEFT, padx=5)
+        self.status_label = ttk.Label(status_row, text="In attesa...", wraplength=1000)
+        self.status_label.pack(side=LEFT, fill=X, expand=YES, padx=5)
+
+        # Add Debug Button on the right side of the status row
+        self.debug_button = ttk.Button(status_row, text="Debug Log", command=self.show_debug_log, 
+                                    style="info.Outline.TButton", width=12)
+        self.debug_button.pack(side=RIGHT, padx=5)
+        self.create_tooltip(self.debug_button, "Mostra la finestra di debug con log dettagliati sulla ricerca in corso")
+
+        # Row 2: File analyzed
+        files_row = ttk.Frame(status_grid)
+        files_row.pack(fill=X, pady=2)
+
+        ttk.Label(files_row, text="File analizzati:", width=12, anchor=W, font=("", 9, "bold")).pack(side=LEFT, padx=5)
+        self.analyzed_files_label = ttk.Label(files_row, text="Nessuna ricerca avviata", wraplength=1000)
+        self.analyzed_files_label.pack(side=LEFT, fill=X, expand=YES, padx=5)
         # ==========================================================
         # SEZIONE RISULTATI 
         # ==========================================================
@@ -7603,7 +7670,220 @@ class FileSearchApp:
             else:
                 # Rimuovi eventuali indicatori di ordinamento da altre colonne
                 tv.heading(c, text=tv.heading(c, 'text').split(' ')[0])
+
+    # Add this to the FileSearchApp class to track log messages
+    def _init_essential_variables(self):
+        """Inizializza solo le variabili essenziali per l'avvio"""
+        # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
+        self.datetime_var = StringVar()
+        
+        # Variabili principali per la ricerca
+        self.search_content = BooleanVar(value=True)
+        self.search_path = StringVar()
+        self.keywords = StringVar()
+        self.search_results = []
+        self.search_files = BooleanVar(value=True)
+        self.search_folders = BooleanVar(value=True)
+        self.is_searching = False
+        self.progress_queue = queue.Queue()
+        self.search_depth = StringVar(value="base") 
+
+        # Variabili per data/ora e utente (datetime_var già inizializzato)
+        self.user_var = StringVar(value=getpass.getuser())
+        
+        # Variabili essenziali per l'interfaccia
+        self.ignore_hidden = BooleanVar(value=True)
+        self.search_executor = None
+        self.exclude_system_files = BooleanVar(value=True)
+        self.whole_word_search = BooleanVar(value=False)
+        self.dir_size_calculation = StringVar(value="disabilitato")
+        
+        # Variabili per la visualizzazione
+        self.dir_size_var = StringVar(value="")
+        self.total_disk_var = StringVar(value="")
+        self.used_disk_var = StringVar(value="")
+        self.free_disk_var = StringVar(value="")
+        
+        # Add a queue for debug logs
+        self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
+        
+    # Modify the existing log_debug method to also store logs in the queue
+    def log_debug(self, message):
+        """Funzione per logging, stampa solo quando debug_mode è True"""
+        timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]  # Include milliseconds
+        log_entry = f"[{timestamp}] {message}"
+        
+        if self.debug_mode:
+            print(f"[DEBUG] {message}")
+            
+            # Add to the debug logs queue with a timestamp
+            try:
+                if hasattr(self, 'debug_logs_queue'):
+                    # Use put_nowait to avoid blocking if queue is full (just drop oldest entries)
+                    if self.debug_logs_queue.full():
+                        try:
+                            self.debug_logs_queue.get_nowait()  # Remove oldest entry
+                        except queue.Empty:
+                            pass
+                    self.debug_logs_queue.put_nowait(log_entry)
+            except Exception as e:
+                print(f"Error adding to debug queue: {str(e)}")
+
+    # Show debug log window with export functionality
+    def show_debug_log(self):
+        """Displays a window with real-time debug logs and export functionality"""
+        # Create a new toplevel window
+        log_window = ttk.Toplevel(self.root)
+        log_window.title("Debug Log")
+        log_window.geometry("900x600")
+        log_window.transient(self.root)
+        
+        # Main container frame
+        main_frame = ttk.Frame(log_window, padding=10)
+        main_frame.pack(fill=BOTH, expand=YES)
+        
+        # Header and controls
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill=X, pady=(0, 10))
+        
+        ttk.Label(header_frame, text="Registro di debug - Operazioni di ricerca in tempo reale", 
+                font=("", 11, "bold")).pack(side=LEFT)
+        
+        # Auto-scroll and control buttons
+        control_frame = ttk.Frame(header_frame)
+        control_frame.pack(side=RIGHT)
+        
+        autoscroll_var = BooleanVar(value=True)
+        ttk.Checkbutton(control_frame, text="Auto scorrimento", variable=autoscroll_var).pack(side=LEFT, padx=(0, 10))
+        
+        def clear_log():
+            log_text.config(state=NORMAL)
+            log_text.delete(1.0, END)
+            log_text.config(state=DISABLED)
+        
+        # Function to export log contents to a text file
+        def export_log_to_txt():
+            # Ask user for save location
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                title="Salva log come file di testo"
+            )
+            
+            if not file_path:  # User cancelled
+                return
                 
+            try:
+                # Get current content from text widget
+                log_content = log_text.get(1.0, END)
+                
+                # Add header with timestamp and user info
+                header = f"Debug Log - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+                header += f"Utente: {self.current_user}\n"
+                header += f"Applicazione: File Search Tool V9.2.4 Beta\n"
+                header += "-" * 80 + "\n\n"
+                
+                # Write to file
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(header + log_content)
+                    
+                messagebox.showinfo("Esportazione completata", 
+                                f"Log salvato con successo in:\n{file_path}")
+            except Exception as e:
+                messagebox.showerror("Errore esportazione", 
+                                f"Si è verificato un errore durante l'esportazione:\n{str(e)}")
+        
+        # Add the Export button
+        ttk.Button(control_frame, text="Esporta TXT", command=export_log_to_txt).pack(side=LEFT, padx=5)
+        
+        # Clear button remains
+        ttk.Button(control_frame, text="Svuota Log", command=clear_log).pack(side=LEFT, padx=5)
+        
+        # Text widget with scrollbars for logs
+        text_frame = ttk.Frame(main_frame)
+        text_frame.pack(fill=BOTH, expand=YES)
+        
+        # Create scrollbars
+        v_scrollbar = ttk.Scrollbar(text_frame)
+        v_scrollbar.pack(side=RIGHT, fill=Y)
+        
+        h_scrollbar = ttk.Scrollbar(text_frame, orient=HORIZONTAL)
+        h_scrollbar.pack(side=BOTTOM, fill=X)
+        
+        # Create text widget
+        log_text = tk.Text(text_frame, wrap=NONE, bg="#1e1e1e", fg="#e0e0e0",
+                        xscrollcommand=h_scrollbar.set, yscrollcommand=v_scrollbar.set,
+                        font=("Consolas", 10))
+        log_text.pack(fill=BOTH, expand=YES)
+        
+        # Configure scrollbars
+        v_scrollbar.config(command=log_text.yview)
+        h_scrollbar.config(command=log_text.xview)
+        
+        # Make text read-only
+        log_text.config(state=DISABLED)
+        
+        # Dump existing logs into the window
+        if hasattr(self, 'debug_logs_queue'):
+            logs = []
+            # Get all current logs from queue without removing them
+            try:
+                while True:
+                    logs.append(self.debug_logs_queue.get_nowait())
+                    self.debug_logs_queue.task_done()  # Mark as done to keep queue healthy
+            except queue.Empty:
+                pass
+            
+            # Add logs back to queue and display in window
+            log_text.config(state=NORMAL)
+            for log_entry in logs:
+                self.debug_logs_queue.put(log_entry)
+                log_text.insert(END, log_entry + "\n")
+            log_text.config(state=DISABLED)
+            
+            # Scroll to the end
+            log_text.see(END)
+        
+        # Function to update log display
+        def update_log_display():
+            if not log_window.winfo_exists():
+                return
+                
+            log_entries_added = False
+            
+            # Process up to 100 entries at a time to avoid UI freezing
+            for _ in range(100):
+                try:
+                    log_entry = self.debug_logs_queue.get_nowait()
+                    log_text.config(state=NORMAL)
+                    log_text.insert(END, log_entry + "\n")
+                    log_text.config(state=DISABLED)
+                    self.debug_logs_queue.task_done()
+                    log_entries_added = True
+                except queue.Empty:
+                    break
+                    
+            # Auto-scroll if enabled and new entries were added
+            if autoscroll_var.get() and log_entries_added:
+                log_text.see(END)
+                
+            # Schedule next update
+            log_window.after(100, update_log_display)
+        
+        # Start the update loop
+        update_log_display()
+        
+        # Center the window
+        log_window.update_idletasks()
+        width = log_window.winfo_width()
+        height = log_window.winfo_height()
+        x = (log_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (log_window.winfo_screenheight() // 2) - (height // 2)
+        log_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Set a reasonable minimum size
+        log_window.minsize(800, 500)
+
 # Funzione principale per eseguire l'applicazione
 def main():
     import sys
