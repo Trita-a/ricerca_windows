@@ -8812,4 +8812,3 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
-
