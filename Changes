@@ -153,3 +153,4 @@ V 9.4.5
 -Debug Log: miglioramenti nella registrazione dei log
 -Queste ottimizzazioni dovrebbero migliorare significativamente le prestazioni di ricerca su unità di sistema e percorsi di rete, mantenendo al contempo 
         la struttura dell'interfaccia utente e l'esperienza utente esistenti.
+-Bug fix sulla compressione
