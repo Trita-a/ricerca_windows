@@ -19,6 +19,49 @@ import mimetypes
 import signal
 import re
 import subprocess
+import functools
+
+# Elenco di librerie da installare se mancanti
+missing_libraries = []
+
+# Definizione del decoratore con debug migliorato
+def error_handler(func):
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except Exception as e:
+            error_type = type(e).__name__
+            error_traceback = traceback.format_exc()
+            
+            # Registra l'errore con il tipo specifico
+            self.log_error(
+                f"Errore nell'esecuzione di {func.__name__}: [{error_type}]", 
+                exception=e, 
+                location=func.__name__, 
+                traceback=error_traceback
+            )
+            
+            # Aggiorna immediatamente la visualizzazione del debug log se è aperta
+            if hasattr(self, 'debug_window') and self.debug_window and hasattr(self.debug_window, 'winfo_exists') and self.debug_window.winfo_exists():
+                try:
+                    # Assumendo che update_log_display sia un metodo accessibile
+                    if hasattr(self.debug_window, 'update_log_display'):
+                        self.debug_window.update_log_display()
+                except:
+                    pass
+            
+            # Mostra una finestra di errore all'utente
+            import tkinter.messagebox as messagebox
+            messagebox.showerror(
+                "Errore applicazione", 
+                f"Si è verificato un errore durante {func.__name__}.\n"
+                f"Tipo errore: {error_type}\n"
+                f"Dettagli: {str(e)}\n\n"
+                f"L'errore è stato registrato nel log di debug."
+            )
+            return None
+    return wrapper
 
 # Dizionario per tracciare il supporto alle librerie - sarà popolato in seguito
 file_format_support = {
@@ -30,9 +73,6 @@ file_format_support = {
     "executable": True, "code_files": True
 }
 
-# Elenco di librerie da installare se mancanti
-missing_libraries = []
-
 class FileSearchApp:
     def __init__(self, root):
         self.root = root
@@ -40,7 +80,7 @@ class FileSearchApp:
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
-        
+        self.debug_log = []
         # Aggiungi questa riga per inizializzare current_user
         self.current_user = getpass.getuser()
         
@@ -986,14 +1026,20 @@ class FileSearchApp:
         
         signal.signal(signal.SIGINT, handle_interrupt)
 
-    def log_error(self, message, exception=None, location=None):
-        """Registra un errore nel log di debug con dettagli aggiuntivi. Args:message: Il messaggio di errore principale
-            exception: L'oggetto eccezione catturato (opzionale) location: Dove si è verificato l'errore (opzionale)"""
+    def log_error(self, message, exception=None, location=None, traceback=None):
+        """Registra un errore nel log di debug con dettagli aggiuntivi"""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         # Crea un messaggio di errore dettagliato
         error_message = f"[ERROR] {timestamp} - {message}"
         
+        print(f"LOG_ERROR: {error_message[:100]}...")
+    
+        # Registra nel log di debug
+        if hasattr(self, 'debug_log'):
+            self.debug_log.append(error_message)
+            print(f"Debug log size: {len(self.debug_log)}")
+            
         # Aggiungi informazioni sulla posizione dell'errore
         if location:
             error_message += f" | Location: {location}"
@@ -1002,19 +1048,25 @@ class FileSearchApp:
         if exception:
             exc_type = type(exception).__name__
             exc_details = str(exception)
-            traceback_info = ""
             
-            # Ottieni traceback se disponibile
+            error_message += f" | Exception: [{exc_type}]: {exc_details}"
+        
+        # Gestisci il traceback (priorità al traceback esplicito se fornito)
+        traceback_info = ""
+        if traceback:
+            # Usa il traceback fornito esplicitamente
+            error_message += f"\n--- Traceback ---\n{traceback}\n-----------------"
+        elif exception:
+            # Ottieni traceback se disponibile e non già fornito
             try:
-                import traceback
-                tb_info = traceback.format_exc().split('\n')
+                import traceback as tb_module
+                tb_info = tb_module.format_exc().split('\n')
                 # Prendi solo le righe più rilevanti del traceback
                 if len(tb_info) > 3:
                     traceback_info = " | " + " > ".join(tb_info[-4:-1])
+                    error_message += traceback_info
             except:
                 pass
-            
-            error_message += f" | Exception: {exc_type}: {exc_details}{traceback_info}"
         
         # Registra nel log di debug
         if hasattr(self, 'debug_log'):
@@ -5635,6 +5687,7 @@ class FileSearchApp:
         
         return result["name"]
 
+    @error_handler
     def compress_selected(self):
         """Versione avanzata della compressione che mantiene la struttura originale delle directory"""
         selected_items = self.results_list.selection()
@@ -5802,7 +5855,7 @@ class FileSearchApp:
         # Prima fase: raccogli informazioni su cartelle e file
         for item in selected_items:
             values = self.results_list.item(item)['values']
-            item_type, _, _, _, _, source_path = values
+            item_type, _, _, _, _, _, source_path = values
 
             if item_type == "Directory":
                 folder_paths.append(source_path)
@@ -8563,171 +8616,248 @@ class FileSearchApp:
         
     # Show debug log window with export functionality
     def show_debug_log(self):
-        """Displays a window with real-time debug logs and export functionality"""
-        # Verifica e inizializza l'attributo se mancante
-        if not hasattr(self, 'complete_debug_log_history'):
-            self.complete_debug_log_history = []
-            self.log_debug("Inizializzato complete_debug_log_history (era mancante)")
-        
-        # Verifica e inizializza la coda di debug se mancante
-        if not hasattr(self, 'debug_logs_queue'):
-            self.debug_logs_queue = queue.Queue(maxsize=5000)
-            self.log_debug("Inizializzato debug_logs_queue (era mancante)")
+        """Displays a window with debug logs and export functionality"""
+        if not hasattr(self, 'debug_window') or not self.debug_window.winfo_exists():
+            self.debug_window = tk.Toplevel(self.root)
+            self.debug_window.title("Debug Log")
+            self.debug_window.geometry("1000x700")
             
-        # Create a new toplevel window
-        log_window = tk.Toplevel(self.root)
-        log_window.title("Debug Log")
-        log_window.geometry("1000x800")
-        log_window.transient(self.root)
-        
-        # Main container frame
-        main_frame = ttk.Frame(log_window, padding=10)
-        main_frame.pack(fill=BOTH, expand=YES)
-        
-        # Header and controls
-        header_frame = ttk.Frame(main_frame)
-        header_frame.pack(fill=X, pady=(0, 10))
-        
-        # Mostra il conteggio dei log totali
-        total_entries = len(self.complete_debug_log_history)
-        ttk.Label(header_frame, 
-                text=f"Registro di debug - {total_entries} messaggi totali", 
-                font=("", 11, "bold")).pack(side=LEFT)
-        
-        # Auto-scroll and control buttons
-        control_frame = ttk.Frame(header_frame)
-        control_frame.pack(side=RIGHT)
-        
-        autoscroll_var = BooleanVar(value=True)
-        ttk.Checkbutton(control_frame, text="Auto scorrimento", variable=autoscroll_var).pack(side=LEFT, padx=(0, 10))
-        
-        def clear_log():
-            log_text.config(state=NORMAL)
-            log_text.delete(1.0, END)
-            log_text.config(state=DISABLED)
-        
-        # Function to export log contents to a text file - MODIFICATA per usare la cronologia completa
-        def export_log_to_txt():
-            # Ask user for save location
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".txt",
-                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-                title="Salva log come file di testo"
+            frame = ttk.Frame(self.debug_window)
+            frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            
+            # Header frame con conteggio messaggi
+            header_frame = ttk.Frame(frame)
+            header_frame.pack(fill=tk.X, pady=(0, 10))
+            
+            # Verifica che il debug log sia inizializzato
+            if not hasattr(self, 'debug_log'):
+                self.debug_log = []
+            
+            # Etichetta informativa con conteggio
+            self.log_count_label = ttk.Label(
+                header_frame, 
+                text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi"
+            )
+            self.log_count_label.pack(side=tk.LEFT)
+            
+            # Opzione auto-scroll
+            self.autoscroll_var = tk.BooleanVar(value=True)
+            ttk.Checkbutton(
+                header_frame, 
+                text="Auto scorrimento", 
+                variable=self.autoscroll_var
+            ).pack(side=tk.RIGHT, padx=5)
+            
+            # Crea un text widget con scrollbar
+            text_frame = ttk.Frame(frame)
+            text_frame.pack(fill=tk.BOTH, expand=True)
+            
+            # Scrollbar verticale
+            v_scrollbar = ttk.Scrollbar(text_frame)
+            v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            # Scrollbar orizzontale
+            h_scrollbar = ttk.Scrollbar(text_frame, orient=tk.HORIZONTAL)
+            h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+            
+            # Text widget con sfondo scuro per migliore leggibilità
+            self.debug_text = tk.Text(
+                text_frame, 
+                wrap=tk.NONE,  # Permette scroll orizzontale
+                width=80, 
+                height=20,
+                bg="#1e1e1e",  # Sfondo scuro
+                fg="#e0e0e0",  # Testo chiaro
+                font=("Consolas", 10),  # Font a larghezza fissa
+                xscrollcommand=h_scrollbar.set,
+                yscrollcommand=v_scrollbar.set
             )
             
-            if not file_path:  # User cancelled
-                return
-                
-            try:
-                # Usa la lista di cronologia completa (o una lista vuota se non esiste)
-                log_content = "\n".join(self.complete_debug_log_history)
-                
-                # Add header with timestamp and user info
-                header = f"Debug Log - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
-                header += f"Utente: {getattr(self, 'current_user', getpass.getuser())}\n"
-                header += f"Applicazione: File Search Tool V9.2.5 Beta\n"
-                header += f"Numero totale messaggi: {len(self.complete_debug_log_history)}\n"
-                header += "-" * 80 + "\n\n"
-                
-                # Write to file
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(header + log_content)
-
-                messagebox.showinfo("Esportazione completata", 
-                                f"Log salvato con successo in:\n{file_path}\n\n"
-                                f"Il file contiene {len(self.complete_debug_log_history)} messaggi di log dall'avvio dell'applicazione.")
-            except Exception as e:
-                messagebox.showerror("Errore esportazione", 
-                                f"Si è verificato un errore durante l'esportazione:\n{str(e)}")
-        
-        # Add the Export button
-        ttk.Button(control_frame, text="Esporta TXT", command=export_log_to_txt).pack(side=LEFT, padx=5)
-        
-        # Clear button remains
-        ttk.Button(control_frame, text="Svuota Log", command=clear_log).pack(side=LEFT, padx=5)
-        
-        # Text widget with scrollbars for logs
-        text_frame = ttk.Frame(main_frame)
-        text_frame.pack(fill=BOTH, expand=YES)
-        
-        # Create scrollbars
-        v_scrollbar = ttk.Scrollbar(text_frame)
-        v_scrollbar.pack(side=RIGHT, fill=Y)
-        
-        h_scrollbar = ttk.Scrollbar(text_frame, orient=HORIZONTAL)
-        h_scrollbar.pack(side=BOTTOM, fill=X)
-        
-        # Create text widget
-        log_text = tk.Text(text_frame, wrap=NONE, bg="#1e1e1e", fg="#e0e0e0",
-                        xscrollcommand=h_scrollbar.set, yscrollcommand=v_scrollbar.set,
-                        font=("Consolas", 10))
-        log_text.pack(fill=BOTH, expand=YES)
-        
-        # Configure scrollbars
-        v_scrollbar.config(command=log_text.yview)
-        h_scrollbar.config(command=log_text.xview)
-        
-        # Make text read-only
-        log_text.config(state=DISABLED)
-        
-        # MODIFICA: Carichiamo tutti i log dalla cronologia completa
-        log_text.config(state=NORMAL)
-        
-        # Limita a mostrare solo gli ultimi 5000 log per evitare di bloccare l'interfaccia
-        max_log_display = 5000
-        log_entries = self.complete_debug_log_history[-max_log_display:] if len(self.complete_debug_log_history) > max_log_display else self.complete_debug_log_history
-        
-        if len(self.complete_debug_log_history) > max_log_display:
-            log_text.insert(END, f"[Mostrando solo gli ultimi {max_log_display} di {len(self.complete_debug_log_history)} messaggi...]\n\n")
-        
-        # Inserisci i log effettivi
-        for log_entry in log_entries:
-            log_text.insert(END, log_entry + "\n")
-        
-        log_text.config(state=DISABLED)
-        
-        # Scroll to the end
-        log_text.see(END)
-        
-        # Function to update log display
-        def update_log_display():
-            if not log_window.winfo_exists():
-                return
-                
-            log_entries_added = False
+            self.debug_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             
-            # Process up to 100 entries at a time to avoid UI freezing
-            for _ in range(100):
-                try:
-                    log_entry = self.debug_logs_queue.get_nowait()
-                    log_text.config(state=NORMAL)
-                    log_text.insert(END, log_entry + "\n")
-                    log_text.config(state=DISABLED)
-                    self.debug_logs_queue.task_done()
-                    log_entries_added = True
-                except queue.Empty:
+            # Configura le scrollbar
+            v_scrollbar.config(command=self.debug_text.yview)
+            h_scrollbar.config(command=self.debug_text.xview)
+            
+            # Aggiungi pulsanti di utilità
+            btn_frame = ttk.Frame(self.debug_window)
+            btn_frame.pack(fill=tk.X, padx=10, pady=5)
+            
+            ttk.Button(
+                btn_frame, 
+                text="Aggiorna", 
+                command=self.update_log_display
+            ).pack(side=tk.LEFT, padx=5)
+            
+            ttk.Button(
+                btn_frame, 
+                text="Pulisci Log", 
+                command=self.clear_log
+            ).pack(side=tk.LEFT, padx=5)
+            
+            ttk.Button(
+                btn_frame, 
+                text="Esporta in TXT", 
+                command=self.export_log_to_txt
+            ).pack(side=tk.LEFT, padx=5)
+            
+            # Posiziona la finestra al centro
+            self.debug_window.update_idletasks()
+            width = self.debug_window.winfo_width()
+            height = self.debug_window.winfo_height()
+            x = (self.debug_window.winfo_screenwidth() // 2) - (width // 2)
+            y = (self.debug_window.winfo_screenheight() // 2) - (height // 2)
+            self.debug_window.geometry(f"{width}x{height}+{x}+{y}")
+            
+            # Imposta una dimensione minima ragionevole
+            self.debug_window.minsize(800, 500)
+            
+            # Mostra il log corrente
+            self.update_log_display()
+
+        else:
+            # Se la finestra esiste già, portala in primo piano
+            self.debug_window.lift()
+            self.debug_window.focus_force()
+            # Aggiorna il contenuto
+            self.update_log_display()
+
+    def update_log_display(self):
+        """Aggiorna la visualizzazione dei log nella finestra di debug"""
+        if hasattr(self, 'debug_window') and hasattr(self, 'debug_text') and self.debug_window.winfo_exists():
+            # Salva la posizione corrente dello scroll verticale
+            current_pos = self.debug_text.yview()[0]
+            
+            # Cancella il contenuto attuale
+            self.debug_text.config(state=tk.NORMAL)
+            self.debug_text.delete(1.0, tk.END)
+            
+            # Verifica che il debug log sia inizializzato
+            if not hasattr(self, 'debug_log'):
+                self.debug_log = []
+                
+            # Aggiorna l'etichetta con il conteggio dei messaggi
+            if hasattr(self, 'log_count_label'):
+                self.log_count_label.config(text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
+                
+            if self.debug_log:
+                # Limita la visualizzazione a 5000 messaggi per non rallentare l'interfaccia
+                max_display = 5000
+                if len(self.debug_log) > max_display:
+                    self.debug_text.insert(tk.END, f"[Mostrando solo gli ultimi {max_display} di {len(self.debug_log)} messaggi...]\n\n")
+                    log_entries = self.debug_log[-max_display:]
+                else:
+                    log_entries = self.debug_log
+                    
+                # Inserisci i log
+                log_text = "\n".join(log_entries)
+                self.debug_text.insert(tk.END, log_text)
+                
+                # Evidenzia gli errori con colore rosso
+                self.highlight_errors()
+                
+                # Forza un aggiornamento dell'interfaccia
+                self.debug_window.update_idletasks()
+                
+                # Prima imposta l'indice orizzontale all'inizio (più a sinistra)
+                self.debug_text.xview_moveto(0.0)
+                
+                # Poi imposta anche il primo carattere visibile nella prima colonna
+                self.debug_text.mark_set("insert", "1.0")
+                
+                # Aggiungi un ritardo per garantire che lo scroll sia applicato
+                def force_left_scroll():
+                    self.debug_text.xview_moveto(0.0)
+                    # Modifica la posizione fisica dello scrollbar
+                    if hasattr(self.debug_text, 'xscrollcommand'):
+                        self.debug_text.xscrollcommand(0.0, 1.0)
+                
+                # Esegui con un piccolo ritardo per assicurarti che venga applicato dopo il rendering
+                self.debug_window.after(50, force_left_scroll)
+                
+                # Decidi se mantenere la posizione verticale precedente o scorrere alla fine
+                if hasattr(self, 'autoscroll_var') and self.autoscroll_var.get():
+                    self.debug_text.see(tk.END)  # Scorri alla fine verticalmente
+                    # Ma mantieni comunque lo scroll orizzontale a sinistra
+                    self.debug_window.after(100, lambda: self.debug_text.xview_moveto(0.0))
+                else:
+                    # Torna alla posizione precedente dello scroll verticale
+                    self.debug_text.yview_moveto(current_pos)
+            else:
+                self.debug_text.insert(tk.END, "Nessun messaggio di debug disponibile.")
+                
+            # Rendi il testo di nuovo sola lettura
+            self.debug_text.config(state=tk.DISABLED)
+
+    def clear_log(self):
+        """Pulisce la visualizzazione del log"""
+        if hasattr(self, 'debug_text') and self.debug_text.winfo_exists():
+            self.debug_text.config(state=tk.NORMAL)
+            self.debug_text.delete(1.0, tk.END)
+            self.debug_text.insert(tk.END, "Log cancellato. I nuovi messaggi appariranno qui.")
+            self.debug_text.config(state=tk.DISABLED)
+
+    def export_log_to_txt(self):
+        """Esporta il log completo in un file di testo"""
+        # Chiedi all'utente dove salvare il file
+        file_path = tk.filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            title="Salva log come file di testo"
+        )
+        
+        if not file_path:  # Utente ha annullato
+            return
+            
+        try:
+            # Verifica che il debug log sia inizializzato
+            if not hasattr(self, 'debug_log'):
+                self.debug_log = []
+                
+            log_content = "\n".join(self.debug_log)
+            
+            # Aggiungi intestazione con timestamp e info utente
+            import getpass
+            header = f"Debug Log - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+            header += f"Utente: {getpass.getuser()}\n"
+            header += f"Applicazione: File Search Tool V9.2.5 Beta\n"
+            header += f"Numero totale messaggi: {len(self.debug_log)}\n"
+            header += "-" * 80 + "\n\n"
+            
+            # Scrivi su file
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(header + log_content)
+
+            tk.messagebox.showinfo("Esportazione completata", 
+                            f"Log salvato con successo in:\n{file_path}\n\n"
+                            f"Il file contiene {len(self.debug_log)} messaggi di log.")
+        except Exception as e:
+            tk.messagebox.showerror("Errore esportazione", 
+                            f"Si è verificato un errore durante l'esportazione:\n{str(e)}")
+
+    def highlight_errors(self):
+        """Evidenzia le righe di errore nel log con colore rosso"""
+        if hasattr(self, 'debug_text'):
+            # Cerca tutte le righe con "[ERROR]"
+            start = "1.0"
+            while True:
+                start = self.debug_text.search("[ERROR]", start, tk.END)
+                if not start:
                     break
                     
-            # Auto-scroll if enabled and new entries were added
-            if autoscroll_var.get() and log_entries_added:
-                log_text.see(END)
+                # Trova la fine della riga
+                line_end = self.debug_text.search("\n", start, tk.END)
+                if not line_end:
+                    line_end = tk.END
+                    
+                # Crea un tag per questa riga
+                self.debug_text.tag_add("error", start, line_end)
                 
-            # Schedule next update
-            log_window.after(100, update_log_display)
-        
-        # Start the update loop
-        update_log_display()
-        
-        # Center the window
-        log_window.update_idletasks()
-        width = log_window.winfo_width()
-        height = log_window.winfo_height()
-        x = (log_window.winfo_screenwidth() // 2) - (width // 2)
-        y = (log_window.winfo_screenheight() // 2) - (height // 2)
-        log_window.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # Set a reasonable minimum size
-        log_window.minsize(800, 500)
+                # Imposta il prossimo inizio ricerca
+                start = line_end
+                
+            # Configura il tag "error" per mostrare il testo in rosso
+            self.debug_text.tag_config("error", foreground="#ff6b6b")
 
 # Funzione principale per eseguire l'applicazione
 def main():
