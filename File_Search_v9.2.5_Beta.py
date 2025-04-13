@@ -341,6 +341,24 @@ class FileSearchApp:
         self.keyword_entry = ttk.Entry(keyword_frame, textvariable=self.keywords)
         self.keyword_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
         
+        # RIGA 3: Controllo della profondità di ricerca
+        depth_frame = ttk.Frame(self.controls_frame)
+        depth_frame.pack(fill=X, pady=5)
+        
+        depth_label = ttk.Label(depth_frame, text="Profondità max:", width=12, anchor=W)
+        depth_label.pack(side=LEFT, padx=(0, 5))
+        
+        self.depth_spinbox = ttk.Spinbox(depth_frame, from_=0, to=20, width=5)
+        self.depth_spinbox.pack(side=LEFT, padx=5)
+        self.depth_spinbox.set("5")  # Valore predefinito
+        
+        depth_info_label = ttk.Label(depth_frame, text="(0 = illimitato, consigliato 5-10)")
+        depth_info_label.pack(side=LEFT, padx=5)
+        
+        # Aggiunge un callback per aggiornare max_depth quando cambia il valore dello spinbox
+        self.depth_spinbox.bind("<FocusOut>", lambda e: setattr(self, "max_depth", 
+                            int(self.depth_spinbox.get()) if self.depth_spinbox.get().isdigit() else 5))
+        
         # Solo il pulsante di ricerca
         button_frame = ttk.Frame(self.controls_frame)
         button_frame.pack(fill=X, pady=(10, 5))
@@ -1288,7 +1306,7 @@ class FileSearchApp:
                 optimization_done = windows_excluded and program_files_excluded
             
             # Verifica la profondità di ricerca
-            depth_optimized = self.max_depth >= 1 and self.max_depth <= 10
+            depth_optimized = hasattr(self, 'max_depth') and self.max_depth >= 1 and self.max_depth <= 10
             
             # Se le ottimizzazioni non sono già state applicate, mostra il messaggio
             if not (optimization_done and depth_optimized):
@@ -1328,7 +1346,9 @@ class FileSearchApp:
                             self.log_debug(f"Errore nell'esclusione degli altri utenti: {str(e)}")
                     
                     # Imposta la profondità di ricerca a 7 (valore ragionevole)
-                    self.depth_spinbox.set("7")
+                    # Usa una verifica prima di accedere a depth_spinbox
+                    if hasattr(self, 'depth_spinbox'):
+                        self.depth_spinbox.set("7")
                     self.max_depth = 7
                     
                     # Notifica l'utente
@@ -1344,7 +1364,9 @@ class FileSearchApp:
                     return True
                 else:
                     # NUOVA PARTE: Se l'utente risponde "No", imposta esplicitamente la profondità a 0
-                    self.depth_spinbox.set("0")
+                    # Usa una verifica prima di accedere a depth_spinbox
+                    if hasattr(self, 'depth_spinbox'):
+                        self.depth_spinbox.set("0")
                     self.max_depth = 0
                     
                     # Notifica l'utente che sta per iniziare una ricerca illimitata
@@ -1372,165 +1394,6 @@ class FileSearchApp:
                             f"Totale percorsi: {len(self.excluded_paths)}")
         else:
             messagebox.showinfo("Debug esclusioni", "Lista esclusioni non inizializzata")
-
-    @error_handler
-    def manage_exclusions(self):
-        """Apre una finestra di dialogo per gestire i percorsi esclusi dalla ricerca"""
-        if not hasattr(self, 'excluded_paths'):
-            self.excluded_paths = []
-        dialog = ttk.Toplevel(self.root)
-        dialog.title("Gestione percorsi esclusi")
-        dialog.geometry("500x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # Frame principale
-        main_frame = ttk.Frame(dialog, padding=10)
-        main_frame.pack(fill=BOTH, expand=YES)
-        
-        # Istruzioni
-        ttk.Label(main_frame, text="Aggiungi cartelle da escludere dalla ricerca (es. C:/Windows)", 
-                wraplength=480).pack(anchor=W, pady=(0, 10))
-        
-        # Frame per aggiungere nuovi percorsi
-        add_frame = ttk.Frame(main_frame)
-        add_frame.pack(fill=X, pady=5)
-        
-        path_var = StringVar()
-        entry = ttk.Entry(add_frame, textvariable=path_var, width=40)
-        entry.pack(side=LEFT, padx=(0, 5), fill=X, expand=YES)
-        
-        def browse_exclude_dir():
-            directory = filedialog.askdirectory()
-            if directory:
-                path_var.set(directory)
-        
-        def add_exclusion():
-            path = path_var.get().strip()
-            if path and path not in self.excluded_paths:
-                self.excluded_paths.append(path)
-                update_list()
-                path_var.set("")
-        
-        ttk.Button(add_frame, text="Sfoglia", command=browse_exclude_dir).pack(side=LEFT, padx=2)
-        ttk.Button(add_frame, text="Aggiungi", command=add_exclusion).pack(side=LEFT, padx=2)
-        
-        # Lista dei percorsi esclusi
-        ttk.Label(main_frame, text="Percorsi attualmente esclusi:").pack(anchor=W, pady=(10, 5))
-        
-        list_frame = ttk.Frame(main_frame)
-        list_frame.pack(fill=BOTH, expand=YES, pady=5)
-        
-        scrollbar = ttk.Scrollbar(list_frame)
-        scrollbar.pack(side=RIGHT, fill=Y)
-        
-        excluded_list = ttk.Treeview(list_frame, columns=("path",), show="headings", 
-                                yscrollcommand=scrollbar.set, selectmode="extended")
-        excluded_list.heading("path", text="Percorso")
-        excluded_list.column("path", width=450)
-        excluded_list.pack(fill=BOTH, expand=YES)
-        
-        scrollbar.config(command=excluded_list.yview)
-        
-        def update_list():
-            # Pulisci la lista
-            for item in excluded_list.get_children():
-                excluded_list.delete(item)
-            
-            # Aggiungi i percorsi esclusi
-            for path in self.excluded_paths:
-                excluded_list.insert("", "end", values=(path,))
-        
-        def remove_selected():
-            selected = excluded_list.selection()
-            if selected:
-                for item in selected:
-                    values = excluded_list.item(item)["values"]
-                    if values and values[0] in self.excluded_paths:
-                        self.excluded_paths.remove(values[0])
-                update_list()
-        
-        # Pulsanti per gestire la lista
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=X, pady=10)
-        
-        ttk.Button(btn_frame, text="Rimuovi selezionati", command=remove_selected).pack(side=LEFT)
-        
-        # Preset di esclusioni comuni
-        def add_common_exclusions():
-            common_paths = [
-                "C:/Windows", 
-                "C:/Program Files", 
-                "C:/Program Files (x86)",
-                "C:/ProgramData",
-                "C:/Users/All Users",
-                "C:/Program Files (x86)/Client Active Directory Rights Management Services"
-            ]
-            added = 0
-            for path in common_paths:
-                if path not in self.excluded_paths:
-                    self.excluded_paths.append(path)
-                    added += 1
-            
-            if added > 0:
-                update_list()
-                messagebox.showinfo("Aggiunto", f"Aggiunti {added} percorsi comuni alle esclusioni")
-        
-        ttk.Button(btn_frame, text="Aggiungi esclusioni comuni", 
-                command=add_common_exclusions).pack(side=LEFT, padx=5)
-        
-        # Aggiungi automaticamente altre cartelle utente
-        def exclude_other_users():
-            current_user = getpass.getuser()
-            users_dir = "C:/Users"
-            added = 0
-            
-            if os.path.exists(users_dir):
-                try:
-                    for user in os.listdir(users_dir):
-                        user_path = os.path.join(users_dir, user)
-                        # Escludi tutte le cartelle utente tranne quella dell'utente corrente
-                        if user.lower() != current_user.lower() and user.lower() not in ["public", "default", "all users"]:
-                            if user_path not in self.excluded_paths:
-                                self.excluded_paths.append(user_path)
-                                added += 1
-                except Exception as e:
-                    self.log_debug(f"Errore nell'esclusione degli altri utenti: {str(e)}")
-            
-            if added > 0:
-                update_list()
-                messagebox.showinfo("Aggiunto", f"Escluse {added} cartelle di altri utenti")
-        
-        ttk.Button(btn_frame, text="Escludi altri utenti", 
-                command=exclude_other_users).pack(side=LEFT, padx=5)
-        
-        # Pulsanti OK/Annulla
-        dialog_btn_frame = ttk.Frame(main_frame)
-        dialog_btn_frame.pack(fill=X, pady=(10, 0))
-        
-        ttk.Button(dialog_btn_frame, text="OK", command=dialog.destroy).pack(side=RIGHT)
-        
-        # Inizializza la lista
-        update_list()
-
-        # Aggiorna la finestra per ottenere le dimensioni corrette
-        dialog.update_idletasks()
-        
-        # Ottieni le dimensioni della finestra
-        width = dialog.winfo_width()
-        height = dialog.winfo_height()
-        
-        # Calcola la posizione x,y per centrare la finestra
-        screen_width = dialog.winfo_screenwidth()
-        screen_height = dialog.winfo_screenheight()
-        x = (screen_width // 2) - (width // 1)
-        y = (screen_height // 2) - (height // 1)
-        
-        # Imposta la geometria con la posizione calcolata
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # Imposta una dimensione minima per la finestra
-        dialog.minsize(800, 600)
 
     @error_handler
     def restart_as_admin(self):
@@ -8122,6 +7985,70 @@ class FileSearchApp:
 
         ttk.Label(exclusions_frame, text="Aggiungi cartelle da escludere dalla ricerca:", wraplength=700).pack(anchor=W, pady=(0, 10))
 
+        system_exclusions_frame = ttk.Frame(exclusions_frame)
+        system_exclusions_frame.pack(fill=X, pady=5)
+
+        # Definizione dei percorsi di sistema
+        system_paths = [
+            "C:/Windows", 
+            "C:/Program Files", 
+            "C:/Program Files (x86)",
+            "C:/ProgramData",
+            "C:/Users/All Users",
+            "C:/Program Files (x86)/Client Active Directory Rights Management Services"
+        ]
+
+        system_exclusions_var = tk.BooleanVar(value=False)
+
+        # Imposta il valore iniziale della checkbox in base alle esclusioni attuali
+        if hasattr(self, 'excluded_paths') and all(path in self.excluded_paths for path in system_paths):
+            system_exclusions_var.set(True)
+
+        # Funzione per gestire il toggle delle esclusioni di sistema
+        def toggle_system_exclusions():
+            if not hasattr(self, 'excluded_paths'):
+                self.excluded_paths = []
+                
+            if system_exclusions_var.get():
+                # Aggiungi percorsi di sistema
+                added = 0
+                for path in system_paths:
+                    if path not in self.excluded_paths:
+                        self.excluded_paths.append(path)
+                        added += 1
+                
+                # Aggiorna la lista visualizzata
+                if added > 0:
+                    for item in excluded_list.get_children():
+                        excluded_list.delete(item)
+                    for path in self.excluded_paths:
+                        excluded_list.insert("", "end", values=(path,))
+                    messagebox.showinfo("Esclusioni sistema", f"Aggiunti {added} percorsi di sistema alle esclusioni")
+            else:
+                # Rimuovi percorsi di sistema
+                removed = 0
+                for path in system_paths[:]:
+                    if path in self.excluded_paths:
+                        self.excluded_paths.remove(path)
+                        removed += 1
+                
+                # Aggiorna la lista visualizzata
+                if removed > 0:
+                    for item in excluded_list.get_children():
+                        excluded_list.delete(item)
+                    for path in self.excluded_paths:
+                        excluded_list.insert("", "end", values=(path,))
+                    messagebox.showinfo("Esclusioni sistema", f"Rimossi {removed} percorsi di sistema dalle esclusioni")
+
+        # Checkbox per esclusioni di sistema
+        system_check = ttk.Checkbutton(system_exclusions_frame, text="Escludi cartelle di sistema (Windows, Program Files, ecc.)", 
+            variable=system_exclusions_var, command=toggle_system_exclusions)
+        system_check.pack(anchor=W)
+        self.create_tooltip(system_check, 
+                            "Quando selezionato, esclude automaticamente cartelle di sistema come:\n"
+                            "- Windows\n- Program Files\n- ProgramData\n"
+                            "Questo velocizzerà notevolmente le ricerche sui dischi di sistema.")
+
         # Lista dei percorsi esclusi
         list_frame = ttk.Frame(exclusions_frame)
         list_frame.pack(fill=BOTH, expand=YES, pady=5)  # Cambiato expand da NO a YES
@@ -8711,7 +8638,7 @@ class FileSearchApp:
         """Inizializza solo le variabili essenziali per l'avvio"""
         # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
         self.datetime_var = StringVar()
-        
+        self.max_depth = 5
         # Variabili principali per la ricerca
         self.search_content = BooleanVar(value=True)
         self.search_path = StringVar()
