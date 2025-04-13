@@ -170,6 +170,7 @@ class FileSearchApp:
         # Aggiungi questa riga: lista permanente per i log completi dalla creazione dell'app
         self.complete_debug_log_history = []
 
+    @error_handler
     def _init_remaining_variables(self):
         """Inizializza le variabili non essenziali per l'avvio"""
         # Variabili per la ricerca a blocchi
@@ -243,11 +244,13 @@ class FileSearchApp:
         # Aggiorna l'orario
         self.update_datetime()
 
+    @error_handler
     def _delayed_startup_tasks(self):
         """Esegue attività non essenziali all'avvio"""
         # Esegui queste operazioni in background
         threading.Thread(target=self._background_tasks, daemon=True).start()
 
+    @error_handler
     def _background_tasks(self):
         """Esegue operazioni in background"""
         try:
@@ -279,6 +282,7 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore nelle operazioni in background: {str(e)}")
 
+    @error_handler
     def _create_minimal_interface(self):
         """Crea solo i componenti essenziali dell'interfaccia"""
         # Frame principale che conterrà tutto
@@ -311,6 +315,7 @@ class FileSearchApp:
         self.loading_label = ttk.Label(self.results_container, text="Caricamento interfaccia in corso...", font=("", 12))
         self.loading_label.pack(expand=YES, pady=50)
 
+    @error_handler
     def _create_essential_search_controls(self):
         """Crea solo i controlli essenziali per la ricerca"""
         # RIGA 1: Directory di ricerca
@@ -351,6 +356,7 @@ class FileSearchApp:
         # Disabilita il pulsante fino al caricamento completo
         self.search_button["state"] = "disabled"
 
+    @error_handler
     def _create_remaining_widgets(self):
         """Crea il resto dell'interfaccia in background"""
         try:
@@ -386,11 +392,13 @@ class FileSearchApp:
             self.log_debug(f"Errore nel caricamento dell'interfaccia: {str(e)}")
             self.status_label["text"] = "Errore nel caricamento dell'interfaccia"
 
+    @error_handler
     def _check_available_libraries(self):
         """Verifica la disponibilità delle librerie in background senza bloccare l'avvio"""
         # Esegui il controllo in un thread separato
         threading.Thread(target=self._async_check_libraries, daemon=True).start()
 
+    @error_handler
     def _async_check_libraries(self):
         """Controlla le librerie in background senza bloccare l'interfaccia"""
         global file_format_support, missing_libraries
@@ -457,6 +465,7 @@ class FileSearchApp:
         if missing_libraries:
             self.root.after(2000, self.check_and_notify_missing_libraries)
 
+    @error_handler
     def process_file(self, file_path, keywords, search_content=True):
         """Processa un singolo file per verificare corrispondenze"""
         if self.stop_search:
@@ -515,6 +524,7 @@ class FileSearchApp:
                 
         return None
 
+    @error_handler
     def process_file_with_timeout(self, file_path, keywords, search_content=True):
         """Process a file with timeout to prevent hanging"""
         # CORREZIONE: Rilevamento tipo file per ottimizzare timeout
@@ -585,6 +595,7 @@ class FileSearchApp:
             self.log_debug(f"Processing timed out for file: {file_path}")
             return None
 
+    @error_handler
     def process_with_timeout(self, file_path, keywords, result, exception, processing_completed, search_content=True):
         try:
             # Verifica filtri di dimensione
@@ -697,6 +708,7 @@ class FileSearchApp:
         finally:
             processing_completed[0] = True
 
+    @error_handler
     def manage_memory(self):
         """Gestisce l'utilizzo della memoria durante la ricerca per evitare problemi"""
         try:
@@ -758,7 +770,8 @@ class FileSearchApp:
                 gc.collect()
             except:
                 pass  
-
+    
+    @error_handler
     def run_with_timeout(self, func, args=(), kwargs={}, timeout_sec=10):
         """ Esegue una funzione con un timeout, evitando blocchi indefiniti Returns: (result, completed)
             - result: risultato della funzione o None
@@ -782,6 +795,7 @@ class FileSearchApp:
         
         return result[0], completed[0]
     
+    @error_handler
     def _get_all_descendants(self, widget):
         """Ottiene ricorsivamente tutti i widget discendenti"""
         descendants = []
@@ -790,6 +804,7 @@ class FileSearchApp:
             descendants.extend(self._get_all_descendants(child))
         return descendants
     
+    @error_handler
     def disable_all_controls(self):
         """Disabilita tutti i controlli UI durante la ricerca"""
         try:
@@ -839,6 +854,7 @@ class FileSearchApp:
             # Registra l'errore senza interrompere l'esecuzione
             self.log_debug(f"Errore nella disabilitazione dei controlli: {str(e)}")
 
+    @error_handler
     def enable_all_controls(self):
         """Riabilita tutti i controlli UI dopo la ricerca"""
         # Input e campi di testo
@@ -888,7 +904,8 @@ class FileSearchApp:
         # Abilita il pulsante delle opzioni di performance
         if hasattr(self, 'perf_options_btn'):
             self.perf_options_btn["state"] = "normal"
-                
+
+    @error_handler     
     def _disable_checkbuttons_recursive(self, widget):
         """Disabilita ricorsivamente tutte le checkbox nei widget"""
         if isinstance(widget, ttk.Checkbutton):
@@ -898,7 +915,8 @@ class FileSearchApp:
         if hasattr(widget, 'winfo_children'):
             for child in widget.winfo_children():
                 self._disable_checkbuttons_recursive(child)
-                
+    
+    @error_handler
     def _enable_checkbuttons_recursive(self, widget):
         """Riabilita ricorsivamente tutte le checkbox nei widget"""
         if isinstance(widget, ttk.Checkbutton):
@@ -908,7 +926,8 @@ class FileSearchApp:
         if hasattr(widget, 'winfo_children'):
             for child in widget.winfo_children():
                 self._enable_checkbuttons_recursive(child)
-                
+
+    @error_handler     
     def show_content_search_warning(self):
         """Mostra un avviso se la ricerca nei contenuti è attivata"""
         if self.search_content.get():  # Se la checkbox è attivata
@@ -933,6 +952,7 @@ class FileSearchApp:
             )
         return True   # Se la ricerca nei contenuti non è attivata, procedi senza avviso   
     
+    @error_handler
     def log_debug(self, message):
         """Sistema di logging unificato che supporta sia la visualizzazione live che il logging storico
         e filtra i messaggi non necessari e le ripetizioni sulla soglia di memoria.
@@ -1016,6 +1036,7 @@ class FileSearchApp:
         if getattr(self, 'debug_mode', True):  # Default a True se debug_mode non è definito
             print(f"[DEBUG] {message}")
 
+    @error_handler
     def register_interrupt_handler(self):
         """Registra il gestore degli interrupt (CTRL+C)"""
         def handle_interrupt(sig, frame):
@@ -1026,6 +1047,7 @@ class FileSearchApp:
         
         signal.signal(signal.SIGINT, handle_interrupt)
 
+    @error_handler
     def log_error(self, message, exception=None, location=None, traceback=None):
         """Registra un errore nel log di debug con dettagli aggiuntivi"""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1100,6 +1122,7 @@ class FileSearchApp:
             # Non interrompere il flusso dell'applicazione se il salvataggio fallisce
             pass
 
+    @error_handler
     def log_file_processing(self, file_path, content_length=0, found=False, error=None):
         """Log dettagliato dell'elaborazione dei file per debug"""
         ext = os.path.splitext(file_path)[1].lower()
@@ -1116,6 +1139,7 @@ class FileSearchApp:
             
         self.log_debug(message)
 
+    @error_handler
     def check_and_notify_missing_libraries(self):
         """Verifica e notifica l'utente di eventuali librerie mancanti"""
         missing = []
@@ -1143,17 +1167,20 @@ class FileSearchApp:
             # Mostra la notifica dopo un breve ritardo per permettere all'UI di caricarsi
             self.root.after(1000, lambda: messagebox.showinfo("Librerie opzionali mancanti", message))
 
+    @error_handler
     def update_datetime(self):
         current_time = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
         self.datetime_var.set(f"Data: {current_time} | Utente: {self.user_var.get()}")
         self.root.after(1000, self.update_datetime)
 
+    @error_handler
     def browse_directory(self):
         directory = filedialog.askdirectory()
         if directory:
             self.search_path.set(directory)
             self.update_disk_info(directory)
 
+    @error_handler
     def optimize_system_search(self, path):
         """Ottimizza la ricerca per percorsi di sistema come C:/ impostando parametri appropriati"""
         # Riconosci più tipi di percorsi di sistema
@@ -1208,6 +1235,7 @@ class FileSearchApp:
             return original_params
         return None
     
+    @error_handler
     def is_network_path(self, path):
         """Verifica se il percorso è un percorso di rete"""
         # Percorsi UNC Windows (\\server\share)
@@ -1235,6 +1263,7 @@ class FileSearchApp:
                     
         return False
 
+    @error_handler
     def show_optimization_tips(self, path):
         if path.lower() in ["c:/", "c:\\", "d:/", "d:\\", "e:/", "e:\\"] or path in [os.path.abspath("/")]:
             # Determina la lettera del disco corrente
@@ -1332,6 +1361,8 @@ class FileSearchApp:
                 return False
             
             return False  # Per percorsi non di sistema, non fare nulla
+        
+    @error_handler
     def debug_exclusions(self):
         """Visualizza lo stato corrente delle esclusioni per debug"""
         if hasattr(self, 'excluded_paths'):
@@ -1342,6 +1373,7 @@ class FileSearchApp:
         else:
             messagebox.showinfo("Debug esclusioni", "Lista esclusioni non inizializzata")
 
+    @error_handler
     def manage_exclusions(self):
         """Apre una finestra di dialogo per gestire i percorsi esclusi dalla ricerca"""
         if not hasattr(self, 'excluded_paths'):
@@ -1500,6 +1532,7 @@ class FileSearchApp:
         # Imposta una dimensione minima per la finestra
         dialog.minsize(800, 600)
 
+    @error_handler
     def restart_as_admin(self):
         """Riavvia l'applicazione con privilegi di amministratore"""
         try:
@@ -1525,6 +1558,7 @@ class FileSearchApp:
             messagebox.showerror("Errore", f"Impossibile riavviare come amministratore: {str(e)}")
             self.log_debug(f"Errore nel riavvio come admin: {str(e)}")
 
+    @error_handler
     def optimize_disk_search_order(self, path, directories):
         """Ottimizza l'ordine di esplorazione delle directory quando si cerca in un disco di sistema.
         Dà priorità alle cartelle più importanti come Users, Documents, ecc.
@@ -1554,6 +1588,7 @@ class FileSearchApp:
         # Se non è un percorso di sistema, restituisci l'elenco originale
         return directories
 
+    @error_handler
     def start_search(self):
         # Assicurati che qualsiasi ricerca precedente sia completamente terminata
         self.reset_search_state()
@@ -1721,12 +1756,14 @@ class FileSearchApp:
         
         self.log_debug("Ricerca avviata correttamente con pulsante interruzione abilitato")
 
+    @error_handler
     def start_search_watchdog(self):
         """Avvia un timer di controllo per rilevare se la ricerca si è bloccata"""
         self.last_progress_time = time.time()
         self.watchdog_active = True
         self.check_search_progress()
 
+    @error_handler
     def check_search_progress(self):
         """Controlla se la ricerca ha fatto progressi recentemente"""
         if not self.is_searching or not hasattr(self, 'watchdog_active') or not self.watchdog_active:
@@ -1754,7 +1791,7 @@ class FileSearchApp:
         # Controlla di nuovo tra 30 secondi
         self.root.after(30000, self.check_search_progress)
 
-        # Aggiungi questo nuovo metodo per calcolare il tempo totale
+    @error_handler # Aggiungi questo nuovo metodo per calcolare il tempo totale
     def update_total_time(self):
         """Calcola e visualizza il tempo totale trascorso tra inizio e fine ricerca"""
         if self.search_start_time:
@@ -1777,6 +1814,7 @@ class FileSearchApp:
     def change_theme(self, theme):
         self.update_theme_colors(theme)
 
+    @error_handler
     def calculate_block_priority(self, directory):
         """Calcola la priorità del blocco (numerica, più bassa = più alta priorità)"""
         # Se l'opzione è disabilitata, usa priorità standard per tutti
@@ -1796,6 +1834,7 @@ class FileSearchApp:
         # Priorità standard per altre cartelle
         return 2
     
+    @error_handler
     def initialize_block_queue(self, root_path, block_queue, visited_dirs, files_checked, keywords, search_content, futures):
         """Inizializza la coda di blocchi con il percorso principale"""
         try:
@@ -1858,6 +1897,7 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore nell'inizializzazione dei blocchi da {root_path}: {str(e)}")
 
+    @error_handler
     def process_file_batch(self, file_batch, files_checked, last_update_time, 
                       calculation_enabled, keywords, search_content, futures):
         """Processa un batch di file in modo ottimizzato"""
@@ -1916,6 +1956,7 @@ class FileSearchApp:
             except Exception as e:
                 self.log_debug(f"Errore nell'aggiunta del file {file_path} alla coda: {str(e)}")
 
+    @error_handler
     def process_blocks(self, block_queue, visited_dirs, start_time, timeout, is_system_search, 
                 files_checked, dirs_checked, last_update_time, path, keywords, search_content, futures):
         """Elabora i blocchi dalla coda in base alla priorità"""
@@ -2206,7 +2247,8 @@ class FileSearchApp:
                     self.root.update_idletasks()
                 except:
                     pass
-                
+    
+    @error_handler
     # Funzione per calcolare il tempo rimanente stimato
     def calculate_remaining_time(self, files_processed, max_files, elapsed_time):
         """Calcola il tempo rimanente stimato in base al progresso attuale"""
@@ -2238,7 +2280,8 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore nel calcolo del tempo rimanente: {str(e)}")
             return "N/A"
-
+        
+    @error_handler
     def _search_thread(self, path, keywords, search_content):
         try:
             # Inizializza i contatori di file e directory esaminati e il tempo di inizio
@@ -2398,6 +2441,7 @@ class FileSearchApp:
             self.log_debug(error_msg)
             self.progress_queue.put(("error", error_msg))
 
+    @error_handler
     def is_whole_word_match(self, keyword, text):
         """Verifica se la keyword è presente nel testo come parola intera."""
         try:
@@ -2431,7 +2475,8 @@ class FileSearchApp:
                 index = text_lower.find(keyword_lower, index + 1)
             
             return False
-                
+
+    @error_handler  
     def search_current_user_only(self):
         """Imposta la ricerca solo nella cartella dell'utente corrente"""
         user_folder = os.path.join("C:/Users", getpass.getuser())
@@ -2450,6 +2495,7 @@ class FileSearchApp:
         else:
             messagebox.showerror("Errore", "Impossibile trovare la tua cartella utente")
 
+    @error_handler
     def create_file_info(self, file_path, from_attachment=False):
         """Crea le informazioni del file per la visualizzazione"""
         try:
@@ -2524,7 +2570,7 @@ class FileSearchApp:
                 file_path,
                 False  # Default: non è un allegato
             )
-
+    @error_handler
     def create_folder_info(self, folder_path):
         """Crea le informazioni della cartella per la visualizzazione"""
         try:
@@ -2550,7 +2596,8 @@ class FileSearchApp:
                 "N/A",
                 folder_path
             )
-            
+    
+    @error_handler
     def should_search_content(self, file_path):
         """Versione ottimizzata per determinare se analizzare il contenuto del file"""
         # Prima verifica le condizioni più veloci (principio fail-fast)
@@ -2601,6 +2648,7 @@ class FileSearchApp:
         
         return False
 
+    @error_handler
     def should_skip_file(self, file_path):
         """Verifica se un file deve essere saltato durante l'analisi del contenuto"""
         ext = os.path.splitext(file_path)[1].lower()
@@ -2644,6 +2692,7 @@ class FileSearchApp:
                     
         return False
     
+    @error_handler
     def log_skipped_file(self, filepath, skiptype, filename, skipreason):
         """Registra i file saltati in un file di log"""
         try:
@@ -2655,6 +2704,7 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore durante la scrittura del log dei file saltati: {str(e)}")
 
+    @error_handler
     def export_skipped_files_log(self):
         """Esporta il log dei file saltati in un formato CSV"""
         try:
@@ -2727,6 +2777,7 @@ class FileSearchApp:
             messagebox.showerror("Errore", f"Si è verificato un errore durante l'esportazione: {str(e)}")
             self.log_debug(f"Errore nell'esportazione del log: {str(e)}")
 
+    @error_handler
     def view_skipped_files_log(self):
         """Visualizza il log dei file saltati in una finestra separata"""
         try:
@@ -2805,6 +2856,7 @@ class FileSearchApp:
             messagebox.showerror("Errore", f"Si è verificato un errore durante la visualizzazione del log: {str(e)}")
             self.log_debug(f"Errore nella visualizzazione del log: {str(e)}")
 
+    @error_handler
     def get_file_content(self, file_path):
         """Estrae il contenuto testuale dai vari formati di file - versione completa"""
         try:
@@ -4588,7 +4640,8 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore generale nella lettura del file {file_path}: {str(e)}")
             return ""
-        
+    
+    @error_handler
     def process_email_attachment(self, attachment_data, attachment_name, content_type):
         """Process an email attachment and extract its content"""
         temp_dir = None
@@ -4884,7 +4937,8 @@ class FileSearchApp:
                     self.log_debug(f"Directory temporanea rimossa: {temp_dir}")
                 except Exception as e:
                     self.log_debug(f"Errore nella pulizia dei file temporanei: {str(e)}")
-                    
+
+    @error_handler
     def update_progress(self):
         if self.is_searching:
             try:
@@ -5018,7 +5072,8 @@ class FileSearchApp:
             except Exception as e:
                 self.log_debug(f"Errore nell'aggiornamento del progresso: {str(e)}")
                 self.root.after(500, self.update_progress)
-            
+    
+    @error_handler
     def reset_search_state(self):
         """Reimpostazione completa dello stato di ricerca per garantire coerenza"""
         self.log_debug("Reimpostazione dello stato di ricerca")
@@ -5059,6 +5114,7 @@ class FileSearchApp:
         
         self.log_debug("Stato di ricerca reimpostato correttamente")
 
+    @error_handler
     def stop_search_process(self):
         """Ferma il processo di ricerca in corso in modo aggressivo"""
         # Verificare se una ricerca è effettivamente in corso
@@ -5121,6 +5177,7 @@ class FileSearchApp:
         
         self.log_debug("INTERRUZIONE: Processo di interruzione ricerca completato")
     
+    @error_handler
     def _complete_interrupt_process(self):
         """Completa il processo di interruzione ripristinando l'interfaccia"""
         try:
@@ -5135,6 +5192,7 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore nel completamento dell'interruzione: {str(e)}")
 
+    @error_handler
     def update_results_list(self):
         """Aggiorna la lista dei risultati con i risultati trovati"""
         # Pulisci la lista attuale
@@ -5189,7 +5247,8 @@ class FileSearchApp:
             # Opzionalmente, mostra il contenuto del primo risultato
             if hasattr(self, 'auto_preview') and self.auto_preview.get():
                 self.show_file_contents()
-            
+    
+    @error_handler
     def update_total_files_size(self):
         """Calcola e aggiorna la dimensione totale dei file trovati"""
         try:
@@ -5243,6 +5302,7 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Error in update_total_files_size: {str(e)}")
 
+    @error_handler
     def update_selected_files_size(self, event=None):
         """Calcola e visualizza la dimensione totale dei file selezionati"""
         selected_items = self.results_list.selection()
@@ -5281,6 +5341,7 @@ class FileSearchApp:
         else:
             self.selected_files_size_label.config(text="Selezionati: 0 (0 file)")
 
+    @error_handler
     def update_theme_colors(self, theme="light"):
         """Aggiorna i colori del tema per evidenziare cartelle e file"""
         style = ttk.Style()
@@ -5302,6 +5363,7 @@ class FileSearchApp:
             # AGGIUNGI QUI: Nuovo stile per gli allegati
             self.results_list.tag_configure("attachment", background="#464630", foreground="#ffffff")
 
+    @error_handler
     def show_block_options(self):
         """Mostra la finestra di dialogo per le opzioni avanzate di ricerca a blocchi"""
         dialog = ttk.Toplevel(self.root)
@@ -5395,6 +5457,7 @@ class FileSearchApp:
         y = (dialog.winfo_screenheight() // 2) - (height // 2)
         dialog.geometry(f"{width}x{height}+{x}+{y}")
 
+    @error_handler
     def show_performance_options(self):
         """Mostra la finestra di dialogo per le opzioni di performance"""
         dialog = ttk.Toplevel(self.root)
@@ -5535,6 +5598,7 @@ class FileSearchApp:
         y = (dialog.winfo_screenheight() // 2) - (height // 2)
         dialog.geometry(f"{width}x{height}+{x}+{y}")
 
+    @error_handler
     def copy_selected(self):
         """Copia i file selezionati in una directory di destinazione"""
         selected_items = self.results_list.selection()
@@ -5617,6 +5681,7 @@ class FileSearchApp:
             self.progress_bar["value"] = 0
             self.status_label["text"] = "In attesa..."
 
+    @error_handler
     def get_zip_name(self):
         """Mostra una finestra di dialogo personalizzata per richiedere il nome del file ZIP"""
         dialog = ttk.Toplevel(self.root)
@@ -6290,6 +6355,7 @@ class FileSearchApp:
             self.progress_bar["value"] = 0
             self.status_label["text"] = "In attesa..."
 
+    @error_handler
     def _find_common_base_path(self, selected_items):
         """Trova il percorso base comune a tutti i file selezionati"""
         if not selected_items:
@@ -6344,7 +6410,8 @@ class FileSearchApp:
             base_path = self.search_path.get()
         
         return base_path
-            
+    
+    @error_handler
     def get_directory_size(self, path):
         """Calculate the total size of a directory"""
         if not os.path.exists(path):
@@ -6394,7 +6461,8 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Error calculating directory size for {path}: {str(e)}")
             return 0
-        
+    
+    @error_handler
     def get_directory_size_system(self, path):
         """Utilizza comandi di sistema per ottenere dimensioni di directory molto grandi"""
         try:
@@ -6413,7 +6481,8 @@ class FileSearchApp:
             self.log_debug(f"Errore nel calcolo della dimensione tramite comando di sistema: {str(e)}")
             # Fallback al metodo standard
             return self.get_directory_size(path)
-        
+    
+    @error_handler
     def estimate_directory_size(self, path, sample_size=100):
         """Stima la dimensione di una directory campionando alcuni file"""
         import random
@@ -6470,7 +6539,7 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore nella stima della dimensione: {str(e)}")
             return 0
-     
+    @error_handler
     def get_disk_space(self, path):
         """Get disk space information for the partition containing the path"""
         if not os.path.exists(path):
@@ -6486,6 +6555,7 @@ class FileSearchApp:
             self.log_debug(f"Error getting disk space for {path}: {str(e)}")
             return (0, 0, 0)
 
+    @error_handler
     def update_disk_info(self, path=None, calculate_dir_size=True):
         """Aggiorna le informazioni sul disco e sulla directory"""
         if path is None:
@@ -6531,7 +6601,8 @@ class FileSearchApp:
         
         # Se arriviamo qui, il calcolo è abilitato e dobbiamo procedere
         self._async_update_disk_info(path, calculate_dir_size)
-        
+    
+    @error_handler
     def _update_disk_info_thread(self, path, calculate_dir_size):
         """Thread per calcolare le informazioni del disco"""
         try:
@@ -6576,6 +6647,7 @@ class FileSearchApp:
             self.log_debug(f"Errore nell'avvio del calcolo dimensione directory: {str(e)}")
             self.root.after(0, lambda: self.dir_size_var.set("Errore"))
 
+    @error_handler
     def _async_update_disk_info(self, path, calculate_dir_size):
         """Esegue il calcolo delle informazioni del disco in background"""
         try:
@@ -6613,7 +6685,8 @@ class FileSearchApp:
             self._calculate_dir_size_thread(path)
         else:
             self.root.after(0, lambda: self.dir_size_var.set("Calcolo disattivato"))
-        
+    
+    @error_handler
     def _calculate_dir_size_thread(self, path):
         """Thread function to calculate directory size"""
         # Limita il carico di lavoro per evitare blocchi del sistema
@@ -6648,6 +6721,7 @@ class FileSearchApp:
                 self.root.after(0, lambda: self.dir_size_var.set("Errore"))
                 self.root.after(0, lambda: self.status_label.config(text="In attesa...") if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
 
+    @error_handler
     def refresh_directory_size(self):
         """Aggiorna manualmente il calcolo della dimensione della directory"""
         # Ottieni il percorso corrente
@@ -6677,7 +6751,7 @@ class FileSearchApp:
         # Esegui il calcolo in un thread separato
         threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True).start()
 
-    # Funzione helper per formattare la dimensione del file
+    @error_handler # Funzione helper per formattare la dimensione del file
     def _format_size(self, size_bytes):
         """Formatta la dimensione del file in modo leggibile"""
         if size_bytes < 1024:
@@ -6689,6 +6763,7 @@ class FileSearchApp:
         else:
             return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
     
+    @error_handler
     def calculate_file_hash(self, file_path, algorithms=None):
         """Calcola gli hash di un file usando gli algoritmi specificati :param file_path: Percorso del file
         :param algorithms: Lista degli algoritmi da usare ('md5', 'sha1', 'sha256'):return: Dizionario con gli hash calcolati"""
@@ -6729,7 +6804,7 @@ class FileSearchApp:
         
         return results
 
-    # Funzione helper per determinare il tipo di file
+    @error_handler # Funzione helper per determinare il tipo di file
     def _get_file_type(self, file_path):
         """Determina il tipo di file in base all'estensione"""
         ext = os.path.splitext(file_path)[1].lower()
@@ -6755,6 +6830,7 @@ class FileSearchApp:
         else:
             return "File"
     
+    @error_handler
     def get_main_folder_name(self):
         """Mostra una finestra di dialogo personalizzata per richiedere il nome della cartella principale"""
         dialog = tk.Toplevel(self.root)
@@ -6825,6 +6901,7 @@ class FileSearchApp:
         
         return result["name"]
     
+    @error_handler
     def open_file_location(self, event=None):
         """Apre il percorso del file selezionato nel file explorer"""
             
@@ -6863,6 +6940,7 @@ class FileSearchApp:
             messagebox.showerror("Errore", f"Impossibile aprire il percorso: {str(e)}")
             self.log_debug(f"Errore nell'apertura del percorso: {str(e)}")
 
+    @error_handler
     def show_advanced_filters_dialog(self):
         """Mostra la finestra di dialogo per i filtri di ricerca avanzati"""
         dialog = ttk.Toplevel(self.root)
@@ -6986,6 +7064,7 @@ class FileSearchApp:
         # Imposta una dimensione minima per la finestra
         dialog.minsize(500, 400)
 
+    @error_handler
     def configure_extensions(self, mode="base"):
         """Dialog to configure file extensions for different search modes"""
         dialog = ttk.Toplevel(self.root)
@@ -7321,7 +7400,8 @@ class FileSearchApp:
             
             # Initial focus
             notebook.select(0)  # Focus first tab
-        
+    
+    @error_handler
     def get_default_extensions(self, mode="base"):
         """Get default extensions for the specified search mode"""
         if mode == "base":
@@ -7356,7 +7436,8 @@ class FileSearchApp:
             return base_exts + [ext for ext in advanced_only if ext not in base_exts]
         else:  # profonda
             return []  # Il valore effettivo viene determinato in configure_extensions
-        
+    
+    @error_handler
     def get_extension_settings(self, mode="base"):
         """Load saved extension settings for the specified search mode"""
         if not hasattr(self, 'extension_settings'):
@@ -7381,7 +7462,7 @@ class FileSearchApp:
         self.log_debug(f"Estensioni caricate per modalità {mode}: {', '.join(extensions)}")
         return extensions
         
-
+    @error_handler
     def save_extension_settings(self, mode, extensions):
         """Save extension settings for the specified search mode"""
         if not hasattr(self, 'extension_settings'):
@@ -7406,7 +7487,8 @@ class FileSearchApp:
             
         # Qui potresti aggiungere codice per salvare le impostazioni su file
         self.save_settings_to_file()
-        
+    
+    @error_handler
     def save_settings_to_file(self):
         """Salva le impostazioni delle estensioni su un file"""
         try:
@@ -7428,7 +7510,8 @@ class FileSearchApp:
             self.log_debug(f"Impostazioni estensioni salvate in {settings_file}")
         except Exception as e:
             self.log_debug(f"Errore nel salvataggio delle impostazioni: {str(e)}")
-            
+    
+    @error_handler
     def load_settings_from_file(self):
         """Carica le impostazioni delle estensioni da un file"""
         try:
@@ -7459,6 +7542,7 @@ class FileSearchApp:
                 "profonda": self.get_default_extensions("profonda")
             }
 
+    @error_handler
     def create_widgets(self):
         # Frame principale che conterrà tutto
         main_container = ttk.Frame(self.root)
@@ -7851,6 +7935,7 @@ class FileSearchApp:
         # Auto-focus sull'entry del percorso all'avvio
         self.path_entry.focus_set()
 
+    @error_handler
     def show_advanced_options(self):
         """Mostra una finestra di dialogo unificata per tutte le opzioni avanzate"""
         dialog = ttk.Toplevel(self.root)
@@ -8369,6 +8454,7 @@ class FileSearchApp:
         y = (dialog.winfo_screenheight() // 2) - (height // 2)
         dialog.geometry(f"{width}x{height}+{x}+{y}")
     
+    @error_handler
     def create_tooltip(self, widget, text, delay=500, fade=True):
         """Crea tooltip con ritardo, effetti di dissolvenza e larghezza automatica"""
         
@@ -8506,7 +8592,8 @@ class FileSearchApp:
         
     def deselect_all(self):
         self.results_list.selection_remove(self.results_list.get_children())
-        
+
+    @error_handler   
     def invert_selection(self):
         all_items = self.results_list.get_children()
         selected_items = self.results_list.selection()
@@ -8514,7 +8601,8 @@ class FileSearchApp:
         to_select = set(all_items) - set(selected_items)
         for item in to_select:
             self.results_list.selection_add(item)
-            
+    
+    @error_handler
     def treeview_sort_column(self, tv, col, reverse):
         """Ordina il TreeView in base alla colonna cliccata"""
         # Ottieni la lista di item con i loro valori
@@ -8577,7 +8665,7 @@ class FileSearchApp:
                 # Rimuovi eventuali indicatori di ordinamento da altre colonne
                 tv.heading(c, text=tv.heading(c, 'text').split(' ')[0])
 
-    # Add this to the FileSearchApp class to track log messages
+    @error_handler # Add this to the FileSearchApp class to track log messages
     def _init_essential_variables(self):
         """Inizializza solo le variabili essenziali per l'avvio"""
         # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
@@ -8614,7 +8702,7 @@ class FileSearchApp:
         # Add a queue for debug logs
         self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
         
-    # Show debug log window with export functionality
+    @error_handler # Show debug log window with export functionality
     def show_debug_log(self):
         """Displays a window with debug logs and export functionality"""
         if not hasattr(self, 'debug_window') or not self.debug_window.winfo_exists():
@@ -8722,6 +8810,7 @@ class FileSearchApp:
             # Aggiorna il contenuto
             self.update_log_display()
 
+    @error_handler
     def update_log_display(self):
         """Aggiorna la visualizzazione dei log nella finestra di debug"""
         if hasattr(self, 'debug_window') and hasattr(self, 'debug_text') and self.debug_window.winfo_exists():
@@ -8789,6 +8878,7 @@ class FileSearchApp:
             # Rendi il testo di nuovo sola lettura
             self.debug_text.config(state=tk.DISABLED)
 
+    @error_handler
     def clear_log(self):
         """Pulisce la visualizzazione del log"""
         if hasattr(self, 'debug_text') and self.debug_text.winfo_exists():
@@ -8797,6 +8887,7 @@ class FileSearchApp:
             self.debug_text.insert(tk.END, "Log cancellato. I nuovi messaggi appariranno qui.")
             self.debug_text.config(state=tk.DISABLED)
 
+    @error_handler
     def export_log_to_txt(self):
         """Esporta il log completo in un file di testo"""
         # Chiedi all'utente dove salvare il file
@@ -8835,6 +8926,7 @@ class FileSearchApp:
             tk.messagebox.showerror("Errore esportazione", 
                             f"Si è verificato un errore durante l'esportazione:\n{str(e)}")
 
+    @error_handler
     def highlight_errors(self):
         """Evidenzia le righe di errore nel log con colore rosso"""
         if hasattr(self, 'debug_text'):
@@ -8859,7 +8951,7 @@ class FileSearchApp:
             # Configura il tag "error" per mostrare il testo in rosso
             self.debug_text.tag_config("error", foreground="#ff6b6b")
 
-# Funzione principale per eseguire l'applicazione
+@error_handler # Funzione principale per eseguire l'applicazione
 def main():
     import sys
     
