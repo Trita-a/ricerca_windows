@@ -2778,6 +2778,7 @@ class FileSearchApp:
             self.log_debug(f"Errore nell'esportazione del log: {str(e)}")
 
     @error_handler
+    @error_handler
     def view_skipped_files_log(self):
         """Visualizza il log dei file saltati in una finestra separata"""
         try:
@@ -2840,7 +2841,10 @@ class FileSearchApp:
             
             ttk.Button(btn_frame, text="Esporta CSV", 
                     command=self.export_skipped_files_log).pack(side=LEFT)
-                    
+            
+            ttk.Button(btn_frame, text="Svuota Log", 
+                    command=self.clear_skipped_files_log).pack(side=LEFT, padx=5)
+            
             ttk.Button(btn_frame, text="Chiudi", 
                     command=log_window.destroy).pack(side=RIGHT)
                     
@@ -2855,6 +2859,43 @@ class FileSearchApp:
         except Exception as e:
             messagebox.showerror("Errore", f"Si è verificato un errore durante la visualizzazione del log: {str(e)}")
             self.log_debug(f"Errore nella visualizzazione del log: {str(e)}")
+
+    @error_handler
+    def clear_skipped_files_log(self):
+        """Svuota il log dei file esclusi"""
+        try:
+            # Verifica se il file di log esiste
+            if not os.path.exists(self.skipped_files_log_path):
+                messagebox.showinfo("Informazione", "Non ci sono file di log da cancellare.")
+                return
+                
+            # Svuota il file di log
+            open(self.skipped_files_log_path, 'w', encoding='utf-8').close()
+            
+            # Reinizializza la lista dei file saltati
+            self.skipped_files = []
+            
+            # Fornisci feedback all'utente
+            messagebox.showinfo("Operazione completata", "Il log dei file esclusi è stato svuotato con successo.")
+            
+            # Se la finestra di log è attualmente aperta, aggiornala per mostrare il log vuoto
+            for widget in self.root.winfo_children():
+                if isinstance(widget, tk.Toplevel) and widget.winfo_exists():
+                    # Cerca il widget Text nel toplevel
+                    for child in widget.winfo_children():
+                        if isinstance(child, ttk.Frame):  # main_frame
+                            for frame in child.winfo_children():
+                                if isinstance(frame, ttk.Frame):  # text_frame
+                                    for text_widget in frame.winfo_children():
+                                        if isinstance(text_widget, tk.Text):
+                                            text_widget.config(state="normal")
+                                            text_widget.delete("1.0", tk.END)
+                                            text_widget.config(state="disabled")
+                                            return
+            
+        except Exception as e:
+            messagebox.showerror("Errore", f"Si è verificato un errore durante la cancellazione del log: {str(e)}")
+            self.log_debug(f"Errore nella cancellazione del log: {str(e)}")
 
     @error_handler
     def get_file_content(self, file_path):
@@ -8951,7 +8992,7 @@ class FileSearchApp:
             # Configura il tag "error" per mostrare il testo in rosso
             self.debug_text.tag_config("error", foreground="#ff6b6b")
 
-@error_handler # Funzione principale per eseguire l'applicazione
+# Funzione principale per eseguire l'applicazione
 def main():
     import sys
     
