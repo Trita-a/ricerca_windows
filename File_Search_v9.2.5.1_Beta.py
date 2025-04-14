@@ -5482,10 +5482,11 @@ class FileSearchApp:
         timeout_spinbox = ttk.Spinbox(timeout_frame, from_=10, to=3600, width=10, textvariable=self.timeout_seconds)
         timeout_spinbox.pack(anchor=tk.W, padx=5, pady=5)
         
-        # Sezione: Gestione memoria (NUOVO CODICE)
+        # Sezione: Gestione memoria
         memory_frame = ttk.LabelFrame(main_frame, text="Gestione memoria", padding=10)
         memory_frame.pack(fill=tk.X, pady=5)
         
+        # Usa getattr per ottenere i valori attuali o i default se non esistono
         auto_memory_var = tk.BooleanVar(value=getattr(self, 'auto_memory_management', True))
         memory_percent_var = tk.IntVar(value=getattr(self, 'memory_usage_percent', 75))
         
@@ -5515,11 +5516,17 @@ class FileSearchApp:
         
         def update_memory_details():
             percent = memory_percent_var.get()
-            total_ram = psutil.virtual_memory().total / (1024 ** 3)
-            ram_usage = total_ram * (percent / 100)
-            memory_details_label.config(
-                text=f"RAM utilizzabile: {ram_usage:.2f} GB di {total_ram:.2f} GB totali"
-            )
+            try:
+                total_ram = psutil.virtual_memory().total / (1024 ** 3)
+                ram_usage = total_ram * (percent / 100)
+                memory_details_label.config(
+                    text=f"RAM utilizzabile: {ram_usage:.2f} GB di {total_ram:.2f} GB totali"
+                )
+            except Exception as e:
+                memory_details_label.config(
+                    text="Errore nel calcolo della RAM. Assicurati che psutil sia installato."
+                )
+                self.log_debug(f"Errore nel calcolo della RAM: {e}")
         
         memory_percent_var.trace("w", lambda *args: update_memory_details())
         memory_details_label = ttk.Label(memory_frame, text="")
@@ -5533,6 +5540,14 @@ class FileSearchApp:
         button_frame.pack(fill=tk.X, pady=10)
         
         def restore_defaults():
+            # Memorizza i valori attuali per il log
+            old_dir_size_calc = self.dir_size_calculation.get()
+            old_timeout_enabled = self.timeout_enabled.get()
+            old_timeout_seconds = self.timeout_seconds.get()
+            old_auto_memory = getattr(self, 'auto_memory_management', True)
+            old_memory_percent = getattr(self, 'memory_usage_percent', 75)
+            
+            # Imposta i valori predefiniti
             self.dir_size_calculation.set("disabilitato")
             self.timeout_enabled.set(False)
             self.timeout_seconds.set(3600)
@@ -5540,16 +5555,75 @@ class FileSearchApp:
             self.max_results.set(50000)
             self.worker_threads.set(min(8, os.cpu_count() or 4))
             self.max_file_size_mb.set(100)
-            self.use_indexing.set(True)
-            self.skip_permission_errors.set(True)
+            self.use_indexing.set(True) if hasattr(self, 'use_indexing') else None
+            self.skip_permission_errors.set(True) if hasattr(self, 'skip_permission_errors') else None
+            
+            # Imposta valori predefiniti per la memoria
             auto_memory_var.set(True)
             memory_percent_var.set(75)
+            self.auto_memory_management = True
+            self.memory_usage_percent = 75
+            
+            # Aggiorna l'interfaccia
             update_memory_details()
             toggle_memory_slider()
+            
+            # Log delle modifiche
+            self.log_debug("===== RIPRISTINO VALORI PREDEFINITI PERFORMANCE =====")
+            self.log_debug(f"Modalità calcolo dimensioni: '{old_dir_size_calc}' -> 'disabilitato'")
+            self.log_debug(f"Timeout attivo: {old_timeout_enabled} -> False")
+            self.log_debug(f"Secondi timeout: {old_timeout_seconds} -> 3600")
+            self.log_debug(f"Gestione memoria automatica: {old_auto_memory} -> True")
+            self.log_debug(f"Percentuale utilizzo memoria: {old_memory_percent}% -> 75%")
+            
+            # Salva le impostazioni su file
+            if hasattr(self, 'save_settings_to_file'):
+                self.save_settings_to_file()
+                self.log_debug("Valori predefiniti salvati su file permanente")
+            
+            messagebox.showinfo("Impostazioni", "Valori predefiniti ripristinati con successo!")
+        
+        def save_settings():
+            # Memorizza i valori precedenti per il log
+            old_dir_size_calc = self.dir_size_calculation.get()
+            old_timeout_enabled = self.timeout_enabled.get()
+            old_timeout_seconds = self.timeout_seconds.get()
+            old_auto_memory = getattr(self, 'auto_memory_management', True)
+            old_memory_percent = getattr(self, 'memory_usage_percent', 75)
+            
+            # Salva le impostazioni in memoria
+            self.dir_size_calculation.set(dir_size_combo.get())
+            self.timeout_enabled.set(timeout_check.instate(['selected']))
+            self.timeout_seconds.set(int(timeout_spinbox.get()))
+            
+            # Salva le impostazioni di gestione della memoria
+            self.auto_memory_management = auto_memory_var.get()
+            self.memory_usage_percent = memory_percent_var.get()
+            
+            # Log delle modifiche
+            self.log_debug("===== MODIFICA IMPOSTAZIONI PERFORMANCE =====")
+            self.log_debug(f"Modalità calcolo dimensioni: '{old_dir_size_calc}' -> '{self.dir_size_calculation.get()}'")
+            self.log_debug(f"Timeout attivo: {old_timeout_enabled} -> {self.timeout_enabled.get()}")
+            self.log_debug(f"Secondi timeout: {old_timeout_seconds} -> {self.timeout_seconds.get()}")
+            self.log_debug(f"Gestione memoria automatica: {old_auto_memory} -> {self.auto_memory_management}")
+            self.log_debug(f"Percentuale utilizzo memoria: {old_memory_percent}% -> {self.memory_usage_percent}%")
+            
+            # Salva le impostazioni su file
+            if hasattr(self, 'save_settings_to_file'):
+                self.save_settings_to_file()
+                self.log_debug("Impostazioni performance salvate su file permanente")
+            else:
+                self.log_debug("AVVISO: Metodo save_settings_to_file non disponibile, salvataggio permanente non effettuato")
+            
+            self.log_debug("===== FINE MODIFICA IMPOSTAZIONI PERFORMANCE =====")
+            messagebox.showinfo("Impostazioni", "Opzioni di performance salvate con successo!")
+            dialog.destroy()
         
         ttk.Button(button_frame, text="Valori predefiniti", command=restore_defaults).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Chiudi", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Annulla", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Salva", command=save_settings).pack(side=tk.RIGHT, padx=5)
         
+        # Centra la finestra
         dialog.update_idletasks()
         width = dialog.winfo_width()
         height = dialog.winfo_height()
@@ -8446,6 +8520,10 @@ class FileSearchApp:
                 old_date_max = self.advanced_filters["date_max"]
                 old_extensions = self.advanced_filters.get("extensions", [])
                 
+                # Memorizza i valori precedenti di gestione memoria
+                old_auto_memory = getattr(self, 'auto_memory_management', True)
+                old_memory_percent = getattr(self, 'memory_usage_percent', 75)
+                
                 # Inizializzazione sicura per excluded_paths
                 if hasattr(self, 'excluded_paths') and self.excluded_paths is not None:
                     old_excluded_paths = self.excluded_paths.copy()
@@ -8504,6 +8582,10 @@ class FileSearchApp:
                 self.max_file_size_mb.set(max_size_mb_var.get())
                 self.dir_size_calculation.set(dir_size_calc_var.get())
                 
+                # Salva le opzioni di gestione della memoria
+                self.auto_memory_management = auto_memory_var.get()
+                self.memory_usage_percent = memory_percent_var.get()
+                
                 # Log delle modifiche
                 self.log_debug(f"Profondità ricerca: {old_depth} -> {self.max_depth}")
                 self.log_debug(f"Cerca nei file: {old_search_files} -> {self.search_files.get()}")
@@ -8515,6 +8597,9 @@ class FileSearchApp:
                 self.log_debug(f"Data min: '{old_date_min}' -> '{self.advanced_filters['date_min']}'")
                 self.log_debug(f"Data max: '{old_date_max}' -> '{self.advanced_filters['date_max']}'")
 
+                # Log delle modifiche alla gestione memoria
+                self.log_debug(f"Gestione memoria automatica: {old_auto_memory} -> {self.auto_memory_management}")
+                self.log_debug(f"Percentuale utilizzo memoria: {old_memory_percent}% -> {self.memory_usage_percent}%")
                 
                 # Log percorsi esclusi
                 added_paths = [p for p in self.excluded_paths if p not in old_excluded_paths]
