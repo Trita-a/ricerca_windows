@@ -76,7 +76,7 @@ file_format_support = {
 class FileSearchApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V9.2.4 Beta Forensics G.di F.")
+        self.root.title("File Search Tool V9.2.5 Beta Forensics G.di F.")
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
@@ -7286,24 +7286,24 @@ class FileSearchApp:
                 # Refresh the UI to reflect the new settings
                 self.log_debug(f"Aggiornate le estensioni per la modalità {mode} ({len(selected_extensions)} estensioni)")
         
-            # Buttons
-            ttk.Button(btn_frame, text="Seleziona tutti", command=select_all).pack(side=LEFT, padx=5)
-            ttk.Button(btn_frame, text="Deseleziona tutti", command=deselect_all).pack(side=LEFT, padx=5)
-            ttk.Button(btn_frame, text="Ripristina default", command=restore_defaults).pack(side=LEFT, padx=5)
-            
-            ttk.Button(btn_frame, text="Annulla", command=dialog.destroy).pack(side=RIGHT, padx=5)
-            ttk.Button(btn_frame, text="Salva", command=save_settings).pack(side=RIGHT, padx=5)
-            
-            # Center the dialog on screen
-            dialog.update_idletasks()
-            width = dialog.winfo_width()
-            height = dialog.winfo_height()
-            x = (dialog.winfo_screenwidth() // 2) - (width // 2)
-            y = (dialog.winfo_screenheight() // 2) - (height // 2)
-            dialog.geometry(f"{width}x{height}+{x}+{y}")
-            
-            # Initial focus
-            notebook.select(0)  # Focus first tab
+        # Buttons
+        ttk.Button(btn_frame, text="Seleziona tutti", command=select_all).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="Deseleziona tutti", command=deselect_all).pack(side=LEFT, padx=5)
+        ttk.Button(btn_frame, text="Ripristina default", command=restore_defaults).pack(side=LEFT, padx=5)
+        
+        ttk.Button(btn_frame, text="Annulla", command=dialog.destroy).pack(side=RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Salva", command=save_settings).pack(side=RIGHT, padx=5)
+        
+        # Center the dialog on screen
+        dialog.update_idletasks()
+        width = dialog.winfo_width()
+        height = dialog.winfo_height()
+        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+        y = (dialog.winfo_screenheight() // 2) - (height // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Initial focus
+        notebook.select(0)  # Focus first tab
     
     @error_handler
     def get_default_extensions(self, mode="base"):
