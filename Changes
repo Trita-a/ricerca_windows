@@ -143,14 +143,14 @@ V 9.4.5
 -Migliore gestione dei percorsi di rete: rileva e ottimizza automaticamente i percorsi di rete.
 -Interfaccia utente più reattiva: meccanismo di aggiornamento dell'interfaccia utente migliorato per mantenerla reattiva durante le ricerche intensive.
 -Ottimizzazione della memoria: gestione della memoria più aggressiva per prevenire problemi di memoria insufficiente.
--Soglia di attivazione della pulizia memoria:Basandoci sul calcolo, possiamo dedurre che un sistema che ha circa 3.92GB di RAM 
+-Soglia di attivazione della pulizia memoria, Esempio: Basandoci sul calcolo, possiamo dedurre che un sistema che ha circa 3.92GB di RAM 
     utilizzabile (980MB è il 25% di 3.92GB, limitato al tetto massimo di 1GB).
     Quando l'applicazione raggiunge questo utilizzo di memoria (980MB nell'esempio precedente), 
-    verrà attivato automaticamente il processo di garbage collection.
+    verrà attivato automaticamente il processo di Garbage Collection.
 -Prioritizzazione intelligente dei percorsi: migliore prioritizzazione delle cartelle utente per trovare più velocemente i risultati pertinenti.
 -Ottimizzazione del timeout: impostazioni di timeout più intelligenti per diversi tipi di file.
 -Elaborazione batch: elabora i file in batch ottimizzati per prestazioni migliori.
--Debug Log: miglioramenti nella registrazione dei log
+-Debug Log: miglioramenti nella registrazione dei log con aggiunta del wrapper
 -Queste ottimizzazioni dovrebbero migliorare significativamente le prestazioni di ricerca su unità di sistema e percorsi di rete, mantenendo al contempo 
         la struttura dell'interfaccia utente e l'esperienza utente esistenti.
 -Bug fix sulla compressione
