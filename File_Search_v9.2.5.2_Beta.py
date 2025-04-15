@@ -577,6 +577,7 @@ class FileSearchApp:
         is_large_file = False
         is_binary_file = False
         is_network_file = False
+        is_email_file = False  # Nuovo flag per file email
         
         try:
             # Identifica se il file è su un percorso di rete
@@ -595,6 +596,10 @@ class FileSearchApp:
                 binary_extensions = ['.exe', '.dll', '.bin', '.obj', '.o', '.so', '.lib', '.sys', '.ocx']
                 if ext in binary_extensions:
                     is_binary_file = True
+                    
+                # Identifica file email che possono avere allegati
+                if ext.lower() in ['.msg', '.eml']:
+                    is_email_file = True
         except:
             pass
         
@@ -606,153 +611,170 @@ class FileSearchApp:
             timeout += 5.0  # +5 secondi per file grandi
         if is_binary_file:
             timeout = min(timeout, 3.0)  # Limita a 3 secondi per file binari
+        if is_email_file:
+            timeout += 15.0  # Incremento significativo per file email con allegati
         
-        # CORREZIONE: Usa sistema a coda per i risultati invece di variabili condivise
-        result_queue = queue.Queue()
-        exception_queue = queue.Queue()
-        completion_flag = threading.Event()
+        # Manteniamo liste invece di code per compatibilità
+        result = [None]
+        exception = [None]
+        processing_completed = [False]
         
-        # Create a thread to process the file
-        def process_thread():
-            try:
-                result = self.process_file(file_path, keywords, search_content)
-                result_queue.put(result)
-            except Exception as e:
-                exception_queue.put(e)
-            finally:
-                completion_flag.set()
+        thread = threading.Thread(
+            target=self.process_with_timeout,
+            args=(file_path, keywords, result, exception, processing_completed, search_content)
+        )
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout)
         
-        process_thread = threading.Thread(target=process_thread)
-        process_thread.daemon = True
-        process_thread.start()
-        
-        # Wait for the specified timeout
-        completion = completion_flag.wait(timeout)
-        
-        if completion:
-            # Processing completed normally
-            if not exception_queue.empty():
-                exception = exception_queue.get()
-                self.log_debug(f"Eccezione nell'elaborazione del file {file_path}: {str(exception)}")
-                return None
-            return result_queue.get() if not result_queue.empty() else None
-        else:
-            # Processing timed out
+        # Se il thread è ancora in esecuzione ma abbiamo superato il timeout
+        if not processing_completed[0] and thread.is_alive():
             self.log_debug(f"Processing timed out for file: {file_path}")
-            return None
+            
+            # PARTE NUOVA: Gestione dei risultati tardivi per file email
+            if is_email_file:
+                def check_late_results():
+                    if processing_completed[0] or not thread.is_alive():
+                        # Il thread ha terminato, controlla se ci sono nuovi risultati
+                        if result[0] is not None:
+                            self.log_debug(f"Risultati tardivi trovati in: {file_path} - Aggiornamento UI")
+                            # Aggiungi i risultati tardivi alla UI
+                            self.add_search_result(result[0])  # Sostituisci con il tuo metodo
+                            self.update_results_list()  # Aggiorna la UI
+                    else:
+                        # Il thread sta ancora lavorando, ricontrolla più tardi
+                        self.root.after(1000, check_late_results)
+                
+                # Inizia a controllare i risultati tardivi
+                self.root.after(2000, check_late_results)
+        
+        if exception[0]:
+            raise exception[0]
+        
+        return result[0] if result[0] is not None else []
 
     @error_handler
-    def process_with_timeout(self, file_path, keywords, result, exception, processing_completed, search_content=True):
+    def process_file_with_timeout(self, file_path, keywords, search_content=True):
+        """Process a file with timeout to prevent hanging"""
+        # CORREZIONE: Rilevamento tipo file per ottimizzare timeout
+        is_large_file = False
+        is_binary_file = False
+        is_network_file = False
+        is_email_file = False  # Nuovo flag per file email
+        
         try:
-            # Verifica filtri di dimensione
-            file_size = os.path.getsize(file_path)
-            if (self.advanced_filters["size_min"] > 0 and file_size < self.advanced_filters["size_min"]) or \
-            (self.advanced_filters["size_max"] > 0 and file_size > self.advanced_filters["size_max"]):
-                result[0] = None
-                return
-            
-            # Verifica filtri di data
-            if self.advanced_filters["date_min"] or self.advanced_filters["date_max"]:
-                mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+            # Identifica se il file è su un percorso di rete
+            if file_path.startswith('\\\\') or file_path.startswith('//'):
+                is_network_file = True
                 
-                if self.advanced_filters["date_min"]:
-                    min_date = datetime.strptime(self.advanced_filters["date_min"], "%d-%m-%Y")
-                    if mod_time < min_date:
-                        result[0] = None
-                        return
-                        
-                if self.advanced_filters["date_max"]:
-                    max_date = datetime.strptime(self.advanced_filters["date_max"], "%d-%m-%Y")
-                    if mod_time > max_date:
-                        result[0] = None
-                        return
-            
-            # Verifica filtri estensione
-            if self.advanced_filters["extensions"] and not any(file_path.lower().endswith(ext.lower()) 
-                                                        for ext in self.advanced_filters["extensions"]):
-                result[0] = None
-                return
-                
-            if os.path.splitext(file_path)[1].lower() in ['.doc', '.xls']:
-                self.progress_queue.put(("progress", self.progress_bar["value"]))  # Forza aggiornamento
-                
-            # Verifica corrispondenza nel nome file
-            filename = os.path.basename(file_path)
-
-            matched = False
-            for keyword in keywords:
-                # Verifica se la ricerca di parole intere è attivata
-                if self.whole_word_search.get():
-                    # Gestisce anche frasi con spazi usando la nuova funzione helper
-                    if self.is_whole_word_match(keyword, filename):
-                        matched = True
-                        break
-                # Se è un termine con spazi (contesto specifico)
-                elif ' ' in keyword:
-                    if keyword.lower() in filename.lower():
-                        matched = True
-                        break
-                # Ricerca normale
-                else:
-                    if keyword.lower() in filename.lower():
-                        matched = True
-                        break
-            
-            if matched:
-                if self.debug_mode and self.whole_word_search.get():
-                    self.log_debug(f"Trovata corrispondenza per parola intera: '{keyword}' nel nome del file {os.path.basename(file_path)}")
-                result[0] = self.create_file_info(file_path)
-                return
-            
-            # Verifica contenuto se richiesto
-            if search_content and self.should_search_content(file_path):
-                max_size_bytes = self.max_file_size_mb.get() * 1024 * 1024
-                
-                # Salta file troppo grandi
-                if file_size > max_size_bytes:
-                    self.log_debug(f"File {file_path} troppo grande per l'analisi del contenuto")
-                    result[0] = None
-                    return
+            # Verifica la dimensione e imposta un flag per i file grandi
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+                # File sopra 5MB sono considerati grandi
+                if file_size > 5 * 1024 * 1024:
+                    is_large_file = True
                     
-                content = self.get_file_content(file_path)
-                if content:
-                    matched = False
-                    for keyword in keywords:
-                        # Verifica se la ricerca di parole intere è attivata
-                        if self.whole_word_search.get():
-                            # Gestisce anche frasi con spazi usando la nuova funzione helper
-                            if self.is_whole_word_match(keyword, content):
-                                matched = True
-                                break
-                        # Se è un termine con spazi (contesto specifico)
-                        elif ' ' in keyword:
-                            if keyword.lower() in content.lower():
-                                matched = True
-                                break
-                        # Ricerca normale
-                        else:
-                            if keyword.lower() in content.lower():
-                                matched = True
-                                break
-                                
-                    if matched:
-                        if self.debug_mode and self.whole_word_search.get():
-                            self.log_debug(f"Trovata corrispondenza per parola intera: '{keyword}' nel contenuto del file {os.path.basename(file_path)}")
-                        result[0] = self.create_file_info(file_path)
-                        return
-            else:
-                # Log per i file di sistema esclusi
-                if search_content and os.path.splitext(file_path)[1].lower() in self.system_file_extensions:
-                    self.log_debug(f"File di sistema escluso dall'analisi del contenuto: {file_path}")
+                # Rileva se è probabilmente un file binario
+                ext = os.path.splitext(file_path)[1].lower()
+                binary_extensions = ['.exe', '.dll', '.bin', '.obj', '.o', '.so', '.lib', '.sys', '.ocx']
+                if ext in binary_extensions:
+                    is_binary_file = True
                     
-            result[0] = None
+                # Identifica file email che possono avere allegati
+                if ext.lower() in ['.msg', '.eml']:
+                    is_email_file = True
+        except:
+            pass
+        
+        # CORREZIONE: Adatta il timeout in base al tipo di file
+        timeout = 5.0  # Default 5 secondi
+        if is_network_file:
+            timeout = 10.0  # 10 secondi per file di rete
+        if is_large_file:
+            timeout += 5.0  # +5 secondi per file grandi
+        if is_binary_file:
+            timeout = min(timeout, 3.0)  # Limita a 3 secondi per file binari
+        if is_email_file:
+            timeout += 15.0  # Incremento significativo per file email con allegati
+        
+        # Manteniamo liste invece di code per compatibilità
+        result = [None]
+        exception = [None]
+        processing_completed = [False]
+        
+        # Definisce la funzione di processo da eseguire in un thread separato
+        def process_thread():
+            try:
+                # Utilizza il tuo metodo esistente per processare il file
+                file_result = self.process_file(file_path, keywords, search_content)
+                result[0] = file_result
+            except Exception as e:
+                exception[0] = e
+                self.log_error(f"Errore nell'elaborazione del file: {file_path}", e, "process_thread")
+            finally:
+                processing_completed[0] = True
+        
+        # Avvia il thread di processing
+        thread = threading.Thread(target=process_thread)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout)
+        
+        # Se il thread è ancora in esecuzione ma abbiamo superato il timeout
+        if not processing_completed[0] and thread.is_alive():
+            self.log_debug(f"Processing timed out for file: {file_path}")
             
-        except Exception as e:
-            exception[0] = e
-            self.log_debug(f"Errore durante l'elaborazione del file {file_path}: {str(e)}")
-            result[0] = None
-        finally:
-            processing_completed[0] = True
+            # PARTE NUOVA: Gestione dei risultati tardivi per file email
+            if is_email_file:
+                def check_late_results():
+                    if processing_completed[0] or not thread.is_alive():
+                        # Il thread ha terminato, controlla se ci sono nuovi risultati
+                        if result[0] is not None:
+                            self.log_debug(f"Risultati tardivi trovati in: {file_path} - Aggiornamento UI")
+                            
+                            # Assicurati che i risultati siano marcati come allegati
+                            if isinstance(result[0], list):
+                                # Se è una lista di risultati
+                                for item in result[0]:
+                                    if not item.get('from_attachment', False):
+                                        item['from_attachment'] = True
+                            else:
+                                # Se è un singolo risultato
+                                if not result[0].get('from_attachment', False):
+                                    result[0]['from_attachment'] = True
+                            
+                            # Aggiungi alla lista dei risultati della ricerca
+                            if isinstance(result[0], list):
+                                for item in result[0]:
+                                    self.search_results.append(item)
+                            else:
+                                self.search_results.append(result[0])
+                            
+                            # Aggiorna la UI con i nuovi risultati
+                            self.update_results_list()
+                            
+                            # Aggiorna i contatori
+                            if hasattr(self, 'found_files_count'):
+                                if isinstance(result[0], list):
+                                    self.found_files_count += len(result[0])
+                                else:
+                                    self.found_files_count += 1
+                                if hasattr(self, 'results_label'):
+                                    self.results_label.config(text=f"Risultati: {self.found_files_count} file trovati")
+                            
+                            # Aggiorna la dimensione totale dei file
+                            self.update_total_files_size()
+                    else:
+                        # Il thread sta ancora lavorando, ricontrolla più tardi
+                        self.root.after(1000, check_late_results)
+                
+                # Inizia a controllare i risultati tardivi
+                self.root.after(2000, check_late_results)
+        
+        if exception[0]:
+            raise exception[0]
+        
+        return result[0] if result[0] is not None else []
 
     @error_handler
     def manage_memory(self):
@@ -1823,6 +1845,58 @@ class FileSearchApp:
     @error_handler
     def initialize_block_queue(self, root_path, block_queue, visited_dirs, files_checked, keywords, search_content, futures):
         """Inizializza la coda di blocchi con il percorso principale"""
+        try:
+            # Verifica se il percorso è valido
+            if not os.path.exists(root_path) or root_path in visited_dirs:
+                return
+                
+            # Aggiunge il percorso principale ai visitati
+            visited_dirs.add(root_path)
+            
+            # Inizializza lista per file e sottocartelle
+            subdirs = []
+            files_batch = []
+            
+            # Ottiene il contenuto della directory principale
+            try:
+                with os.scandir(root_path) as entries:
+                    for entry in entries:
+                        # Se è un file, aggiungi al batch corrente
+                        if entry.is_file():
+                            if not self.should_skip_file(entry.path):
+                                files_batch.append(entry.path)
+                        # Se è una directory, aggiungi alla lista delle sottocartelle
+                        elif entry.is_dir():
+                            # Verifica se dobbiamo escludere questa directory
+                            if not any(re.match(pattern, entry.path) for pattern in self.excluded_dirs):
+                                subdirs.append(entry.path)
+            except (PermissionError, OSError) as e:
+                self.log_error(f"Errore accesso alla directory {root_path}: {str(e)}")
+            
+            # Processa i file trovati nella directory corrente
+            if files_batch:
+                future = self.executor.submit(
+                    self.process_file_batch, 
+                    files_batch, 
+                    files_checked,
+                    time.time(), 
+                    keywords, 
+                    search_content
+                )
+                futures.append(future)
+            
+            # CORREZIONE: Assicurati che tutte le sottocartelle vengano aggiunte alla coda
+            # indipendentemente dalle impostazioni di profondità
+            for subdir in subdirs:
+                if self.search_depth == 0 or self.current_depth < self.search_depth:
+                    priority = self.calculate_block_priority(subdir)
+                    block_queue.put((priority, subdir))
+                    
+            # Aggiorna la UI con i progressi
+            self.update_status_label(f"Scansione directory: {root_path}")
+            
+        except Exception as e:
+            self.log_error(f"Errore nell'inizializzazione della coda blocchi: {str(e)}")
         try:
             # CORREZIONE: Aggiungere sempre il percorso principale alla coda con profondità 0
             # Questo garantisce che la ricerca inizi sempre dal percorso principale
@@ -4471,22 +4545,45 @@ class FileSearchApp:
                         # Contatori per monitoraggio allegati
                         attachment_count = 0
                         
-                        # Processa allegati esattamente come fatto per gli EML
+                        # Versione migliorata per gestire gli allegati di MSG
                         for attachment in msg.attachments:
-                            if not hasattr(attachment, 'name') or not attachment.name:
-                                continue
-                            
-                            attachment_count += 1
-                            filename = attachment.name
-                            content_parts.append(f"\n--- ALLEGATO {attachment_count}: {filename} ---\n")
-                            
                             try:
-                                # Ottieni i dati binari dell'allegato
+                                # Verifica se l'allegato è valido
+                                if not attachment:
+                                    continue
+                                    
+                                # Ottieni il nome del file 
+                                filename = None
+                                if hasattr(attachment, 'longFilename') and attachment.longFilename:
+                                    filename = attachment.longFilename
+                                elif hasattr(attachment, 'shortFilename') and attachment.shortFilename:
+                                    filename = attachment.shortFilename
+                                elif hasattr(attachment, 'filename') and attachment.filename:
+                                    filename = attachment.filename
+                                elif hasattr(attachment, 'name') and attachment.name:
+                                    filename = attachment.name
+                                
+                                # Se ancora non abbiamo un nome, generiamone uno
+                                if not filename:
+                                    filename = f"allegato_{attachment_count + 1}"
+                                
+                                attachment_count += 1
+                                content_parts.append(f"\n--- ALLEGATO {attachment_count}: {filename} ---\n")
+                                
+                                # Ottieni i dati binari dell'allegato - metodo migliorato
                                 attachment_data = None
                                 if hasattr(attachment, 'data'):
                                     attachment_data = attachment.data
-                                elif hasattr(attachment, 'getBytes'):
+                                elif hasattr(attachment, 'getBytes') and callable(attachment.getBytes):
                                     attachment_data = attachment.getBytes()
+                                elif hasattr(attachment, 'getData') and callable(attachment.getData):
+                                    attachment_data = attachment.getData()
+                                # Per la nuova versione di extract_msg che usa 'content'
+                                elif hasattr(attachment, 'content') and attachment.content:
+                                    attachment_data = attachment.content
+                                # Per la versione più recente che potrebbe usare 'bytes'
+                                elif hasattr(attachment, 'bytes'):
+                                    attachment_data = attachment.bytes
                                 
                                 if not attachment_data:
                                     content_parts.append(f"[Allegato vuoto o non leggibile]")
@@ -4496,22 +4593,27 @@ class FileSearchApp:
                                 content_type = ""
                                 if hasattr(attachment, 'mimetype') and attachment.mimetype:
                                     content_type = attachment.mimetype
+                                elif hasattr(attachment, 'contentType') and attachment.contentType:
+                                    content_type = attachment.contentType
                                 
-                                # IMPORTANTE: Usa esattamente la stessa funzione di EML
-                                # per processare l'allegato ed estrarre il contenuto
+                                # Logging dettagliato per debug
+                                self.log_debug(f"Allegato trovato: {filename} ({len(attachment_data)} bytes, tipo: {content_type or 'non definito'})")
+                                
+                                # Processa l'allegato - più log per tracciare il processo
+                                self.log_debug(f"Inizio elaborazione contenuto allegato {filename}")
                                 attachment_content = self.process_email_attachment(
                                     attachment_data, filename, content_type)
                                 
                                 if attachment_content:
-                                    # Aggiungi il contenuto estratto ai risultati
+                                    self.log_debug(f"Contenuto estratto da allegato '{filename}': {len(attachment_content)} caratteri")
                                     content_parts.append(attachment_content)
-                                    self.log_debug(f"Estratto contenuto da allegato '{filename}': {len(attachment_content)} caratteri")
                                 else:
+                                    self.log_debug(f"Nessun contenuto estratto da allegato '{filename}'")
                                     content_parts.append(f"[Allegato {filename}: nessun contenuto estraibile]")
                                     
                             except Exception as e:
-                                self.log_debug(f"Errore nell'elaborazione dell'allegato {filename}: {str(e)}")
-                                content_parts.append(f"[Errore nell'elaborazione dell'allegato: {str(e)}]")
+                                self.log_debug(f"Errore nell'elaborazione dell'allegato {attachment_count}: {str(e)}")
+                                content_parts.append(f"[Errore nell'elaborazione dell'allegato {attachment_count}: {str(e)}]")
                         
                         content = "\n".join(content_parts)
                         self.log_debug(f"Estratti {len(content)} caratteri da MSG (inclusi {attachment_count} allegati)")
@@ -8871,6 +8973,7 @@ class FileSearchApp:
         # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
         self.datetime_var = StringVar()
         self.max_depth = 5
+        
         # Variabili principali per la ricerca
         self.search_content = BooleanVar(value=True)
         self.search_path = StringVar()
@@ -8881,7 +8984,8 @@ class FileSearchApp:
         self.is_searching = False
         self.progress_queue = queue.Queue()
         self.search_depth = StringVar(value="base") 
-
+        self.excluded_dirs = []
+        
         # Inizializza impostazioni per la gestione della RAM
         self.auto_memory_management = True
         self.memory_usage_percent = 75
