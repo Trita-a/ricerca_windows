@@ -138,7 +138,7 @@ E altri linguaggi di programmazione
 .dylib - Librerie dinamiche macOS 
 9.2.4
 aggiunto supporto eml msg e allegati
-V 9.4.5
+V 9.2.5
 -Gestione delle risorse più intelligente: regola dinamicamente l'utilizzo delle risorse in base al tipo di percorso e alle capacità del sistema.
 -Migliore gestione dei percorsi di rete: rileva e ottimizza automaticamente i percorsi di rete.
 -Interfaccia utente più reattiva: meccanismo di aggiornamento dell'interfaccia utente migliorato per mantenerla reattiva durante le ricerche intensive.
@@ -154,3 +154,5 @@ V 9.4.5
 -Queste ottimizzazioni dovrebbero migliorare significativamente le prestazioni di ricerca su unità di sistema e percorsi di rete, mantenendo al contempo 
         la struttura dell'interfaccia utente e l'esperienza utente esistenti.
 -Bug fix sulla compressione
+V 9.2.5.2
+eliminata la funzione show_performance_options
