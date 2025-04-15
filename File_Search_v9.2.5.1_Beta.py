@@ -77,6 +77,7 @@ file_format_support = {
 }
 
 class FileSearchApp:
+    @error_handler
     def __init__(self, root):
         self.root = root
         self.root.title("File Search Tool V9.2.5 Beta Forensics G.di F.")
@@ -100,11 +101,13 @@ class FileSearchApp:
         # Esegui attività di background dopo un breve ritardo
         self.root.after(500, self._delayed_startup_tasks)
 
+    @error_handler
     def create_base_interface(self):
         """Crea solo l'interfaccia essenziale per un avvio veloce"""
         # Forza l'aggiornamento dell'interfaccia
         self.root.update_idletasks()
 
+    @error_handler
     def complete_initialization(self):
         """Completa l'inizializzazione dell'applicazione"""
         try:
@@ -124,6 +127,9 @@ class FileSearchApp:
             # Esegui le altre operazioni iniziali
             self._delayed_startup_tasks()
             
+            # Avvia il monitoraggio della memoria
+            self.root.after(30000, self.monitor_memory_usage)  # Primo controllo dopo 30 secondi
+            
         except Exception as e:
             # In caso di errore, mostra un messaggio e prova a ripristinare l'applicazione
             messagebox.showerror("Errore di inizializzazione", 
@@ -133,7 +139,8 @@ class FileSearchApp:
                 self.create_widgets()
             except:
                 pass
-            
+
+    @error_handler  
     def _init_essential_variables(self):
         """Inizializza solo le variabili essenziali per l'avvio"""
         # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
@@ -749,109 +756,162 @@ class FileSearchApp:
 
     @error_handler
     def manage_memory(self):
-        """Gestisce l'utilizzo della memoria durante la ricerca, evitando problemi di memoria
-        e integrando funzionalità di gestione automatica configurabili."""
+        """Gestisce la memoria dell'applicazione in base alle impostazioni configurate dall'utente.
+        Rilascia memoria quando necessario per mantenere le prestazioni ottimali."""
         try:
-            esegui_gc = True  # Flag per determinare se eseguire il garbage collection
-
-            # Controllo se la gestione automatica della memoria è disattivata
-            if hasattr(self, 'auto_memory_management') and not self.auto_memory_management:
-                esegui_gc = False
-                if self.debug_mode:
-                    self.log_debug("Gestione automatica della memoria disattivata dall'utente")
-            elif hasattr(self, 'memory_usage_percent'):
-                # Se abbiamo una soglia personalizzata, verifichiamo se superata
+            # Verifica se la gestione automatica è disattivata dall'utente
+            if not getattr(self, 'auto_memory_management', True):
+                # Modalità manuale: rispetta solo il limite di memoria configurato
                 try:
-                    memory_info = psutil.virtual_memory()
-                    memory_usage_percent = memory_info.percent
-
-                    if memory_usage_percent <= self.memory_usage_percent:
-                        # Se non superiamo la soglia, non eseguire il GC
-                        esegui_gc = False
-                        if self.debug_mode:
-                            self.log_debug(
-                                f"Utilizzo memoria ({memory_usage_percent}%) sotto la soglia configurata ({self.memory_usage_percent}%)."
-                            )
-                    elif self.debug_mode:
-                        self.log_debug(
-                            f"Memoria in uso: {memory_usage_percent}% (soglia configurata: {self.memory_usage_percent}%) - Eseguendo garbage collector."
-                        )
-                except Exception as e:
-                    self.log_error("Errore nel monitoraggio della memoria", e)
-
-            # Esegui il garbage collection solo se il flag lo consente
-            if esegui_gc:
-                try:
-                    # Ottieni il processo corrente
+                    # Ottieni informazioni sulla memoria
+                    total_ram = psutil.virtual_memory().total
                     process = psutil.Process(os.getpid())
-                    memory_usage = process.memory_info().rss / 1024 / 1024  # MB
-
-                    # Determina la soglia dinamica di memoria
-                    try:
-                        system_memory = psutil.virtual_memory().total / (1024 * 1024)  # Total system RAM in MB
-                        threshold = max(
-                            200, min(1000, system_memory * (self.memory_usage_percent / 100))
-                        )  # Soglia calcolata
-                        self.log_debug(f"Soglia memoria calcolata dinamicamente: {threshold:.0f} MB")
-                    except Exception:
-                        # Fallback a un valore fisso in caso di errore
-                        threshold = 400  # MB
-
-                    # Controlla se la memoria supera la soglia
-                    if memory_usage > threshold:
-                        self.log_debug(
-                            f"Utilizzo memoria elevato: {memory_usage:.2f} MB. Esecuzione garbage collection."
-                        )
-
-                        # Pulizia leggera iniziale
-                        gc.collect(0)
-
-                        # Verifica l'utilizzo della memoria dopo la prima pulizia
-                        memory_after_gc0 = process.memory_info().rss / 1024 / 1024
-                        if memory_after_gc0 > threshold * 0.9:
-                            self.log_debug(
-                                "Prima pulizia insufficiente, esecuzione pulizia completa."
-                            )
-                            gc.collect(2)  # Garbage collection più aggressiva
-
-                            # Forza una seconda pulizia dopo una pausa
-                            time.sleep(0.1)
-                            gc.collect(2)
-
-                        # Ricalcola l'utilizzo della memoria dopo la pulizia
-                        memory_usage = process.memory_info().rss / 1024 / 1024
-                        self.log_debug(f"Utilizzo memoria dopo garbage collection: {memory_usage:.2f} MB")
-
+                    current_memory = process.memory_info().rss
+                    
+                    # Calcola il limite basato sulla percentuale configurata
+                    percent = getattr(self, 'memory_usage_percent', 75)
+                    max_memory = total_ram * (percent / 100)
+                    
+                    # Verifica se superiamo la soglia
+                    if current_memory > max_memory:
+                        self.log_debug(f"Limite memoria ({percent}%) superato: {current_memory/(1024**2):.2f} MB / " +
+                                    f"{max_memory/(1024**2):.2f} MB - Eseguendo pulizia manuale")
+                        
+                        # Pulizia in due fasi
+                        gc.collect(0)  # Pulizia leggera iniziale
+                        time.sleep(0.05)
+                        gc.collect(2)  # Pulizia completa
+                        
+                        # Supporto per Python 3.9+
+                        if hasattr(gc, 'collect_step'):
+                            gc.collect_step()
+                        
                         # Riduzione della cache interna se necessario
-                        if memory_usage > threshold:
-                            self.log_debug(
-                                "Memoria ancora alta, tentativo di ridurre la cache interna."
-                            )
-                            if len(self.search_results) > 10000:
-                                self.log_debug(
-                                    f"Riduzione cache risultati da {len(self.search_results)} a 10000."
-                                )
+                        memory_after_gc = process.memory_info().rss
+                        if memory_after_gc > max_memory * 0.95 and hasattr(self, 'search_results') and len(self.search_results) > 5000:
+                            self.log_debug(f"Memoria ancora alta dopo GC, riduzione cache risultati da {len(self.search_results)} a 5000 elementi")
+                            self.search_results = self.search_results[:5000]  # Mantieni i risultati più recenti
+                            gc.collect()  # Richiama GC dopo la riduzione cache
+                except Exception as e:
+                    self.log_debug(f"Errore nella gestione manuale della memoria: {str(e)}")
+            else:
+                # Modalità automatica: gestione proattiva della memoria
+                try:
+                    # Ottimizza la frequenza del garbage collector in base al carico
+                    is_searching = getattr(self, 'is_search_running', False)
+                    if is_searching:
+                        # Durante la ricerca, raccolta meno frequente per non interrompere le operazioni
+                        gc.set_threshold(700, 10, 10)
+                    else:
+                        # Quando inattivo, raccolta più aggressiva
+                        gc.set_threshold(100, 5, 5)
+                    
+                    # Ottieni informazioni sulla memoria
+                    process = psutil.Process(os.getpid())
+                    memory_usage = process.memory_info().rss / (1024 * 1024)  # MB
+                    
+                    # Determina la soglia dinamica di memoria
+                    system_memory = psutil.virtual_memory().total / (1024 * 1024)  # Total system RAM in MB
+                    threshold = max(200, min(1000, system_memory * 0.3))  # 30% della RAM di sistema con limiti min/max
+                    
+                    # Log utilizzo memoria (solo ogni 10 chiamate per non sovraccaricare i log)
+                    self._memory_log_counter = getattr(self, '_memory_log_counter', 0) + 1
+                    if self._memory_log_counter % 10 == 0:
+                        self.log_debug(f"Gestione memoria automatica: Utilizzo corrente {memory_usage:.2f} MB, soglia {threshold:.2f} MB")
+                    
+                    # Verifica se superiamo la soglia
+                    if memory_usage > threshold:
+                        self.log_debug(f"Utilizzo memoria elevato: {memory_usage:.2f} MB. Esecuzione garbage collection.")
+                        
+                        # Pulizia progressiva
+                        gc.collect(0)  # Garbage collection leggera
+                        memory_after_gc0 = process.memory_info().rss / (1024 * 1024)
+                        
+                        if memory_after_gc0 > threshold * 0.9:
+                            self.log_debug("Prima pulizia insufficiente, esecuzione pulizia completa.")
+                            gc.collect(2)  # Garbage collection completa
+                            
+                            # Riduzione della cache se la memoria è ancora alta
+                            memory_final = process.memory_info().rss / (1024 * 1024)
+                            if memory_final > threshold and hasattr(self, 'search_results') and len(self.search_results) > 10000:
+                                self.log_debug(f"Riduzione cache risultati da {len(self.search_results)} a 10000.")
                                 self.search_results = self.search_results[-10000:]
                                 gc.collect()  # Altra pulizia dopo la riduzione della cache
                 except Exception as e:
-                    self.log_error("Errore nell'esecuzione del garbage collection", e)
-
-            # Pianifica il prossimo controllo della memoria
-            if hasattr(self, 'root') and self.root:
-                self.root.after(30000, self.manage_memory)  # Controlla ogni 30 secondi
-
+                    self.log_debug(f"Errore nella gestione automatica della memoria: {str(e)}")
         except ImportError:
-            # psutil non disponibile, usa solo gc standard
+            # psutil non disponibile
             self.log_debug("psutil non disponibile, usando solo garbage collection standard.")
             gc.collect()
         except Exception as e:
-            self.log_debug(f"Errore nella gestione della memoria: {str(e)}")
+            self.log_debug(f"Errore generale nella gestione della memoria: {str(e)}")
             # Fallback alla garbage collection standard
             try:
                 gc.collect()
-            except Exception:
-                pass
+            except Exception as e2:
+                self.log_debug(f"Anche il fallback di garbage collection è fallito: {str(e2)}")
+        
+        # Pianifica il prossimo controllo della memoria
+        if hasattr(self, 'root') and self.root:
+            self.root.after(30000, self.manage_memory)  # Controlla ogni 30 secondi
     
+    @error_handler
+    def monitor_memory_usage(self):
+        """Monitoraggio periodico dell'utilizzo della memoria. Rileva situazioni critiche e interviene preventivamente."""
+        try:
+            # Esegui solo ogni 30 secondi per ridurre l'overhead
+            if not hasattr(self, '_last_memory_check'):
+                self._last_memory_check = time.time()
+                return
+                
+            current_time = time.time()
+            if current_time - self._last_memory_check < 30:
+                return
+                
+            self._last_memory_check = current_time
+            
+            # Ottieni l'utilizzo di memoria del processo corrente
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_used_mb = memory_info.rss / (1024**2)
+            
+            # Ottieni la memoria totale del sistema
+            total_ram = psutil.virtual_memory().total / (1024**2)
+            
+            # Calcola la percentuale utilizzata rispetto al limite configurato
+            memory_percent = getattr(self, 'memory_usage_percent', 75)
+            memory_limit = total_ram * (memory_percent / 100)
+            usage_ratio = memory_used_mb / memory_limit
+            
+            # Se superiamo l'80% del limite configurato, avvisa e forza una pulizia
+            if usage_ratio > 0.8:
+                self.log_debug(f"Memoria in uso al {usage_ratio*100:.1f}% del limite configurato ({memory_used_mb:.1f}MB/{memory_limit:.1f}MB)")
+                
+                # Azioni preventive progressive
+                if usage_ratio > 0.9:
+                    self.log_debug("ATTENZIONE: Utilizzo memoria CRITICO - Esecuzione pulizia di emergenza")
+                    # Pulizia aggressiva
+                    gc.collect(2)
+                    time.sleep(0.1)
+                    gc.collect(2)
+                    
+                    # Riduzione cache se necessario
+                    if hasattr(self, 'search_results') and len(self.search_results) > 5000:
+                        original_len = len(self.search_results)
+                        self.search_results = self.search_results[:5000]
+                        self.log_debug(f"Riduzione di emergenza della cache risultati: {original_len} → 5000 elementi")
+                else:
+                    # Pulizia standard
+                    gc.collect()
+                    
+        except Exception as e:
+            self.log_debug(f"Errore nel monitoraggio della memoria: {str(e)}")
+            
+        finally:
+            # Riprogram,a il prossimo controllo
+            if hasattr(self, 'root') and self.root:
+                self.root.after(30000, self.monitor_memory_usage)
+
     @error_handler
     def run_with_timeout(self, func, args=(), kwargs={}, timeout_sec=10):
         """ Esegue una funzione con un timeout, evitando blocchi indefiniti Returns: (result, completed)
