@@ -5533,9 +5533,7 @@ class FileSearchApp:
         timeout_frame = ttk.LabelFrame(main_frame, text="Timeout e limiti", padding=10)
         timeout_frame.pack(fill=tk.X, pady=5)
         
-        timeout_check = ttk.Checkbutton(
-            timeout_frame, text="Attiva timeout ricerca", variable=self.timeout_enabled
-        )
+        timeout_check = ttk.Checkbutton(timeout_frame, text="Attiva timeout ricerca", variable=self.timeout_enabled)
         timeout_check.pack(anchor=tk.W, padx=5, pady=5)
         
         ttk.Label(timeout_frame, text="Secondi:").pack(anchor=tk.W, padx=5, pady=5)
@@ -5550,26 +5548,23 @@ class FileSearchApp:
         auto_memory_var = tk.BooleanVar(value=getattr(self, 'auto_memory_management', True))
         memory_percent_var = tk.IntVar(value=getattr(self, 'memory_usage_percent', 75))
         
-        auto_memory_check = ttk.Checkbutton(
-            memory_frame, 
-            text="Gestione automatica della memoria", 
-            variable=auto_memory_var
-        )
+        auto_memory_check = ttk.Checkbutton(memory_frame, text="Gestione automatica della memoria", variable=auto_memory_var)
         auto_memory_check.pack(anchor=tk.W, pady=5)
-        self.create_tooltip(
-            auto_memory_check, 
-            "Attiva/disattiva la gestione automatica della memoria tramite garbage collection"
-        )
+        self.create_tooltip(auto_memory_check, "Attiva/disattiva la gestione automatica della memoria tramite garbage collection")
         
         def toggle_memory_slider():
-            slider_state = "normal" if not auto_memory_var.get() else "disabled"
-            memory_slider.config(state=slider_state)
+            if auto_memory_var.get():
+                # When auto memory is enabled, reset slider to default 75%
+                memory_slider.set(75)
+                memory_slider.config(state="disabled")
+            else:
+                # When manual control is enabled, enable slider
+                memory_slider.config(state="normal")
         
         auto_memory_check.config(command=toggle_memory_slider)
         
         ttk.Label(memory_frame, text="Soglia utilizzo RAM (%):").pack(anchor=tk.W, padx=5, pady=5)
-        memory_slider = ttk.Scale(
-            memory_frame, from_=10, to=95, orient=tk.HORIZONTAL, 
+        memory_slider = ttk.Scale(memory_frame, from_=10, to=95, orient=tk.HORIZONTAL, 
             variable=memory_percent_var, command=lambda v: memory_percent_var.set(int(float(v)))
         )
         memory_slider.pack(fill=tk.X, padx=5, pady=5)
@@ -8528,9 +8523,14 @@ class FileSearchApp:
         auto_memory_check.pack(anchor=tk.W, pady=5)
 
         def toggle_memory_slider():
-            slider_state = "normal" if not auto_memory_var.get() else "disabled"
-            memory_slider.config(state=slider_state)
-
+            if auto_memory_var.get():
+                # When auto memory is enabled, reset slider to default 75%
+                memory_slider.set(75)
+                memory_slider.config(state="disabled")
+            else:
+                # When manual control is enabled, enable slider
+                memory_slider.config(state="normal")
+        
         auto_memory_check.config(command=toggle_memory_slider)
 
         memory_slider_label = ttk.Label(memory_frame, text="Soglia utilizzo RAM (%):")
