@@ -6580,7 +6580,7 @@ class FileSearchApp:
         try:
             # Imposta una priorità più bassa per questo thread
             if hasattr(threading.current_thread(), "setName"):
-                threading.current_thread().setName("LowPriority_DirSize")
+                threading.current_thread().name = "LowPriority_DirSize"
         except:
             pass
             
@@ -8368,7 +8368,7 @@ class FileSearchApp:
             depth_var.set(0)  # Profondità illimitata
             search_files_var.set(True)
             search_folders_var.set(True)
-            search_content_var.set(False)  # Per default non cerchiamo nei contenuti
+            search_content_var.set(True)  # Per default non cerchiamo nei contenuti
             whole_word_var.set(False)
             
             # Valori predefiniti per i filtri avanzati
