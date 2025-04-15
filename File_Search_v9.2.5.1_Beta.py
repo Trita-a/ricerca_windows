@@ -8364,6 +8364,7 @@ class FileSearchApp:
         remove_btn = ttk.Button(exclusions_frame, text="Rimuovi selezionati", command=remove_selected)
         remove_btn.pack(anchor=W, pady=5)
         self.create_tooltip(remove_btn, "Rimuovi i percorsi selezionati dalla lista delle esclusioni")
+
         
         # ================= Scheda 4: Opzioni a blocchi =================
         blocks_frame = ttk.Frame(notebook, padding=15)
@@ -8562,6 +8563,67 @@ class FileSearchApp:
         # Pulsanti finali per la finestra
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(fill=X, pady=(15, 0))
+
+        # Aggiungi questa funzione prima della definizione dei pulsanti finali
+        def restore_defaults():
+            # Valori predefiniti per le opzioni di ricerca
+            depth_var.set(0)  # Profondità illimitata
+            search_files_var.set(True)
+            search_folders_var.set(True)
+            search_content_var.set(False)  # Per default non cerchiamo nei contenuti
+            whole_word_var.set(False)
+            
+            # Valori predefiniti per i filtri avanzati
+            min_size_var.set("0")
+            max_size_var.set("0")
+            min_date.entry.delete(0, 'end')
+            max_date.entry.delete(0, 'end')
+            
+            # Ripristino esclusioni
+            system_exclusions_var.set(True)
+            for item in excluded_list.get_children():
+                excluded_list.delete(item)
+            
+            # Percorsi di sistema standard
+            system_paths = [
+                "C:/Windows", 
+                "C:/Program Files", 
+                "C:/Program Files (x86)",
+                "C:/ProgramData",
+                "C:/Users/All Users",
+                "C:/Program Files (x86)/Client Active Directory Rights Management Services"
+            ]
+            for path in system_paths:
+                excluded_list.insert("", "end", values=(path,))
+            
+            # Opzioni a blocchi predefinite
+            files_block_var.set(500)  # Valore predefinito
+            parallel_var.set(2)      # Valore predefinito
+            auto_adjust_var.set(True)
+            prioritize_var.set(True)
+            
+            # Opzioni di performance predefinite
+            timeout_enabled_var.set(True)
+            timeout_seconds_var.set(300)  # 5 minuti
+            max_files_var.set(100000)
+            max_results_var.set(5000)
+            threads_var.set(4)
+            max_size_mb_var.set(50)
+            dir_size_calc_var.set("incrementale")
+            
+            # Opzioni memoria predefinite
+            auto_memory_var.set(True)
+            memory_percent_var.set(75)
+            update_memory_details()
+            toggle_memory_slider()
+            
+            # Mostra conferma all'utente
+            messagebox.showinfo("Ripristino", "I valori predefiniti sono stati ripristinati.")
+
+        # E poi, modifica il pulsante per usare la funzione appena creata:
+        defaults_btn = ttk.Button(btn_frame, text="Ripristina valori predefiniti", command=restore_defaults)
+        defaults_btn.pack(side=LEFT)
+        self.create_tooltip(defaults_btn, "Ripristina tutte le impostazioni ai valori predefiniti")
         
         def save_options():
             # Log dell'inizio dell'operazione
@@ -8704,11 +8766,6 @@ class FileSearchApp:
                 self.log_debug(traceback.format_exc())  # Registra il traceback completo dell'errore
                 messagebox.showerror("Errore", error_msg)
                 return
-        
-        defaults_btn = ttk.Button(btn_frame, text="Ripristina valori predefiniti", 
-            command=lambda: messagebox.showinfo("Info", "Funzione non implementata"))
-        defaults_btn.pack(side=LEFT)
-        self.create_tooltip(defaults_btn, "Ripristina tutte le impostazioni ai valori predefiniti")
         
         cancel_btn = ttk.Button(btn_frame, text="Annulla", command=dialog.destroy)
         cancel_btn.pack(side=RIGHT, padx=5)
