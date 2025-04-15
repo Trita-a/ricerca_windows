@@ -1826,6 +1826,9 @@ class FileSearchApp:
         try:
             items = os.listdir(root_path)
             
+            # Ottieni la profondità massima dalle impostazioni
+            max_depth = self.depth_var.get() if hasattr(self, 'depth_var') else self.max_depth
+            
             # Prima aggiungi le directory come blocchi separati
             for item in items:
                 item_path = os.path.join(root_path, item)
@@ -1842,11 +1845,14 @@ class FileSearchApp:
                             item_path.lower().startswith(excluded.lower()) 
                             for excluded in self.excluded_paths):
                             continue
-                            
-                        # Calcola priorità e aggiungi alla coda
-                        priority = self.calculate_block_priority(item_path)
-                        block_queue.put((priority, item_path))
-                        visited_dirs.add(os.path.realpath(item_path))
+                        
+                        # CORREZIONE: Se max_depth è 0 o non abbiamo raggiunto il limite, aggiungi la sottocartella
+                        # Il valore 0 rappresenta "illimitato"
+                        if max_depth == 0 or 1 <= max_depth:
+                            # Calcola priorità e aggiungi alla coda con la profondità corretta
+                            priority = self.calculate_block_priority(item_path)
+                            block_queue.put((priority, item_path, 1))  # Profondità 1 per le sottocartelle dirette
+                            visited_dirs.add(os.path.realpath(item_path))
                 except Exception as e:
                     self.log_debug(f"Errore nell'aggiunta del blocco {item_path}: {str(e)}")
             
@@ -1949,6 +1955,12 @@ class FileSearchApp:
         # Determina il numero massimo di file per blocco in base alle impostazioni
         max_files_in_block = self.max_files_per_block.get()
         
+        # Ottieni il valore della profondità massima
+        max_depth = self.depth_var.get() if hasattr(self, 'depth_var') else self.max_depth
+        
+        # CORREZIONE: Modifica la logica di tracking - true se c'è un limite, false se è illimitato (0)
+        depth_tracking_needed = max_depth > 0
+        
         # CORREZIONE: Ottimizza il calcolo della dimensione
         calculation_enabled = self.dir_size_calculation.get() != "disabilitato"
         
@@ -2033,7 +2045,26 @@ class FileSearchApp:
             
             try:
                 # Prendi il blocco con priorità più alta
-                _, current_block = block_queue.get(block=False)
+                # CORREZIONE: Estrai correttamente la profondità se presente nella coda
+                try:
+                    # Controllo più robusto per la consistenza del formato della coda
+                    queue_item = block_queue.queue[0]
+                    if len(queue_item) >= 3:  # Nuovo formato con profondità
+                        priority, current_block, current_depth = block_queue.get(block=False)
+                    else:  # Vecchio formato senza profondità
+                        priority, current_block = block_queue.get(block=False)
+                        # Se non stiamo tracciando la profondità (max_depth = 0), imposta a 0
+                        # altrimenti calcola la profondità basata sul percorso
+                        current_depth = 0 if not depth_tracking_needed else current_block.count(os.path.sep) - path.count(os.path.sep)
+                except IndexError:
+                    # In caso di coda vuota, esci dal ciclo
+                    break
+                
+                # CORREZIONE: Verifica la profondità massima, ma salta solo se non è illimitata (max_depth > 0)
+                # Se max_depth = 0, non saltiamo mai perché è una ricerca illimitata
+                if depth_tracking_needed and current_depth >= max_depth:
+                    # Salta questa directory se abbiamo superato la profondità massima
+                    continue
                 
                 # Salta blocchi già processati
                 if current_block in processed_blocks:
@@ -2140,7 +2171,7 @@ class FileSearchApp:
                                 continue
                             
                             # Aggiungi alla lista delle sottocartelle
-                            subfolders.append(item_path)
+                            subfolders.append((item_path, current_depth + 1))  # CORREZIONE: Includi la profondità incrementata
                             
                             # Verifica corrispondenza nome cartella
                             if self.search_folders.get():
@@ -2164,17 +2195,26 @@ class FileSearchApp:
                 
                 # CORREZIONE: Ottimizza l'ordine di elaborazione delle sottocartelle
                 if self.prioritize_user_folders.get():
-                    subfolders = self.optimize_disk_search_order(path, subfolders)
+                    # Estrai solo i percorsi per la funzione optimize_disk_search_order
+                    subfolder_paths = [item[0] for item in subfolders]
+                    optimized_paths = self.optimize_disk_search_order(path, subfolder_paths)
+                    
+                    # Ricostruisci la lista con le profondità
+                    optimized_subfolders = []
+                    path_to_depth = {item[0]: item[1] for item in subfolders}
+                    for optimized_path in optimized_paths:
+                        optimized_subfolders.append((optimized_path, path_to_depth.get(optimized_path, current_depth + 1)))
+                    subfolders = optimized_subfolders
                 
-                # Aggiunta sottocartelle alla coda con priorità calcolata
-                for subfolder in subfolders:
-                    # Verifica limite di profondità
-                    folder_depth = subfolder.count(os.path.sep) - path.count(os.path.sep)
-                    if self.max_depth > 0 and folder_depth > self.max_depth:
-                        continue
-                        
+                # CORREZIONE: Aggiunta sottocartelle alla coda con priorità calcolata
+                # Usa sempre il formato con profondità per maggiore coerenza
+                for subfolder_info in subfolders:
+                    subfolder, folder_depth = subfolder_info
+                    
                     priority = self.calculate_block_priority(subfolder)
-                    block_queue.put((priority, subfolder))
+                    
+                    # CORREZIONE: Aggiungi sempre la profondità nella coda per coerenza
+                    block_queue.put((priority, subfolder, folder_depth))
                 
                 # CORREZIONE: Ottimizza la gestione della memoria per blocchi grandi
                 # Gestione della memoria più aggressiva
@@ -8402,12 +8442,12 @@ class FileSearchApp:
             
             # Opzioni di performance predefinite
             timeout_enabled_var.set(True)
-            timeout_seconds_var.set(300)  # 5 minuti
+            timeout_seconds_var.set(3600)
             max_files_var.set(100000)
-            max_results_var.set(5000)
+            max_results_var.set(50000)
             threads_var.set(4)
             max_size_mb_var.set(50)
-            dir_size_calc_var.set("incrementale")
+            dir_size_calc_var.set("disabilitato")
             
             # Opzioni memoria predefinite
             auto_memory_var.set(True)
