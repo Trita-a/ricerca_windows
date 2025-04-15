@@ -1824,70 +1824,93 @@ class FileSearchApp:
     def initialize_block_queue(self, root_path, block_queue, visited_dirs, files_checked, keywords, search_content, futures):
         """Inizializza la coda di blocchi con il percorso principale"""
         try:
-            items = os.listdir(root_path)
+            # CORREZIONE: Aggiungere sempre il percorso principale alla coda con profondità 0
+            # Questo garantisce che la ricerca inizi sempre dal percorso principale
+            priority_root = self.calculate_block_priority(root_path)
+            block_queue.put((priority_root, root_path, 0))  # Profondità 0 per la directory principale
+            
+            # Aggiungi il percorso alla lista delle cartelle visitate per evitare cicli
+            try:
+                visited_dirs.add(os.path.realpath(root_path))
+            except:
+                visited_dirs.add(root_path)
             
             # Ottieni la profondità massima dalle impostazioni
             max_depth = self.depth_var.get() if hasattr(self, 'depth_var') else self.max_depth
             
-            # Prima aggiungi le directory come blocchi separati
-            for item in items:
-                item_path = os.path.join(root_path, item)
-                try:
-                    if os.path.isdir(item_path):
-                        # Salta directory nascoste se richiesto
-                        if self.ignore_hidden.get() and (item.startswith('.') or 
-                            (os.name == 'nt' and os.path.exists(item_path) and 
-                            os.stat(item_path).st_file_attributes & 2)):
-                            continue
-                        
-                        # Salta directory escluse
-                        if hasattr(self, 'excluded_paths') and any(
-                            item_path.lower().startswith(excluded.lower()) 
-                            for excluded in self.excluded_paths):
-                            continue
-                        
-                        # CORREZIONE: Se max_depth è 0 o non abbiamo raggiunto il limite, aggiungi la sottocartella
-                        # Il valore 0 rappresenta "illimitato"
-                        if max_depth == 0 or 1 <= max_depth:
-                            # Calcola priorità e aggiungi alla coda con la profondità corretta
-                            priority = self.calculate_block_priority(item_path)
-                            block_queue.put((priority, item_path, 1))  # Profondità 1 per le sottocartelle dirette
-                            visited_dirs.add(os.path.realpath(item_path))
-                except Exception as e:
-                    self.log_debug(f"Errore nell'aggiunta del blocco {item_path}: {str(e)}")
+            # Log dell'inizio della ricerca con informazioni sulla profondità
+            self.log_debug(f"Inizializzata ricerca in {root_path} con profondità {'illimitata' if max_depth == 0 else max_depth}")
             
-            # Poi processa i file nella directory principale
-            for item in items:
-                if self.stop_search:
-                    return
-                    
-                item_path = os.path.join(root_path, item)
-                try:
-                    if not os.path.isdir(item_path):
-                        if self.search_files.get():
-                            # Verifica file nascosti
+            # Processa i file nella directory principale
+            try:
+                items = os.listdir(root_path)
+                
+                for item in items:
+                    item_path = os.path.join(root_path, item)
+                    try:
+                        if os.path.isdir(item_path):
+                            # Salta directory nascoste se richiesto
                             if self.ignore_hidden.get() and (item.startswith('.') or 
                                 (os.name == 'nt' and os.path.exists(item_path) and 
                                 os.stat(item_path).st_file_attributes & 2)):
                                 continue
                             
-                            # Processa direttamente i file nella directory principale
-                            nonlocal_files_checked = files_checked[0]
-                            nonlocal_files_checked += 1
-                            files_checked[0] = nonlocal_files_checked
-                            if nonlocal_files_checked > self.max_files_to_check.get():
-                                self.stop_search = True
-                                return
+                            # Salta directory escluse
+                            if hasattr(self, 'excluded_paths') and any(
+                                item_path.lower().startswith(excluded.lower()) 
+                                for excluded in self.excluded_paths):
+                                continue
                             
-                            future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
-                            futures.append(future)
-                except Exception as e:
-                    self.log_debug(f"Errore nell'elaborazione del file {item_path}: {str(e)}")
+                            # CORREZIONE: Non controlliamo la profondità qui, viene fatto in process_blocks
+                            # Aggiungiamo sempre le sottocartelle di primo livello con profondità 1
+                            priority = self.calculate_block_priority(item_path)
+                            block_queue.put((priority, item_path, 1))  # Profondità 1 per le sottocartelle dirette
+                            
+                            try:
+                                visited_dirs.add(os.path.realpath(item_path))
+                            except:
+                                visited_dirs.add(item_path)
+                    except Exception as e:
+                        self.log_debug(f"Errore nell'aggiunta del blocco {item_path}: {str(e)}")
+                
+                # Processa i file nella directory principale
+                for item in items:
+                    if self.stop_search:
+                        return
+                        
+                    item_path = os.path.join(root_path, item)
+                    try:
+                        if not os.path.isdir(item_path):
+                            if self.search_files.get():
+                                # Verifica file nascosti
+                                if self.ignore_hidden.get() and (item.startswith('.') or 
+                                    (os.name == 'nt' and os.path.exists(item_path) and 
+                                    os.stat(item_path).st_file_attributes & 2)):
+                                    continue
+                                
+                                # Salta se il file dovrebbe essere ignorato
+                                if self.should_skip_file(item_path):
+                                    continue
+                                
+                                # Processa direttamente i file nella directory principale
+                                nonlocal_files_checked = files_checked[0]
+                                nonlocal_files_checked += 1
+                                files_checked[0] = nonlocal_files_checked
+                                if nonlocal_files_checked > self.max_files_to_check.get():
+                                    self.stop_search = True
+                                    return
+                                
+                                future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
+                                futures.append(future)
+                    except Exception as e:
+                        self.log_debug(f"Errore nell'elaborazione del file {item_path}: {str(e)}")
                     
-        except PermissionError:
-            self.log_debug(f"Permesso negato per la directory {root_path}")
+            except PermissionError:
+                self.log_debug(f"Permesso negato per la directory {root_path}")
+            except Exception as e:
+                self.log_debug(f"Errore nell'inizializzazione dei blocchi da {root_path}: {str(e)}")
         except Exception as e:
-            self.log_debug(f"Errore nell'inizializzazione dei blocchi da {root_path}: {str(e)}")
+            self.log_debug(f"Errore generale nell'inizializzazione della coda: {str(e)}")
 
     @error_handler
     def process_file_batch(self, file_batch, files_checked, last_update_time, 
@@ -1950,19 +1973,22 @@ class FileSearchApp:
 
     @error_handler
     def process_blocks(self, block_queue, visited_dirs, start_time, timeout, is_system_search, 
-                files_checked, dirs_checked, last_update_time, path, keywords, search_content, futures):
+                  files_checked, dirs_checked, last_update_time, path, keywords, search_content, futures):
         """Elabora i blocchi dalla coda in base alla priorità"""
         # Determina il numero massimo di file per blocco in base alle impostazioni
         max_files_in_block = self.max_files_per_block.get()
         
-        # Ottieni il valore della profondità massima
+        # CORREZIONE: Ottieni il valore della profondità massima in modo coerente
         max_depth = self.depth_var.get() if hasattr(self, 'depth_var') else self.max_depth
         
-        # CORREZIONE: Modifica la logica di tracking - true se c'è un limite, false se è illimitato (0)
-        depth_tracking_needed = max_depth > 0
+        # CORREZIONE: Semplifica la logica di tracking - true se c'è un limite, false se è illimitato (0)
+        using_limited_depth = max_depth > 0
         
-        # CORREZIONE: Ottimizza il calcolo della dimensione
+        # Ottimizza il calcolo della dimensione
         calculation_enabled = self.dir_size_calculation.get() != "disabilitato"
+        
+        # Log dell'inizio dell'elaborazione dei blocchi
+        self.log_debug(f"Avvio elaborazione blocchi con profondità {'limitata a '+str(max_depth) if using_limited_depth else 'illimitata'}")
         
         # Adatta automaticamente la dimensione del blocco
         if self.block_size_auto_adjust.get():
@@ -1986,7 +2012,7 @@ class FileSearchApp:
         # Ottimizza il numero di blocchi paralleli in base al carico
         max_parallel = self.max_parallel_blocks.get()
         
-        # CORREZIONE: Adatta il parallelismo in base al percorso
+        # Adatta il parallelismo in base al percorso
         if path.startswith('\\\\') or path.startswith('//'):
             # Limita il parallelismo su percorsi di rete
             max_parallel = min(max_parallel, 3)
@@ -2000,7 +2026,7 @@ class FileSearchApp:
         memory_check_counter = 0
         last_watchdog_update = time.time()
         
-        # NUOVO: Tracciamento delle prestazioni
+        # Tracciamento delle prestazioni
         last_performance_check = time.time()
         files_at_last_check = files_checked[0]
         
@@ -2011,12 +2037,12 @@ class FileSearchApp:
                 self.progress_queue.put(("timeout", "Timeout raggiunto"))
                 return
             
-            # CORREZIONE: Aggiorna il watchdog più frequentemente
+            # Aggiorna il watchdog più frequentemente
             if hasattr(self, 'last_progress_time') and current_time - last_watchdog_update > 10:
                 self.last_progress_time = current_time
                 last_watchdog_update = current_time
                 
-                # NUOVO: Tracciamento delle prestazioni
+                # Tracciamento delle prestazioni
                 if current_time - last_performance_check >= 30:  # Ogni 30 secondi
                     # Calcola velocità di elaborazione
                     elapsed = current_time - last_performance_check
@@ -2044,26 +2070,27 @@ class FileSearchApp:
                     files_at_last_check = files_checked[0]
             
             try:
-                # Prendi il blocco con priorità più alta
-                # CORREZIONE: Estrai correttamente la profondità se presente nella coda
+                # CORREZIONE: Estrai in modo sicuro dalla coda
                 try:
                     # Controllo più robusto per la consistenza del formato della coda
-                    queue_item = block_queue.queue[0]
+                    queue_item = block_queue.get(block=False)
+                    
                     if len(queue_item) >= 3:  # Nuovo formato con profondità
-                        priority, current_block, current_depth = block_queue.get(block=False)
+                        priority, current_block, current_depth = queue_item
                     else:  # Vecchio formato senza profondità
-                        priority, current_block = block_queue.get(block=False)
+                        priority, current_block = queue_item
                         # Se non stiamo tracciando la profondità (max_depth = 0), imposta a 0
                         # altrimenti calcola la profondità basata sul percorso
-                        current_depth = 0 if not depth_tracking_needed else current_block.count(os.path.sep) - path.count(os.path.sep)
-                except IndexError:
+                        current_depth = 0 if not using_limited_depth else current_block.count(os.path.sep) - path.count(os.path.sep)
+                except (IndexError, queue.Empty):
                     # In caso di coda vuota, esci dal ciclo
                     break
                 
-                # CORREZIONE: Verifica la profondità massima, ma salta solo se non è illimitata (max_depth > 0)
-                # Se max_depth = 0, non saltiamo mai perché è una ricerca illimitata
-                if depth_tracking_needed and current_depth >= max_depth:
-                    # Salta questa directory se abbiamo superato la profondità massima
+                # CORREZIONE: Verifica la profondità massima in modo più chiaro
+                # Se using_limited_depth è True (max_depth > 0) e la profondità corrente supera max_depth, salta
+                if using_limited_depth and current_depth >= max_depth:
+                    # AGGIUNTA: Log per debug quando una directory viene saltata per limiti di profondità
+                    self.log_debug(f"Saltata directory {current_block} per limite di profondità (profondità: {current_depth}, max: {max_depth})")
                     continue
                 
                 # Salta blocchi già processati
@@ -2072,7 +2099,7 @@ class FileSearchApp:
                     
                 processed_blocks.add(current_block)
                 
-                # CORREZIONE: Aggiorna lo stato più frequentemente
+                # Aggiorna lo stato più frequentemente
                 current_time = time.time()
                 if current_time - last_update_time[0] >= 0.3:  # Ridotto da 0.5 a 0.3 secondi
                     elapsed_time = current_time - start_time
@@ -2082,7 +2109,7 @@ class FileSearchApp:
                         min(90, int((files_checked[0] / max(1, self.max_files_to_check.get())) * 100))))
                     last_update_time[0] = current_time
                 
-                # CORREZIONE: Implementa la verifica dei percorsi problematici prima di elaborare
+                # Implementa la verifica dei percorsi problematici prima di elaborare
                 # Verifica se il percorso attuale è in una directory problematica o esclusa
                 skip_block = False
                 
@@ -2104,7 +2131,7 @@ class FileSearchApp:
                 # Blocco attualmente in elaborazione
                 dirs_checked[0] += 1
                 
-                # CORREZIONE: Usa try-except più granulare per gestire errori di accesso
+                # Usa try-except più granulare per gestire errori di accesso
                 try:
                     items = os.listdir(current_block)
                 except PermissionError:
@@ -2160,7 +2187,7 @@ class FileSearchApp:
                                     continue
                                 visited_dirs.add(item_path)
                             
-                            # CORREZIONE: Ottimizzazione verifica percorsi esclusi
+                            # Ottimizzazione verifica percorsi esclusi
                             # Verifica se il percorso deve essere escluso (più efficiente)
                             excluded = False
                             if hasattr(self, 'excluded_paths') and self.excluded_paths:
@@ -2170,12 +2197,13 @@ class FileSearchApp:
                             if excluded:
                                 continue
                             
-                            # Aggiungi alla lista delle sottocartelle
-                            subfolders.append((item_path, current_depth + 1))  # CORREZIONE: Includi la profondità incrementata
+                            # CORREZIONE: Aggiungi sempre la sottocartella alla lista con profondità incrementata
+                            # La verifica della profondità massima verrà fatta nel ciclo successivo
+                            subfolders.append((item_path, current_depth + 1))
                             
                             # Verifica corrispondenza nome cartella
                             if self.search_folders.get():
-                                # CORREZIONE: Usa match parola intera dove appropriato
+                                # Usa match parola intera dove appropriato
                                 matched = False
                                 for keyword in keywords:
                                     if self.whole_word_search.get():
@@ -2193,7 +2221,7 @@ class FileSearchApp:
                     except Exception as e:
                         self.log_debug(f"Errore nell'analisi della directory {item_path}: {str(e)}")
                 
-                # CORREZIONE: Ottimizza l'ordine di elaborazione delle sottocartelle
+                # Ottimizza l'ordine di elaborazione delle sottocartelle
                 if self.prioritize_user_folders.get():
                     # Estrai solo i percorsi per la funzione optimize_disk_search_order
                     subfolder_paths = [item[0] for item in subfolders]
@@ -2213,17 +2241,22 @@ class FileSearchApp:
                     
                     priority = self.calculate_block_priority(subfolder)
                     
-                    # CORREZIONE: Aggiungi sempre la profondità nella coda per coerenza
+                    # Aggiungi sempre la sottocartella alla coda, la verifica della profondità
+                    # sarà fatta nel ciclo successivo
                     block_queue.put((priority, subfolder, folder_depth))
+                    
+                    # AGGIUNTA: Log per debug quando viene aggiunta una sottocartella
+                    if folder_depth > current_depth:
+                        self.log_debug(f"Aggiunta sottocartella: {subfolder} (profondità: {folder_depth})")
                 
-                # CORREZIONE: Ottimizza la gestione della memoria per blocchi grandi
+                # Ottimizza la gestione della memoria per blocchi grandi
                 # Gestione della memoria più aggressiva
                 memory_check_counter += 1
                 if memory_check_counter >= 5:  # Controllo ogni 5 blocchi invece che per file
                     self.manage_memory()
                     memory_check_counter = 0
                 
-                # CORREZIONE: Processa i file nel blocco corrente con batch più piccoli
+                # Processa i file nel blocco corrente con batch più piccoli
                 file_batch = []
                 for item in items:
                     if self.stop_search:
@@ -2264,7 +2297,7 @@ class FileSearchApp:
             except queue.Empty:
                 break
 
-            # CORREZIONE: Controllo più frequente per interruzioni
+            # Controllo più frequente per interruzioni
             interrupt_check_counter += 1
             if interrupt_check_counter >= 3:  # Ridotto da 10 a 3 blocchi
                 interrupt_check_counter = 0
