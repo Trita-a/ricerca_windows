@@ -446,6 +446,30 @@ class FileSearchApp:
         # Esegui il controllo in un thread separato
         threading.Thread(target=self._async_check_libraries, daemon=True).start()
 
+        # Aggiungi verifica per le librerie di gestione degli archivi compressi
+        self._async_check_libraries()
+        
+        # Verifica librerie per archivi compressi
+        try:
+            import zipfile
+        except ImportError:
+            missing_libraries.append("zipfile")
+        
+        try:
+            import rarfile
+        except ImportError:
+            missing_libraries.append("rarfile")
+        
+        try:
+            import py7zr
+        except ImportError:
+            missing_libraries.append("py7zr")
+        
+        try:
+            import tarfile
+        except ImportError:
+            missing_libraries.append("tarfile")
+            
     @error_handler
     def _async_check_libraries(self):
         """Controlla le librerie in background senza bloccare l'interfaccia"""
@@ -537,7 +561,40 @@ class FileSearchApp:
             # Verifica contenuto se richiesto e se non c'è già una corrispondenza nel nome
             if not matched and search_content and self.should_search_content(file_path):
                 content = self.get_file_content(file_path)
-                if content:
+                
+                # NUOVA GESTIONE: verifica se content è un dizionario (archivi compressi)
+                if isinstance(content, dict):
+                    for file_in_archive, file_content in content.items():
+                        # Controlla match nel nome del file interno
+                        for keyword in keywords:
+                            if self.whole_word_search.get():
+                                if self.is_whole_word_match(keyword, file_in_archive):
+                                    self.log_debug(f"Match trovato nel nome del file interno: {file_in_archive}")
+                                    matched = True
+                                    break
+                            elif keyword.lower() in file_in_archive.lower():
+                                self.log_debug(f"Match trovato nel nome del file interno: {file_in_archive}")
+                                matched = True
+                                break
+                        
+                        # Se non ha già trovato match nel nome, controlla nel contenuto
+                        if not matched and isinstance(file_content, str):
+                            for keyword in keywords:
+                                if self.whole_word_search.get():
+                                    if self.is_whole_word_match(keyword, file_content):
+                                        self.log_debug(f"Match trovato nel contenuto del file interno: {file_in_archive}")
+                                        matched = True
+                                        break
+                                elif keyword.lower() in file_content.lower():
+                                    self.log_debug(f"Match trovato nel contenuto del file interno: {file_in_archive}")
+                                    matched = True
+                                    break
+                        
+                        # Interrompe il ciclo se ha già trovato una corrispondenza
+                        if matched:
+                            break
+                # Contenuto standard (stringa)
+                elif isinstance(content, str):
                     for keyword in keywords:
                         if self.whole_word_search.get():
                             if self.is_whole_word_match(keyword, content):
@@ -550,7 +607,7 @@ class FileSearchApp:
             if matched:
                 # Verifica se il match è in un allegato di un file EMAIL (EML o MSG)
                 _, ext = os.path.splitext(file_path)
-                if ext.lower() in ['.eml', '.msg'] and search_content and "--- ALLEGATO" in content:
+                if ext.lower() in ['.eml', '.msg'] and search_content and isinstance(content, str) and "--- ALLEGATO" in content:
                     # Cerca il match dopo un'intestazione di allegato
                     attachment_sections = content.split("--- ALLEGATO")
                     for section in attachment_sections[1:]:  # Salta il primo che è l'intestazione email
@@ -565,10 +622,10 @@ class FileSearchApp:
                 return self.create_file_info(file_path)
                 
         except Exception as e:
-            self.log_debug(f"Errore nel processare il file {file_path}: {str(e)}")
+            self.log_error(f"Errore nel processare il file {file_path}", exception=e)
             if self.debug_mode:
                 import traceback
-                self.log_debug(traceback.format_exc())
+                self.log_error(traceback.format_exc())
                 
         return None
 
@@ -3128,6 +3185,14 @@ class FileSearchApp:
             content = ""
             text_content = ""
             result = ""
+            extension = os.path.splitext(file_path.lower())[1]
+        
+            # Verifica se il file è un archivio compresso
+            compressed_extensions = ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso', '.tgz', '.xz', '.cab', '.jar']
+            if extension in compressed_extensions:
+                # Utilizzo la funzione specializzata per gli archivi compressi
+                return self.extract_archive_content(file_path)
+                
             # Controlli preliminari
             if self.should_skip_file(file_path):
                 return ""
@@ -4932,6 +4997,182 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore generale nella lettura del file {file_path}: {str(e)}")
             return ""
+    
+    def extract_archive_content(self, file_path):
+        """Estrae e cerca all'interno dei file compressi.
+        Supporta ZIP, RAR, 7z, TAR, GZ, BZ2, ecc."""
+        try:
+            self.log_debug(f"Tentativo di estrazione del contenuto da {file_path}")
+            extension = os.path.splitext(file_path.lower())[1]
+            extracted_contents = {}
+            temp_dir = None
+            
+            # Gestione file ZIP
+            if extension == '.zip':
+                try:
+                    import zipfile
+                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                        # Elenco dei file nell'archivio
+                        file_list = [f for f in zip_ref.namelist() if not f.endswith('/')]
+                        
+                        # Limita il numero di file da estrarre per prestazioni
+                        max_files = 100  # Limita a 100 file per archivio
+                        if len(file_list) > max_files:
+                            self.log_debug(f"Archivio con troppi file ({len(file_list)}), limitato a {max_files}")
+                            file_list = file_list[:max_files]
+                        
+                        for file_in_zip in file_list:
+                            try:
+                                # Verifica se il file dovrebbe essere processato in base all'estensione
+                                if self.should_search_content(file_in_zip):
+                                    with zip_ref.open(file_in_zip) as f:
+                                        # Limita la dimensione del file da estrarre
+                                        content = f.read(10 * 1024 * 1024)  # Max 10MB per file
+                                        try:
+                                            # Tenta di decodificare come testo
+                                            text_content = content.decode('utf-8', errors='ignore')
+                                            extracted_contents[file_in_zip] = text_content
+                                        except:
+                                            # Se fallisce, tratta come file binario
+                                            extracted_contents[file_in_zip] = f"[Contenuto binario: {file_in_zip}]"
+                            except Exception as e:
+                                self.log_error(f"Errore nell'estrazione del file {file_in_zip} dall'archivio", exception=e)
+                except ImportError:
+                    self.log_error("Modulo zipfile non disponibile")
+                    if "zipfile" not in missing_libraries:
+                        missing_libraries.append("zipfile")
+            
+            # Gestione file RAR
+            elif extension == '.rar':
+                try:
+                    import rarfile
+                    with rarfile.RarFile(file_path) as rar_ref:
+                        file_list = [f for f in rar_ref.namelist() if not rar_ref.getinfo(f).isdir()]
+                        
+                        # Limita il numero di file
+                        max_files = 100
+                        if len(file_list) > max_files:
+                            self.log_debug(f"Archivio con troppi file ({len(file_list)}), limitato a {max_files}")
+                            file_list = file_list[:max_files]
+                        
+                        for file_in_rar in file_list:
+                            try:
+                                if self.should_search_content(file_in_rar):
+                                    with rar_ref.open(file_in_rar) as f:
+                                        content = f.read(10 * 1024 * 1024)  # Max 10MB
+                                        try:
+                                            text_content = content.decode('utf-8', errors='ignore')
+                                            extracted_contents[file_in_rar] = text_content
+                                        except:
+                                            extracted_contents[file_in_rar] = f"[Contenuto binario: {file_in_rar}]"
+                            except Exception as e:
+                                self.log_error(f"Errore nell'estrazione del file {file_in_rar} dall'archivio", exception=e)
+                except ImportError:
+                    self.log_error("Modulo rarfile non disponibile")
+                    if "rarfile" not in missing_libraries:
+                        missing_libraries.append("rarfile")
+            
+            # Gestione file 7Z
+            elif extension == '.7z':
+                try:
+                    import py7zr
+                    with py7zr.SevenZipFile(file_path, mode='r') as z:
+                        # Estrazione temporanea
+                        import tempfile
+                        temp_dir = tempfile.mkdtemp()
+                        z.extractall(path=temp_dir)
+                        
+                        # Processa i file estratti
+                        for root, _, files in os.walk(temp_dir):
+                            for file in files[:100]:  # Limita a 100 file
+                                file_path_full = os.path.join(root, file)
+                                rel_path = os.path.relpath(file_path_full, temp_dir)
+                                
+                                if self.should_search_content(file):
+                                    try:
+                                        with open(file_path_full, 'rb') as f:
+                                            content = f.read(10 * 1024 * 1024)  # Max 10MB
+                                            try:
+                                                text_content = content.decode('utf-8', errors='ignore')
+                                                extracted_contents[rel_path] = text_content
+                                            except:
+                                                extracted_contents[rel_path] = f"[Contenuto binario: {rel_path}]"
+                                    except Exception as e:
+                                        self.log_error(f"Errore nella lettura del file {rel_path}", exception=e)
+                except ImportError:
+                    self.log_error("Modulo py7zr non disponibile")
+                    if "py7zr" not in missing_libraries:
+                        missing_libraries.append("py7zr")
+            
+            # Gestione file TAR (inclusi .tar.gz, .tar.bz2)
+            elif extension in ['.tar', '.tgz', '.gz', '.bz2', '.xz']:
+                try:
+                    import tarfile
+                    mode = 'r'
+                    if file_path.endswith('.gz') or file_path.endswith('.tgz'):
+                        mode = 'r:gz'
+                    elif file_path.endswith('.bz2'):
+                        mode = 'r:bz2'
+                    elif file_path.endswith('.xz'):
+                        mode = 'r:xz'
+                    
+                    with tarfile.open(file_path, mode) as tar_ref:
+                        members = tar_ref.getmembers()
+                        file_members = [m for m in members if m.isfile()][:100]  # Limita a 100 file
+                        
+                        for member in file_members:
+                            try:
+                                if self.should_search_content(member.name):
+                                    f = tar_ref.extractfile(member)
+                                    if f:
+                                        content = f.read(10 * 1024 * 1024)  # Max 10MB
+                                        try:
+                                            text_content = content.decode('utf-8', errors='ignore')
+                                            extracted_contents[member.name] = text_content
+                                        except:
+                                            extracted_contents[member.name] = f"[Contenuto binario: {member.name}]"
+                            except Exception as e:
+                                self.log_error(f"Errore nell'estrazione del file {member.name}", exception=e)
+                except ImportError:
+                    self.log_error("Modulo tarfile non disponibile")
+                    if "tarfile" not in missing_libraries:
+                        missing_libraries.append("tarfile")
+                        
+            # JAR files (sono essenzialmente file ZIP)
+            elif extension == '.jar':
+                try:
+                    import zipfile
+                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                        file_list = [f for f in zip_ref.namelist() if not f.endswith('/')][:100]
+                        
+                        for file_in_jar in file_list:
+                            try:
+                                if self.should_search_content(file_in_jar):
+                                    with zip_ref.open(file_in_jar) as f:
+                                        content = f.read(10 * 1024 * 1024)  # Max 10MB
+                                        try:
+                                            text_content = content.decode('utf-8', errors='ignore')
+                                            extracted_contents[file_in_jar] = text_content
+                                        except:
+                                            extracted_contents[file_in_jar] = f"[Contenuto binario: {file_in_jar}]"
+                            except Exception as e:
+                                self.log_error(f"Errore nell'estrazione del file {file_in_jar} dall'archivio JAR", exception=e)
+                except ImportError:
+                    self.log_error("Modulo zipfile non disponibile")
+                    if "zipfile" not in missing_libraries:
+                        missing_libraries.append("zipfile")
+            
+            # Pulisci le directory temporanee
+            if temp_dir and os.path.exists(temp_dir):
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                
+            self.log_debug(f"Estratti {len(extracted_contents)} file da {file_path}")
+            return extracted_contents
+            
+        except Exception as e:
+            self.log_error(f"Errore generale nell'estrazione dell'archivio {file_path}", exception=e)
+            return {}
     
     @error_handler
     def process_email_attachment(self, attachment_data, attachment_name, content_type):
