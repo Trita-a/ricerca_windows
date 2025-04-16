@@ -461,10 +461,26 @@ class FileSearchApp:
             missing_libraries.append("rarfile")
         
         try:
-            import py7zr
-        except ImportError:
-            missing_libraries.append("py7zr")
-        
+            import shutil
+            import os
+            
+            seven_zip_found = False
+            seven_zip_paths = [
+                r"C:\Program Files\7-Zip\7z.exe",
+                r"C:\Program Files (x86)\7-Zip\7z.exe",
+                "7z"  # Se è nel PATH di sistema
+            ]
+            
+            for path in seven_zip_paths:
+                if os.path.isfile(path) or shutil.which(path):
+                    seven_zip_found = True
+                    break
+                    
+            if not seven_zip_found:
+                missing_libraries.append("7-Zip")
+        except Exception:
+            missing_libraries.append("7-Zip")
+    
         try:
             import tarfile
         except ImportError:
@@ -4998,14 +5014,72 @@ class FileSearchApp:
             self.log_debug(f"Errore generale nella lettura del file {file_path}: {str(e)}")
             return ""
     
+    @error_handler
     def extract_archive_content(self, file_path):
         """Estrae e cerca all'interno dei file compressi.
         Supporta ZIP, RAR, 7z, TAR, GZ, BZ2, ecc."""
+        import subprocess
+        import tempfile
+        import os
+        import shutil
+        
         try:
             self.log_debug(f"Tentativo di estrazione del contenuto da {file_path}")
             extension = os.path.splitext(file_path.lower())[1]
             extracted_contents = {}
             temp_dir = None
+            
+            # Ottieni le parole chiave dalla variabile in memoria o dall'interfaccia utente
+            search_keywords = []
+            
+            # Metodo 1: Accesso diretto alla variabile keywords
+            if hasattr(self, 'keywords') and isinstance(self.keywords, str) and self.keywords != 'PY_VAR3':
+                search_keywords = self.keywords.split()
+            
+            # Metodo 2: Accesso tramite keyword_entry (widget Tkinter)
+            if not search_keywords and hasattr(self, 'keyword_entry'):
+                try:
+                    import tkinter as tk
+                    if isinstance(self.keyword_entry, tk.Entry):
+                        search_keywords = self.keyword_entry.get().strip().split()
+                except:
+                    pass
+            
+            # Metodo 3: Accesso tramite last_search_params
+            if not search_keywords and hasattr(self, 'last_search_params'):
+                try:
+                    if isinstance(self.last_search_params, dict) and 'keywords' in self.last_search_params:
+                        kw = self.last_search_params['keywords']
+                        if isinstance(kw, str):
+                            search_keywords = kw.strip().split()
+                        elif isinstance(kw, list):
+                            search_keywords = kw
+                except:
+                    pass
+            
+            # Metodo 4: Usa 'provami' come fallback se tutto il resto fallisce
+            if not search_keywords:
+                search_keywords = ['provami']
+                self.log_debug("Usando 'provami' come parola chiave di fallback")
+            
+            self.log_debug(f"### PAROLE CHIAVE UTILIZZATE: {search_keywords} ###")
+            
+            # Se ancora non abbiamo parole chiave, prova a trovare qualsiasi cosa sembri rilevante
+            if not current_keywords:
+                for var_name in dir(self):
+                    if any(term in var_name.lower() for term in ['keyword', 'search', 'term']):
+                        try:
+                            value = getattr(self, var_name)
+                            if isinstance(value, list) and value:
+                                current_keywords = value
+                                break
+                            elif isinstance(value, str) and value.strip():
+                                current_keywords = value.strip().split()
+                                break
+                        except:
+                            pass
+            
+            self.log_debug(f"### PAROLE CHIAVE TROVATE: {current_keywords} ###")
             
             # Gestione file ZIP
             if extension == '.zip':
@@ -5075,34 +5149,96 @@ class FileSearchApp:
             # Gestione file 7Z
             elif extension == '.7z':
                 try:
-                    import py7zr
-                    with py7zr.SevenZipFile(file_path, mode='r') as z:
-                        # Estrazione temporanea
-                        import tempfile
-                        temp_dir = tempfile.mkdtemp()
-                        z.extractall(path=temp_dir)
+                    # Crea una directory temporanea per l'estrazione
+                    temp_dir = tempfile.mkdtemp()
+                    self.log_debug(f"Directory temporanea creata: {temp_dir}")
+                    
+                    # Trova il programma 7-Zip
+                    seven_zip_exe = self._find_7zip_executable()
+                    
+                    if seven_zip_exe:
+                        # Estrai l'archivio
+                        self.log_debug(f"Estrazione di {file_path} in {temp_dir}")
+                        cmd = [seven_zip_exe, "x", file_path, f"-o{temp_dir}", "-y"]
                         
-                        # Processa i file estratti
-                        for root, _, files in os.walk(temp_dir):
-                            for file in files[:100]:  # Limita a 100 file
-                                file_path_full = os.path.join(root, file)
-                                rel_path = os.path.relpath(file_path_full, temp_dir)
-                                
-                                if self.should_search_content(file):
-                                    try:
-                                        with open(file_path_full, 'rb') as f:
-                                            content = f.read(10 * 1024 * 1024)  # Max 10MB
-                                            try:
-                                                text_content = content.decode('utf-8', errors='ignore')
-                                                extracted_contents[rel_path] = text_content
-                                            except:
-                                                extracted_contents[rel_path] = f"[Contenuto binario: {rel_path}]"
-                                    except Exception as e:
-                                        self.log_error(f"Errore nella lettura del file {rel_path}", exception=e)
-                except ImportError:
-                    self.log_error("Modulo py7zr non disponibile")
-                    if "py7zr" not in missing_libraries:
-                        missing_libraries.append("py7zr")
+                        # Esegui l'estrazione e cattura l'output
+                        process = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                        
+                        if process.returncode == 0:
+                            self.log_debug("Estrazione completata correttamente")
+                            
+                            # Crea un elenco di tutti i file estratti
+                            extracted_files = []
+                            for root, _, files in os.walk(temp_dir):
+                                for f in files:
+                                    full_path = os.path.join(root, f)
+                                    rel_path = os.path.relpath(full_path, temp_dir)
+                                    extracted_files.append((rel_path, full_path))
+                            
+                            self.log_debug(f"Trovati {len(extracted_files)} file estratti")
+                            if extracted_files:
+                                self.log_debug(f"Primi 5 file: {[f[0] for f in extracted_files[:5]]}")
+                            
+                            # DEBUG: Stampa tutti i file con estensione .txt per verificare
+                            txt_files = [f for f in extracted_files if f[0].lower().endswith('.txt')]
+                            self.log_debug(f"File TXT trovati: {[f[0] for f in txt_files]}")
+                            
+                            # Se ci sono parole chiave, effettua la ricerca nei file
+                            if current_keywords:
+                                for rel_path, full_path in extracted_files:
+                                    # Controlla se il file ha un'estensione supportata per la ricerca
+                                    if self.should_search_content(full_path):
+                                        try:
+                                            # Leggi il file e cerca le parole chiave
+                                            with open(full_path, 'rb') as f:
+                                                content = f.read(10 * 1024 * 1024)  # Max 10MB
+                                                
+                                                # Prova a convertire in testo
+                                                try:
+                                                    text_content = content.decode('utf-8', errors='ignore')
+                                                    
+                                                    # RICERCA MANUALE nel contenuto del file
+                                                    text_lower = text_content.lower()
+                                                    for keyword in current_keywords:
+                                                        keyword_lower = keyword.lower()
+                                                        if keyword_lower in text_lower:
+                                                            self.log_debug(f"TROVATO '{keyword}' IN {rel_path}")
+                                                            extracted_contents[rel_path] = text_content
+                                                            break
+                                                    
+                                                    # Se il file è piccolo, fai debug dei primi 200 caratteri
+                                                    if len(text_content) < 1000:
+                                                        self.log_debug(f"Contenuto di {rel_path}: {text_content[:200]}...")
+                                                except:
+                                                    # Per i file binari, controlla solo il nome
+                                                    if any(keyword.lower() in rel_path.lower() for keyword in current_keywords):
+                                                        extracted_contents[rel_path] = f"[Contenuto binario: {rel_path}]"
+                                        except Exception as e:
+                                            self.log_debug(f"Errore nel leggere {rel_path}: {str(e)}")
+                            else:
+                                # Se non ci sono parole chiave, includi tutti i file
+                                for rel_path, full_path in extracted_files[:100]:  # Limita a 100
+                                    if self.should_search_content(full_path):
+                                        try:
+                                            with open(full_path, 'rb') as f:
+                                                content = f.read(10 * 1024 * 1024)
+                                                try:
+                                                    text_content = content.decode('utf-8', errors='ignore')
+                                                    extracted_contents[rel_path] = text_content
+                                                except:
+                                                    extracted_contents[rel_path] = f"[Contenuto binario: {rel_path}]"
+                                        except Exception as e:
+                                            self.log_debug(f"Errore nel leggere {rel_path}: {str(e)}")
+                            
+                            self.log_debug(f"Trovati {len(extracted_contents)} file corrispondenti")
+                        else:
+                            self.log_error(f"Errore nell'estrazione: {process.stderr}")
+                    else:
+                        self.log_error("7-Zip non trovato sul sistema")
+                        if "7-Zip" not in missing_libraries:
+                            missing_libraries.append("7-Zip")
+                except Exception as e:
+                    self.log_error(f"Errore durante l'elaborazione dell'archivio 7z: {str(e)}", exception=e)
             
             # Gestione file TAR (inclusi .tar.gz, .tar.bz2)
             elif extension in ['.tar', '.tgz', '.gz', '.bz2', '.xz']:
@@ -5162,17 +5298,47 @@ class FileSearchApp:
                     if "zipfile" not in missing_libraries:
                         missing_libraries.append("zipfile")
             
-            # Pulisci le directory temporanee
-            if temp_dir and os.path.exists(temp_dir):
-                import shutil
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                
-            self.log_debug(f"Estratti {len(extracted_contents)} file da {file_path}")
+            self.log_debug(f"Estratti {len(extracted_contents)} file con corrispondenze dall'archivio {file_path}")
             return extracted_contents
             
         except Exception as e:
             self.log_error(f"Errore generale nell'estrazione dell'archivio {file_path}", exception=e)
             return {}
+        finally:
+            # Pulisci le directory temporanee
+            if temp_dir and os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    self.log_debug(f"Directory temporanea rimossa: {temp_dir}")
+                except:
+                    pass
+                
+    @error_handler
+    def _find_7zip_executable(self):
+        """Trova l'eseguibile di 7-Zip sul sistema."""
+        import os
+        import shutil
+        
+        seven_zip_paths = [
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+            "7z"  # Se è nel PATH di sistema
+        ]
+        
+        for path in seven_zip_paths:
+            try:
+                if os.path.isfile(path):
+                    self.log_debug(f"7-Zip trovato in: {path}")
+                    return path
+                elif shutil.which(path):
+                    exe_path = shutil.which(path)
+                    self.log_debug(f"7-Zip trovato nel PATH come: {exe_path}")
+                    return exe_path
+            except:
+                pass
+        
+        self.log_debug("7-Zip non trovato sul sistema")
+        return None
     
     @error_handler
     def process_email_attachment(self, attachment_data, attachment_name, content_type):
@@ -7594,10 +7760,8 @@ class FileSearchApp:
             (".tar", "TAR"),
             (".gz", "GZip"),
             (".bz2", "BZip2"),
-            (".iso", "ISO"),
             (".tgz", "Tar GZipped"),
             (".xz", "XZ"),
-            (".cab", "Cabinet"),
             (".jar", "Java Archive")
         ],
         "Eseguibili": [
@@ -9356,7 +9520,7 @@ class FileSearchApp:
         if not hasattr(self, 'debug_window') or not self.debug_window.winfo_exists():
             self.debug_window = tk.Toplevel(self.root)
             self.debug_window.title("Debug Log")
-            self.debug_window.geometry("1100x900")
+            self.debug_window.geometry("1400x900")
             
             frame = ttk.Frame(self.debug_window)
             frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -9624,7 +9788,7 @@ def main():
     def finish_startup():
         splash.destroy()
         # Configura le dimensioni della finestra prima di mostrarla
-        root.geometry("1300x850")
+        root.geometry("1400x850")
         # Mostra la finestra completamente costruita
         root.deiconify()
         
