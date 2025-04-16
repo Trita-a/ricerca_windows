@@ -1124,6 +1124,10 @@ class FileSearchApp:
         if not hasattr(self, 'already_logged_messages'):
             self.already_logged_messages = set()
         
+        # Inizializza il contatore dei messaggi se non esiste
+        if not hasattr(self, 'last_displayed_log_index'):
+            self.last_displayed_log_index = 0
+            
         # Filtra messaggi specifici relativi alle estensioni
         filter_prefixes = [
             "Estensioni caricate per modalità base:",
@@ -1175,6 +1179,8 @@ class FileSearchApp:
             # Limita la dimensione del log per evitare problemi di memoria
             if len(self.debug_log) > 5000:
                 self.debug_log = self.debug_log[-5000:]
+                # Se abbiamo dovuto ridurre il log, aggiorniamo l'indice dell'ultimo visualizzato
+                self.last_displayed_log_index = max(0, self.last_displayed_log_index - (len(self.debug_log) - 5000))
             
             # Aggiungi alla cronologia completa (seconda implementazione)
             self.complete_debug_log_history.append(log_message_short)
@@ -1191,6 +1197,33 @@ class FileSearchApp:
                     except queue.Empty:
                         pass
                 self.debug_logs_queue.put_nowait(log_message_short)
+                
+            # Verifica se la finestra di debug è aperta
+            if (hasattr(self, 'debug_window') and 
+                hasattr(self, 'debug_text') and
+                self.debug_window.winfo_exists()):
+                
+                # Usa try/except per verificare che siamo nel thread principale
+                try:
+                    # Verifica se siamo nel thread principale
+                    self.root.winfo_exists()  # Lancia eccezione se non siamo nel thread principale
+
+                    # Controlliamo se c'è già una chiamata di aggiornamento prevista
+                    if not hasattr(self, 'update_scheduled') or not self.update_scheduled:
+                        self.update_scheduled = True
+                        # Pianifica l'aggiornamento con un ritardo per ridurre la frequenza degli aggiornamenti
+                        self.root.after(100, self.add_new_logs_to_display)
+
+                except:
+                    # Se non siamo nel thread principale, usa after_idle che è sicuro per i thread
+                    try:
+                        if not hasattr(self, 'update_scheduled') or not self.update_scheduled:
+                            self.update_scheduled = True
+                            self.root.after_idle(self.add_new_logs_to_display)
+                    except:
+                        # In caso di errore, non aggiornare l'interfaccia
+                        pass
+                
         except Exception as e:
             # In caso di errori nel logging, almeno prova a stampare sulla console
             print(f"Error in logging system: {str(e)}")
@@ -1198,17 +1231,72 @@ class FileSearchApp:
         # Se siamo in modalità debug, stampa anche sulla console
         if getattr(self, 'debug_mode', True):  # Default a True se debug_mode non è definito
             print(f"[DEBUG] {message}")
-
+            
     @error_handler
-    def register_interrupt_handler(self):
-        """Registra il gestore degli interrupt (CTRL+C)"""
-        def handle_interrupt(sig, frame):
-            if self.is_searching:
-                self.stop_search_process()
-            else:
-                self.root.quit()
+    def add_new_logs_to_display(self):
+        """Aggiunge solo i nuovi messaggi di log alla visualizzazione senza ricaricare tutto"""
+        self.update_scheduled = False
         
-        signal.signal(signal.SIGINT, handle_interrupt)
+        if not hasattr(self, 'debug_window') or not hasattr(self, 'debug_text') or not self.debug_window.winfo_exists():
+            return
+            
+        # Verifica che il debug log sia inizializzato
+        if not hasattr(self, 'debug_log'):
+            self.debug_log = []
+            self.last_displayed_log_index = 0
+            
+        if not hasattr(self, 'last_displayed_log_index'):
+            self.last_displayed_log_index = 0
+        
+        # Verifica se ci sono nuovi messaggi da visualizzare
+        if self.last_displayed_log_index >= len(self.debug_log):
+            return
+        
+        # Aggiorna l'etichetta con il conteggio dei messaggi
+        if hasattr(self, 'log_count_label'):
+            self.log_count_label.config(text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
+        
+        # Inserisci solo i nuovi log
+        self.debug_text.config(state=tk.NORMAL)
+        
+        # Limita la visualizzazione a 5000 messaggi
+        max_display = 5000
+        
+        # Se il log è troppo grande, mostra un messaggio informativo
+        if len(self.debug_log) > max_display and self.last_displayed_log_index == 0:
+            self.debug_text.insert(tk.END, f"[Mostrando solo gli ultimi {max_display} di {len(self.debug_log)} messaggi...]\n\n")
+            # Aggiorna l'indice iniziale per iniziare dai messaggi più recenti
+            self.last_displayed_log_index = len(self.debug_log) - max_display
+        
+        # Inserisci i nuovi log
+        for i in range(self.last_displayed_log_index, len(self.debug_log)):
+            self.debug_text.insert(tk.END, self.debug_log[i] + "\n")
+        
+        # Aggiorna l'indice dell'ultimo messaggio visualizzato
+        self.last_displayed_log_index = len(self.debug_log)
+        
+        # Evidenzia gli errori con colore rosso
+        self.highlight_errors()
+        
+        # Decidi se scorrere alla fine se l'autoscroll è attivato
+        if hasattr(self, 'autoscroll_var') and self.autoscroll_var.get():
+            self.debug_text.see(tk.END)
+            # Mantieni comunque lo scroll orizzontale a sinistra
+            self.debug_text.xview_moveto(0.0)
+        
+        # Rendi il testo di nuovo sola lettura
+        self.debug_text.config(state=tk.DISABLED)
+
+        @error_handler
+        def register_interrupt_handler(self):
+            """Registra il gestore degli interrupt (CTRL+C)"""
+            def handle_interrupt(sig, frame):
+                if self.is_searching:
+                    self.stop_search_process()
+                else:
+                    self.root.quit()
+            
+            signal.signal(signal.SIGINT, handle_interrupt)
 
     @error_handler
     def log_error(self, message, exception=None, location=None, traceback=None):
@@ -9108,71 +9196,66 @@ class FileSearchApp:
 
     @error_handler
     def update_log_display(self):
-        """Aggiorna la visualizzazione dei log nella finestra di debug"""
-        if hasattr(self, 'debug_window') and hasattr(self, 'debug_text') and self.debug_window.winfo_exists():
-            # Salva la posizione corrente dello scroll verticale
-            current_pos = self.debug_text.yview()[0]
+        """Aggiorna completamente la visualizzazione dei log nella finestra di debug"""
+        if not hasattr(self, 'debug_window') or not self.debug_window.winfo_exists():
+            return
             
-            # Cancella il contenuto attuale
-            self.debug_text.config(state=tk.NORMAL)
-            self.debug_text.delete(1.0, tk.END)
+        if not hasattr(self, 'debug_text'):
+            return
+        
+        # Reset del contatore dei log visualizzati
+        self.last_displayed_log_index = 0
             
-            # Verifica che il debug log sia inizializzato
-            if not hasattr(self, 'debug_log'):
-                self.debug_log = []
-                
-            # Aggiorna l'etichetta con il conteggio dei messaggi
-            if hasattr(self, 'log_count_label'):
-                self.log_count_label.config(text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
-                
-            if self.debug_log:
-                # Limita la visualizzazione a 5000 messaggi per non rallentare l'interfaccia
-                max_display = 5000
-                if len(self.debug_log) > max_display:
-                    self.debug_text.insert(tk.END, f"[Mostrando solo gli ultimi {max_display} di {len(self.debug_log)} messaggi...]\n\n")
-                    log_entries = self.debug_log[-max_display:]
-                else:
-                    log_entries = self.debug_log
-                    
-                # Inserisci i log
-                log_text = "\n".join(log_entries)
-                self.debug_text.insert(tk.END, log_text)
-                
-                # Evidenzia gli errori con colore rosso
-                self.highlight_errors()
-                
-                # Forza un aggiornamento dell'interfaccia
-                self.debug_window.update_idletasks()
-                
-                # Prima imposta l'indice orizzontale all'inizio (più a sinistra)
-                self.debug_text.xview_moveto(0.0)
-                
-                # Poi imposta anche il primo carattere visibile nella prima colonna
-                self.debug_text.mark_set("insert", "1.0")
-                
-                # Aggiungi un ritardo per garantire che lo scroll sia applicato
-                def force_left_scroll():
-                    self.debug_text.xview_moveto(0.0)
-                    # Modifica la posizione fisica dello scrollbar
-                    if hasattr(self.debug_text, 'xscrollcommand'):
-                        self.debug_text.xscrollcommand(0.0, 1.0)
-                
-                # Esegui con un piccolo ritardo per assicurarti che venga applicato dopo il rendering
-                self.debug_window.after(50, force_left_scroll)
-                
-                # Decidi se mantenere la posizione verticale precedente o scorrere alla fine
-                if hasattr(self, 'autoscroll_var') and self.autoscroll_var.get():
-                    self.debug_text.see(tk.END)  # Scorri alla fine verticalmente
-                    # Ma mantieni comunque lo scroll orizzontale a sinistra
-                    self.debug_window.after(100, lambda: self.debug_text.xview_moveto(0.0))
-                else:
-                    # Torna alla posizione precedente dello scroll verticale
-                    self.debug_text.yview_moveto(current_pos)
+        # Cancella il contenuto attuale
+        self.debug_text.config(state=tk.NORMAL)
+        self.debug_text.delete(1.0, tk.END)
+        
+        # Verifica che il debug log sia inizializzato
+        if not hasattr(self, 'debug_log'):
+            self.debug_log = []
+            
+        # Aggiorna l'etichetta con il conteggio dei messaggi
+        if hasattr(self, 'log_count_label'):
+            self.log_count_label.config(text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
+            
+        if self.debug_log:
+            # Limita la visualizzazione a 5000 messaggi per non rallentare l'interfaccia
+            max_display = 5000
+            if len(self.debug_log) > max_display:
+                self.debug_text.insert(tk.END, f"[Mostrando solo gli ultimi {max_display} di {len(self.debug_log)} messaggi...]\n\n")
+                log_entries = self.debug_log[-max_display:]
+                self.last_displayed_log_index = len(self.debug_log) - max_display
             else:
-                self.debug_text.insert(tk.END, "Nessun messaggio di debug disponibile.")
+                log_entries = self.debug_log
+                self.last_displayed_log_index = 0
                 
-            # Rendi il testo di nuovo sola lettura
-            self.debug_text.config(state=tk.DISABLED)
+            # Inserisci i log
+            log_text = "\n".join(log_entries)
+            self.debug_text.insert(tk.END, log_text)
+            
+            # Aggiorna l'indice dell'ultimo messaggio visualizzato
+            self.last_displayed_log_index = len(self.debug_log)
+            
+            # Evidenzia gli errori con colore rosso
+            self.highlight_errors()
+            
+            # Forza un aggiornamento dell'interfaccia
+            self.debug_window.update_idletasks()
+            
+            # Prima imposta l'indice orizzontale all'inizio (più a sinistra)
+            self.debug_text.xview_moveto(0.0)
+            
+            # Poi imposta anche il primo carattere visibile nella prima colonna
+            self.debug_text.mark_set("insert", "1.0")
+            
+            # Decidi se mantenere la posizione verticale precedente o scorrere alla fine
+            if hasattr(self, 'autoscroll_var') and self.autoscroll_var.get():
+                self.debug_text.see(tk.END)  # Scorri alla fine verticalmente
+        else:
+            self.debug_text.insert(tk.END, "Nessun messaggio di debug disponibile.")
+            
+        # Rendi il testo di nuovo sola lettura
+        self.debug_text.config(state=tk.DISABLED)
 
     @error_handler
     def clear_log(self):
