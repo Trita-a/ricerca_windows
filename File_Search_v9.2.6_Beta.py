@@ -80,7 +80,7 @@ class FileSearchApp:
     @error_handler
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V9.2.5 Beta Forensics G.di F.")
+        self.root.title("File Search Tool V9.2.6 Beta Forensics G.di F.")
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
@@ -1231,7 +1231,7 @@ class FileSearchApp:
         # Se siamo in modalità debug, stampa anche sulla console
         if getattr(self, 'debug_mode', True):  # Default a True se debug_mode non è definito
             print(f"[DEBUG] {message}")
-            
+
     @error_handler
     def add_new_logs_to_display(self):
         """Aggiunge solo i nuovi messaggi di log alla visualizzazione senza ricaricare tutto"""
@@ -9113,7 +9113,7 @@ class FileSearchApp:
         if not hasattr(self, 'debug_window') or not self.debug_window.winfo_exists():
             self.debug_window = tk.Toplevel(self.root)
             self.debug_window.title("Debug Log")
-            self.debug_window.geometry("1000x700")
+            self.debug_window.geometry("1100x900")
             
             frame = ttk.Frame(self.debug_window)
             frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -9169,7 +9169,9 @@ class FileSearchApp:
             btn_frame = ttk.Frame(self.debug_window)
             btn_frame.pack(fill=tk.X, padx=10, pady=5)
             
-            ttk.Button(btn_frame, text="Aggiorna", command=self.update_log_display).pack(side=tk.LEFT, padx=5)
+            # Rimuoviamo il pulsante "Aggiorna" che non serve più
+            # ttk.Button(btn_frame, text="Aggiorna", command=self.update_log_display).pack(side=tk.LEFT, padx=5)
+            
             ttk.Button(btn_frame, text="Pulisci Log", command=self.clear_log).pack(side=tk.LEFT, padx=5)
             ttk.Button(btn_frame, text="Esporta in TXT", command=self.export_log_to_txt).pack(side=tk.LEFT, padx=5)
             
@@ -9259,12 +9261,39 @@ class FileSearchApp:
 
     @error_handler
     def clear_log(self):
-        """Pulisce la visualizzazione del log"""
-        if hasattr(self, 'debug_text') and self.debug_text.winfo_exists():
+        """Pulisce completamente i log di debug"""
+        # Pulisce l'array dei log
+        self.debug_log = []
+        
+        # Pulisce anche l'array della cronologia completa
+        if hasattr(self, 'complete_debug_log_history'):
+            self.complete_debug_log_history = []
+        
+        # Resetta il contatore dei log visualizzati
+        if hasattr(self, 'last_displayed_log_index'):
+            self.last_displayed_log_index = 0
+        
+        # Pulisce la coda dei log
+        if hasattr(self, 'debug_logs_queue'):
+            try:
+                while not self.debug_logs_queue.empty():
+                    self.debug_logs_queue.get_nowait()
+            except:
+                pass
+        
+        # Pulisce il text widget se la finestra è aperta
+        if hasattr(self, 'debug_window') and self.debug_window.winfo_exists() and hasattr(self, 'debug_text'):
             self.debug_text.config(state=tk.NORMAL)
-            self.debug_text.delete(1.0, tk.END)
-            self.debug_text.insert(tk.END, "Log cancellato. I nuovi messaggi appariranno qui.")
+            self.debug_text.delete('1.0', tk.END)
+            self.debug_text.insert(tk.END, "Log pulito. Nessun messaggio di debug disponibile.")
             self.debug_text.config(state=tk.DISABLED)
+            
+            # Aggiorna l'etichetta con il conteggio
+            if hasattr(self, 'log_count_label'):
+                self.log_count_label.config(text=f"Registro di debug dell'applicazione: 0 messaggi")
+        
+        # Aggiungi un messaggio che indica che i log sono stati puliti
+        self.log_debug("I log sono stati puliti manualmente dall'utente")
 
     @error_handler
     def export_log_to_txt(self):
@@ -9290,7 +9319,7 @@ class FileSearchApp:
             import getpass
             header = f"Debug Log - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
             header += f"Utente: {getpass.getuser()}\n"
-            header += f"Applicazione: File Search Tool V9.2.5 Beta\n"
+            header += f"Applicazione: File Search Tool V9.2.6 Beta\n"
             header += f"Numero totale messaggi: {len(self.debug_log)}\n"
             header += "-" * 80 + "\n\n"
             
