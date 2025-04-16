@@ -154,5 +154,12 @@ V 9.2.5
 -Queste ottimizzazioni dovrebbero migliorare significativamente le prestazioni di ricerca su unità di sistema e percorsi di rete, mantenendo al contempo 
         la struttura dell'interfaccia utente e l'esperienza utente esistenti.
 -Bug fix sulla compressione
-V 9.2.5.2
-eliminata la funzione show_performance_options
+V 9.2.6
+Eliminata la funzione show_performance_options già implementata in impostazioni avanzate
+Aggiunto slide per la regolazione sull'utilizzo della RAM - la RAM è impostata al 75% di default se attivo Gestione automatica della memoria
+Corretto errore ricerca con estensione selezionata/deselezionata
+Corretto errore su debug log auto-scroll
+Corretto errore su debug log pulsante pulisci log
+Eliminato tasto aggiorna su debug log
+Corretti errori minori
+
