@@ -9039,19 +9039,12 @@ class FileSearchApp:
                 self.debug_log = []
             
             # Etichetta informativa con conteggio
-            self.log_count_label = ttk.Label(
-                header_frame, 
-                text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi"
-            )
+            self.log_count_label = ttk.Label(header_frame, text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
             self.log_count_label.pack(side=tk.LEFT)
             
             # Opzione auto-scroll
             self.autoscroll_var = tk.BooleanVar(value=True)
-            ttk.Checkbutton(
-                header_frame, 
-                text="Auto scorrimento", 
-                variable=self.autoscroll_var
-            ).pack(side=tk.RIGHT, padx=5)
+            ttk.Checkbutton(header_frame, text="Auto scorrimento", variable=self.autoscroll_var).pack(side=tk.RIGHT, padx=5)
             
             # Crea un text widget con scrollbar
             text_frame = ttk.Frame(frame)
@@ -9088,23 +9081,9 @@ class FileSearchApp:
             btn_frame = ttk.Frame(self.debug_window)
             btn_frame.pack(fill=tk.X, padx=10, pady=5)
             
-            ttk.Button(
-                btn_frame, 
-                text="Aggiorna", 
-                command=self.update_log_display
-            ).pack(side=tk.LEFT, padx=5)
-            
-            ttk.Button(
-                btn_frame, 
-                text="Pulisci Log", 
-                command=self.clear_log
-            ).pack(side=tk.LEFT, padx=5)
-            
-            ttk.Button(
-                btn_frame, 
-                text="Esporta in TXT", 
-                command=self.export_log_to_txt
-            ).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="Aggiorna", command=self.update_log_display).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="Pulisci Log", command=self.clear_log).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="Esporta in TXT", command=self.export_log_to_txt).pack(side=tk.LEFT, padx=5)
             
             # Posiziona la finestra al centro
             self.debug_window.update_idletasks()
