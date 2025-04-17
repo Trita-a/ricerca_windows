@@ -147,7 +147,8 @@ class FileSearchApp:
         """Inizializza solo le variabili essenziali per l'avvio"""
         # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
         self.datetime_var = StringVar()
-        
+        self.max_depth = 5
+
         # Variabili principali per la ricerca
         self.search_content = BooleanVar(value=True)
         self.search_path = StringVar()
@@ -158,7 +159,21 @@ class FileSearchApp:
         self.is_searching = False
         self.progress_queue = queue.Queue()
         self.search_depth = StringVar(value="base") 
+        self.excluded_dirs = []
 
+        # Inizializza impostazioni per la gestione della RAM
+        self.auto_memory_management = True
+        self.memory_usage_percent = 75
+        # Inizializza tutte le variabili utilizzate nelle impostazioni
+        self.timeout_enabled = tk.BooleanVar(value=False)
+        self.timeout_seconds = tk.IntVar(value=3600)
+        self.max_files_to_check = tk.IntVar(value=100000)
+        self.max_results = tk.IntVar(value=50000)
+        self.worker_threads = tk.IntVar(value=4)
+        self.max_file_size_mb = tk.IntVar(value=100)
+        self.use_indexing = tk.BooleanVar(value=True)
+        self.skip_permission_errors = tk.BooleanVar(value=True)
+        
         # Variabili per data/ora e utente (datetime_var già inizializzato)
         self.user_var = StringVar(value=getpass.getuser())
         
@@ -175,7 +190,7 @@ class FileSearchApp:
         self.total_disk_var = StringVar(value="")
         self.used_disk_var = StringVar(value="")
         self.free_disk_var = StringVar(value="")
-        
+
         # Inizializza tutte le variabili utilizzate nel caricamento delle impostazioni
         self.timeout_enabled = tk.BooleanVar(value=False)
         self.timeout_seconds = tk.IntVar(value=3600)
@@ -9322,58 +9337,7 @@ class FileSearchApp:
                 # Rimuovi eventuali indicatori di ordinamento da altre colonne
                 tv.heading(c, text=tv.heading(c, 'text').split(' ')[0])
 
-    @error_handler # Add this to the FileSearchApp class to track log messages
-    def _init_essential_variables(self):
-        """Inizializza solo le variabili essenziali per l'avvio"""
-        # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
-        self.datetime_var = StringVar()
-        self.max_depth = 5
-        
-        # Variabili principali per la ricerca
-        self.search_content = BooleanVar(value=True)
-        self.search_path = StringVar()
-        self.keywords = StringVar()
-        self.search_results = []
-        self.search_files = BooleanVar(value=True)
-        self.search_folders = BooleanVar(value=True)
-        self.is_searching = False
-        self.progress_queue = queue.Queue()
-        self.search_depth = StringVar(value="base") 
-        self.excluded_dirs = []
-        
-        # Inizializza impostazioni per la gestione della RAM
-        self.auto_memory_management = True
-        self.memory_usage_percent = 75
-        # Inizializza tutte le variabili utilizzate nelle impostazioni
-        self.timeout_enabled = tk.BooleanVar(value=False)
-        self.timeout_seconds = tk.IntVar(value=3600)
-        self.max_files_to_check = tk.IntVar(value=100000)
-        self.max_results = tk.IntVar(value=50000)
-        self.worker_threads = tk.IntVar(value=4)
-        self.max_file_size_mb = tk.IntVar(value=100)
-        self.use_indexing = tk.BooleanVar(value=True)
-        self.skip_permission_errors = tk.BooleanVar(value=True)
-
-        # Variabili per data/ora e utente (datetime_var già inizializzato)
-        self.user_var = StringVar(value=getpass.getuser())
-        
-        # Variabili essenziali per l'interfaccia
-        self.ignore_hidden = BooleanVar(value=True)
-        self.search_executor = None
-        self.exclude_system_files = BooleanVar(value=True)
-        self.whole_word_search = BooleanVar(value=False)
-        self.dir_size_calculation = StringVar(value="disabilitato")
-        
-        # Variabili per la visualizzazione
-        self.directory_calculation_enabled = False
-        self.dir_size_var = StringVar(value="")
-        self.total_disk_var = StringVar(value="")
-        self.used_disk_var = StringVar(value="")
-        self.free_disk_var = StringVar(value="")
-        
-        # Add a queue for debug logs
-        self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
-        
+           
     @error_handler # Show debug log window with export functionality
     def show_debug_log(self):
         """Displays a window with debug logs and export functionality"""
