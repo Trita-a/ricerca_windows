@@ -803,9 +803,22 @@ class FileSearchApp:
         exception = [None]
         processing_completed = [False]
         
+        # MODIFICA CHIAVE: Definiamo la funzione di elaborazione direttamente qui
+        def process_file_internal():
+            try:
+                # Elabora il file e memorizza il risultato nella lista result
+                file_result = self.process_file(file_path, keywords, search_content)
+                result[0] = file_result
+            except Exception as e:
+                # Memorizza l'eccezione
+                exception[0] = e
+                self.log_error(f"Errore nell'elaborazione del file {file_path}", exception=e, location="process_file_with_timeout")
+            finally:
+                # Segnala che l'elaborazione è completata
+                processing_completed[0] = True
+        
         thread = threading.Thread(
-            target=self.process_with_timeout,
-            args=(file_path, keywords, result, exception, processing_completed, search_content)
+            target=process_file_internal  # Usa la funzione definita localmente
         )
         thread.daemon = True
         thread.start()
@@ -823,8 +836,8 @@ class FileSearchApp:
                         if result[0] is not None:
                             self.log_debug(f"Risultati tardivi trovati in: {file_path} - Aggiornamento UI")
                             # Aggiungi i risultati tardivi alla UI
-                            self.add_search_result(result[0])  # Sostituisci con il tuo metodo
-                            self.update_results_list()  # Aggiorna la UI
+                            self.add_search_result(result[0])
+                            self.update_results_list()
                     else:
                         # Il thread sta ancora lavorando, ricontrolla più tardi
                         self.root.after(1000, check_late_results)
