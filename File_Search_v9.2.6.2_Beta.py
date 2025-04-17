@@ -43,7 +43,7 @@ class LogManager:
         self.min_level = min_level
         self.max_entries = max_entries
         self.folder_counts = {}
-        self.last_folder_report = datetime.now()
+        
         self.report_interval = 5
         self.last_traceback = None  # Per salvare l'ultimo traceback
 
@@ -192,6 +192,10 @@ class FileSearchApp:
         self.debug_mode = True
         self.debug_log = []
 
+        # Codice per i log
+        self.log_manager = LogManager(min_level=LogLevel.INFO)
+        self.log_level_gui = tk.StringVar(value="INFO")
+
         # Aggiungi questa riga per inizializzare current_user
         self.current_user = getpass.getuser()
         
@@ -207,10 +211,6 @@ class FileSearchApp:
         
         # Esegui attività di background dopo un breve ritardo
         self.root.after(500, self._delayed_startup_tasks)
-        
-        # Codice per i log
-        self.log_manager = LogManager(min_level=LogLevel.INFO)
-        self.log_level_gui = tk.StringVar(value="INFO")
 
     @error_handler
     def create_base_interface(self):
@@ -1179,12 +1179,13 @@ class FileSearchApp:
     @error_handler
     def log_debug(self, message):
         """Registra un messaggio di debug"""
-        self.log_manager.add_log(message, LogLevel.DEBUG)
+        self.log_manager.add_log(message, level=LogLevel.DEBUG)
+
 
     @error_handler
     def log_info(self, message):
         """Registra un messaggio informativo"""
-        self.log_manager.add_log(message, LogLevel.INFO)
+        self.log_manager.add_log(message, level=LogLevel.DEBUG)
 
     @error_handler
     def log_warning(self, message):
@@ -1260,7 +1261,7 @@ class FileSearchApp:
     @error_handler
     def log_error(self, message, exception=None, location=None, traceback=None):
         """Registra un errore"""
-        log_entry = self.log_manager.add_log(message, LogLevel.ERROR, exception, location)
+        self.log_manager.add_log(message, level=LogLevel.ERROR, exception=exception, location=location)
         
         # Salva il traceback se fornito
         if traceback and hasattr(self.log_manager, 'last_traceback'):
@@ -1268,7 +1269,8 @@ class FileSearchApp:
         
         # Aggiorna immediatamente il display per gli errori
         if hasattr(self, 'log_text') and self.log_text:
-            timestamp = log_entry["timestamp"]
+            # Crea un timestamp formattato invece di usare log_entry non definito
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             formatted_message = f"{timestamp} - ERRORE: {message}"
             if exception:
                 formatted_message += f" ({str(exception)})"
@@ -9329,7 +9331,7 @@ class FileSearchApp:
             
         self.log_window = tk.Toplevel(self.root)
         self.log_window.title("Log di Sistema")
-        self.log_window.geometry("900x600")
+        self.log_window.geometry("900x700")
         self.log_window.minsize(600, 400)
         
         # Applica il tema attuale
@@ -9431,6 +9433,20 @@ class FileSearchApp:
     def _set_log_level(self, level):
         """Imposta il livello di log selezionato"""
         self.log_level_gui.set(level)
+        
+        # Aggiorna anche il livello nel LogManager
+        if level == "DEBUG":
+            self.log_manager.min_level = LogLevel.DEBUG
+        elif level == "INFO":
+            self.log_manager.min_level = LogLevel.INFO
+        elif level == "WARNING":
+            self.log_manager.min_level = LogLevel.WARNING
+        elif level == "ERROR":
+            self.log_manager.min_level = LogLevel.ERROR
+        elif level == "CRITICAL":
+            self.log_manager.min_level = LogLevel.CRITICAL
+        
+        # Aggiorna la visualizzazione dei log
         self.update_log_display()
     @error_handler 
     def _filter_logs(self, filter_text):
@@ -9630,7 +9646,7 @@ def create_splash_screen(parent):
     frame = ttk.Frame(splash_win, padding=20)
     frame.pack(fill=tk.BOTH, expand=tk.YES)
     
-    ttk.Label(frame, text="File Search Tool V9.2.5 Beta", 
+    ttk.Label(frame, text="File Search Tool V9.2.6 Beta", 
             font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
     ttk.Label(frame, text="Forensics G.di F.", 
             font=("Helvetica", 14)).pack(pady=(0, 20))
