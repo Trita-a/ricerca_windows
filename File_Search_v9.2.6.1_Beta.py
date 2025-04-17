@@ -694,9 +694,23 @@ class FileSearchApp:
         exception = [None]
         processing_completed = [False]
         
+        # CORREZIONE: Utilizzo di una funzione wrapper per gestire correttamente gli argomenti
+        def process_wrapper():
+            try:
+                # Chiama process_file con i parametri corretti
+                res = self.process_file(file_path, keywords, search_content)
+                # Salva il risultato
+                result[0] = res
+            except Exception as e:
+                # Cattura eventuali eccezioni
+                exception[0] = e
+            finally:
+                # Segna il completamento
+                processing_completed[0] = True
+        
+        # Usa la funzione wrapper come target
         thread = threading.Thread(
-            target=self.process_with_timeout,
-            args=(file_path, keywords, result, exception, processing_completed, search_content)
+            target=process_wrapper
         )
         thread.daemon = True
         thread.start()
@@ -9661,7 +9675,7 @@ def create_splash_screen(parent):
     frame = ttk.Frame(splash_win, padding=20)
     frame.pack(fill=tk.BOTH, expand=tk.YES)
     
-    ttk.Label(frame, text="File Search Tool V9.2.5 Beta", 
+    ttk.Label(frame, text="File Search Tool V9.2.6 Beta", 
             font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
     ttk.Label(frame, text="Forensics G.di F.", 
             font=("Helvetica", 14)).pack(pady=(0, 20))
