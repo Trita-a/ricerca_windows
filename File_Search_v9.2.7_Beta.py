@@ -26,6 +26,13 @@ from tkinter import filedialog, messagebox, BooleanVar, StringVar, IntVar
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 
+# Informazioni sulla versione dell'applicazione
+APP_VERSION = "V9.2.7"
+APP_STAGE = "Beta"
+APP_NAME = "File Search Tool"
+APP_FULL_NAME = f"{APP_NAME} {APP_VERSION} {APP_STAGE}"
+APP_TITLE = f"{APP_NAME} {APP_VERSION} {APP_STAGE} Forensics G.di F."
+
 # Elenco di librerie da installare se mancanti
 missing_libraries = []
 
@@ -82,7 +89,7 @@ class FileSearchApp:
     @error_handler
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V9.2.7 Beta Forensics G.di F.")
+        self.root.title(APP_TITLE)
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
@@ -148,6 +155,12 @@ class FileSearchApp:
         # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
         self.datetime_var = StringVar()
         self.max_depth = 5
+        
+        # Definisci max_workers prima di utilizzarlo
+        self.max_workers = os.cpu_count() or 4  # Utilizza il numero di CPU disponibili o 4 come fallback
+
+        import concurrent.futures
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers)
 
         # Variabili principali per la ricerca
         self.search_content = BooleanVar(value=True)
@@ -2014,63 +2027,16 @@ class FileSearchApp:
     def initialize_block_queue(self, root_path, block_queue, visited_dirs, files_checked, keywords, search_content, futures):
         """Inizializza la coda di blocchi con il percorso principale"""
         try:
+            # Verifica se l'executor esiste, altrimenti crealo
+            if not hasattr(self, 'executor'):
+                import concurrent.futures
+                self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4)
+                self.log_debug("Executor creato dinamicamente durante l'inizializzazione della coda blocchi")
+                
             # Verifica se il percorso è valido
             if not os.path.exists(root_path) or root_path in visited_dirs:
                 return
                 
-            # Aggiunge il percorso principale ai visitati
-            visited_dirs.add(root_path)
-            
-            # Inizializza lista per file e sottocartelle
-            subdirs = []
-            files_batch = []
-            
-            # Ottiene il contenuto della directory principale
-            try:
-                with os.scandir(root_path) as entries:
-                    for entry in entries:
-                        # Se è un file, aggiungi al batch corrente
-                        if entry.is_file():
-                            if not self.should_skip_file(entry.path):
-                                files_batch.append(entry.path)
-                        # Se è una directory, aggiungi alla lista delle sottocartelle
-                        elif entry.is_dir():
-                            # Verifica se dobbiamo escludere questa directory
-                            if not any(re.match(pattern, entry.path) for pattern in self.excluded_dirs):
-                                subdirs.append(entry.path)
-            except (PermissionError, OSError) as e:
-                self.log_error(f"Errore accesso alla directory {root_path}: {str(e)}")
-            
-            # Processa i file trovati nella directory corrente
-            if files_batch:
-                future = self.executor.submit(
-                    self.process_file_batch, 
-                    files_batch, 
-                    files_checked,
-                    time.time(), 
-                    keywords, 
-                    search_content
-                )
-                futures.append(future)
-            
-            # CORREZIONE: Assicurati che tutte le sottocartelle vengano aggiunte alla coda
-            # indipendentemente dalle impostazioni di profondità
-            for subdir in subdirs:
-                if self.search_depth == 0 or self.current_depth < self.search_depth:
-                    priority = self.calculate_block_priority(subdir)
-                    block_queue.put((priority, subdir))
-                    
-            # Aggiorna la UI con i progressi
-            self.update_status_label(f"Scansione directory: {root_path}")
-            
-        except Exception as e:
-            self.log_error(f"Errore nell'inizializzazione della coda blocchi: {str(e)}")
-        try:
-            # CORREZIONE: Aggiungere sempre il percorso principale alla coda con profondità 0
-            # Questo garantisce che la ricerca inizi sempre dal percorso principale
-            priority_root = self.calculate_block_priority(root_path)
-            block_queue.put((priority_root, root_path, 0))  # Profondità 0 per la directory principale
-            
             # Aggiungi il percorso alla lista delle cartelle visitate per evitare cicli
             try:
                 visited_dirs.add(os.path.realpath(root_path))
@@ -2083,10 +2049,15 @@ class FileSearchApp:
             # Log dell'inizio della ricerca con informazioni sulla profondità
             self.log_debug(f"Inizializzata ricerca in {root_path} con profondità {'illimitata' if max_depth == 0 else max_depth}")
             
+            # CORREZIONE: Aggiungere sempre il percorso principale alla coda con profondità 0
+            priority_root = self.calculate_block_priority(root_path)
+            block_queue.put((priority_root, root_path, 0))  # Profondità 0 per la directory principale
+            
             # Processa i file nella directory principale
             try:
                 items = os.listdir(root_path)
                 
+                # Prima elabora le sottodirectory
                 for item in items:
                     item_path = os.path.join(root_path, item)
                     try:
@@ -2103,7 +2074,6 @@ class FileSearchApp:
                                 for excluded in self.excluded_paths):
                                 continue
                             
-                            # CORREZIONE: Non controlliamo la profondità qui, viene fatto in process_blocks
                             # Aggiungiamo sempre le sottocartelle di primo livello con profondità 1
                             priority = self.calculate_block_priority(item_path)
                             block_queue.put((priority, item_path, 1))  # Profondità 1 per le sottocartelle dirette
@@ -2115,9 +2085,9 @@ class FileSearchApp:
                     except Exception as e:
                         self.log_debug(f"Errore nell'aggiunta del blocco {item_path}: {str(e)}")
                 
-                # Processa i file nella directory principale
+                # Poi elabora i file
                 for item in items:
-                    if self.stop_search:
+                    if hasattr(self, 'stop_search') and self.stop_search:
                         return
                         
                     item_path = os.path.join(root_path, item)
@@ -2135,14 +2105,15 @@ class FileSearchApp:
                                     continue
                                 
                                 # Processa direttamente i file nella directory principale
-                                nonlocal_files_checked = files_checked[0]
-                                nonlocal_files_checked += 1
-                                files_checked[0] = nonlocal_files_checked
-                                if nonlocal_files_checked > self.max_files_to_check.get():
-                                    self.stop_search = True
+                                files_checked[0] += 1
+                                if files_checked[0] > self.max_files_to_check.get():
+                                    if hasattr(self, 'stop_search'):
+                                        self.stop_search = True
                                     return
                                 
-                                future = self.search_executor.submit(self.process_file, item_path, keywords, search_content)
+                                # Usa l'executor appropriato (search_executor o executor)
+                                executor_to_use = self.search_executor if hasattr(self, 'search_executor') else self.executor
+                                future = executor_to_use.submit(self.process_file, item_path, keywords, search_content)
                                 futures.append(future)
                     except Exception as e:
                         self.log_debug(f"Errore nell'elaborazione del file {item_path}: {str(e)}")
@@ -2151,8 +2122,13 @@ class FileSearchApp:
                 self.log_debug(f"Permesso negato per la directory {root_path}")
             except Exception as e:
                 self.log_debug(f"Errore nell'inizializzazione dei blocchi da {root_path}: {str(e)}")
+                
+            # Aggiorna la UI con i progressi
+            if hasattr(self, 'update_status_label'):
+                self.update_status_label(f"Scansione directory: {root_path}")
+                
         except Exception as e:
-            self.log_debug(f"Errore generale nell'inizializzazione della coda: {str(e)}")
+            self.log_error(f"Errore nell'inizializzazione della coda blocchi: {str(e)}")
 
     @error_handler
     def process_file_batch(self, file_batch, files_checked, last_update_time, 
@@ -3221,7 +3197,7 @@ class FileSearchApp:
             ext = os.path.splitext(file_path)[1].lower()
             
             # Log per debug
-            self.log_debug(f"Tentativo estrazione contenuto da: {os.path.basename(file_path)} ({ext})")
+            self.log_debug(f"Tentativo estrazione contenuto da: {os.path.basename(file_path)} ({os.path.splitext(file_path)[1]})")
             
             # Controllo dimensione file
             try:
@@ -9776,20 +9752,18 @@ class FileSearchApp:
 
     @error_handler
     def export_log_to_txt(self):
-        """Esporta i log in un file di testo in base al filtro selezionato"""
+        """Esporta i log in un file di testo in base al filtro selezionato e registra l'operazione"""
         # Ottieni il filtro corrente dalla combobox
         filtro_attuale = self.filter_var.get()
         
-        # Debug: verifica i messaggi disponibili
-        if not hasattr(self, 'debug_log') or not self.debug_log:
-            tk.messagebox.showinfo("Nessun log da esportare", "Non ci sono messaggi di log da esportare.")
-            return
-        
         # Assicurati che all_log_messages sia popolato
         if not hasattr(self, 'all_log_messages') or not self.all_log_messages:
-            self.all_log_messages = self.debug_log.copy()
+            if hasattr(self, 'debug_log'):
+                self.all_log_messages = self.debug_log.copy()
+            else:
+                self.all_log_messages = []
         
-        # Applica il filtro con una logica più robusta
+        # Applica il filtro con una logica robusta
         if filtro_attuale == "Tutti":
             # Utilizza tutti i messaggi di log
             log_filtrati = self.all_log_messages
@@ -9818,7 +9792,7 @@ class FileSearchApp:
                                 f"Non ci sono messaggi di log del tipo '{filtro_attuale}' da esportare.")
             return
         
-        # Resto della funzione invariato
+        # Chiedi all'utente dove salvare il file
         file_path = tk.filedialog.asksaveasfilename(
             defaultextension=".txt",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
@@ -9829,13 +9803,17 @@ class FileSearchApp:
             return
             
         try:
+            # Ottieni username e timestamp corrente
+            import getpass
+            username = getpass.getuser()
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
             log_content = "\n".join(log_filtrati)
             
             # Aggiungi intestazione con timestamp e info utente
-            import getpass
-            header = f"Debug Log ({filtro_attuale}) - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
-            header += f"Utente: {getpass.getuser()}\n"
-            header += f"Applicazione: File Search Tool V9.2.7 Beta\n"
+            header = f"Debug Log ({filtro_attuale}) - Esportato il {current_time}\n"
+            header += f"Utente: {username}\n"
+            header += f"Applicazione: {APP_FULL_NAME}\n"
             header += f"Numero totale messaggi: {len(log_filtrati)}\n"
             header += "-" * 80 + "\n\n"
             
@@ -9843,9 +9821,38 @@ class FileSearchApp:
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(header + log_content)
 
+            # Messaggio di successo
             tk.messagebox.showinfo("Esportazione completata", 
                             f"Log di tipo '{filtro_attuale}' salvati con successo in:\n{file_path}\n\n"
                             f"Il file contiene {len(log_filtrati)} messaggi di log.")
+            
+            # Registra l'operazione di esportazione nei log dell'applicazione
+            export_log_message = f"[Info] {current_time} - Utente {username} ha esportato {len(log_filtrati)} messaggi di log di tipo '{filtro_attuale}' in: {file_path}"
+            
+            # Aggiungi il messaggio ai log
+            if hasattr(self, 'debug_log'):
+                self.debug_log.append(export_log_message)
+            
+            # Aggiorna anche all_log_messages
+            if hasattr(self, 'all_log_messages'):
+                self.all_log_messages.append(export_log_message)
+            
+            # Aggiorna la visualizzazione dei log se la finestra è aperta
+            if hasattr(self, 'debug_window') and self.debug_window.winfo_exists():
+                # Aggiungi il nuovo messaggio alla visualizzazione
+                self.debug_text.config(state=tk.NORMAL)
+                self.debug_text.insert(tk.END, export_log_message + "\n", "info")
+                
+                # Se auto-scroll è attivo, scorri alla fine
+                if hasattr(self, 'autoscroll_var') and self.autoscroll_var.get():
+                    self.debug_text.see(tk.END)
+                
+                self.debug_text.config(state=tk.DISABLED)
+                
+                # Aggiorna il contatore dei messaggi
+                if hasattr(self, 'log_count_label'):
+                    self.log_count_label.config(text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
+                
         except Exception as e:
             tk.messagebox.showerror("Errore esportazione", 
                             f"Si è verificato un errore durante l'esportazione:\n{str(e)}")
@@ -9899,10 +9906,8 @@ def create_splash_screen(parent):
     frame = ttk.Frame(splash_win, padding=20)
     frame.pack(fill=tk.BOTH, expand=tk.YES)
     
-    ttk.Label(frame, text="File Search Tool V9.2.7 Beta", 
-            font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
-    ttk.Label(frame, text="Forensics G.di F.", 
-            font=("Helvetica", 14)).pack(pady=(0, 20))
+    ttk.Label(frame, text=APP_FULL_NAME, font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
+    ttk.Label(frame, text="Forensics G.di F.", font=("Helvetica", 14)).pack(pady=(0, 20))
     ttk.Label(frame, text="Caricamento applicazione in corso...").pack()
     
     progress = ttk.Progressbar(frame, mode="indeterminate")
