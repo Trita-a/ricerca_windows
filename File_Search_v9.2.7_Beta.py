@@ -1273,16 +1273,16 @@ class FileSearchApp:
         # Rendi il testo di nuovo sola lettura
         self.debug_text.config(state=tk.DISABLED)
 
-        @error_handler
-        def register_interrupt_handler(self):
-            """Registra il gestore degli interrupt (CTRL+C)"""
-            def handle_interrupt(sig, frame):
-                if self.is_searching:
-                    self.stop_search_process()
-                else:
-                    self.root.quit()
-            
-            signal.signal(signal.SIGINT, handle_interrupt)
+    @error_handler
+    def register_interrupt_handler(self):
+        """Registra il gestore degli interrupt (CTRL+C)"""
+        def handle_interrupt(sig, frame):
+            if self.is_searching:
+                self.stop_search_process()
+            else:
+                self.root.quit()
+        
+        signal.signal(signal.SIGINT, handle_interrupt)
 
     @error_handler
     def log_error(self, message, exception=None, location=None, traceback=None):
