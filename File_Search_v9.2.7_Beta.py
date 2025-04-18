@@ -82,7 +82,7 @@ class FileSearchApp:
     @error_handler
     def __init__(self, root):
         self.root = root
-        self.root.title("File Search Tool V9.2.6 Beta Forensics G.di F.")
+        self.root.title("File Search Tool V9.2.7 Beta Forensics G.di F.")
         
         # Imposta subito il debug mode per poter loggare
         self.debug_mode = True
@@ -1145,14 +1145,14 @@ class FileSearchApp:
         timestamp_short = timestamp_full.split(' ')[1]  # Solo l'ora per i log concisi
         
         # Rilevamento automatico dei messaggi di errore o warning
-        if "error" in message.lower() or "exception" in message.lower() or "failed" in message.lower():
+        if any(keyword in message.lower() for keyword in ["error", "exception", "failed", "errore", "eccezione", "fallito"]):
             # Formattazione speciale per gli errori
-            log_message_full = f"[ERROR] {timestamp_full} - {message}"
-            log_message_short = f"[{timestamp_short}] [ERROR] {message}"
-        elif "warning" in message.lower() or "warn" in message.lower() or "attenzione" in message.lower():
+            log_message_full = f"[ERRORE] {timestamp_full} - {message}"
+            log_message_short = f"[{timestamp_short}] [ERRORE] {message}"
+        elif any(keyword in message.lower() for keyword in ["warning", "warn", "attenzione", "avviso"]):
             # Formattazione per i warning
-            log_message_full = f"[WARNING] {timestamp_full} - {message}"
-            log_message_short = f"[{timestamp_short}] [WARNING] {message}"
+            log_message_full = f"[AVVISO] {timestamp_full} - {message}"
+            log_message_short = f"[{timestamp_short}] [AVVISO] {message}"
         else:
             # Formattazione standard per i messaggi di info
             log_message_full = f"[INFO] {timestamp_full} - {message}"
@@ -1220,7 +1220,7 @@ class FileSearchApp:
 
     @error_handler
     def add_new_logs_to_display(self):
-        """Aggiunge solo i nuovi messaggi di log alla visualizzazione senza ricaricare tutto"""
+        """Aggiunge solo i nuovi messaggi di log alla visualizzazione rispettando il filtro corrente"""
         self.update_scheduled = False
         
         if not hasattr(self, 'debug_window') or not hasattr(self, 'debug_text') or not self.debug_window.winfo_exists():
@@ -1238,30 +1238,79 @@ class FileSearchApp:
         if self.last_displayed_log_index >= len(self.debug_log):
             return
         
-        # Aggiorna l'etichetta con il conteggio dei messaggi
-        if hasattr(self, 'log_count_label'):
-            self.log_count_label.config(text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
+        # Aggiorna la lista completa di tutti i messaggi per il filtraggio
+        if not hasattr(self, 'all_log_messages'):
+            self.all_log_messages = self.debug_log.copy()
+        else:
+            # Aggiungi solo i nuovi messaggi all'elenco completo
+            self.all_log_messages.extend(self.debug_log[self.last_displayed_log_index:])
         
-        # Inserisci solo i nuovi log
-        self.debug_text.config(state=tk.NORMAL)
+        # Verifica se è attivo un filtro
+        filter_active = hasattr(self, 'current_filter') and hasattr(self, 'filter_var') and self.filter_var.get() != "Tutti"
         
-        # Limita la visualizzazione a 5000 messaggi
-        max_display = 5000
-        
-        # Se il log è troppo grande, mostra un messaggio informativo
-        if len(self.debug_log) > max_display and self.last_displayed_log_index == 0:
-            self.debug_text.insert(tk.END, f"[Mostrando solo gli ultimi {max_display} di {len(self.debug_log)} messaggi...]\n\n")
-            # Aggiorna l'indice iniziale per iniziare dai messaggi più recenti
-            self.last_displayed_log_index = len(self.debug_log) - max_display
-        
-        # Inserisci i nuovi log
-        for i in range(self.last_displayed_log_index, len(self.debug_log)):
-            self.debug_text.insert(tk.END, self.debug_log[i] + "\n")
+        # Se c'è un filtro attivo, riapplica il filtro su tutti i messaggi
+        if filter_active:
+            selected_filter = self.filter_var.get()
+            # Mappa la selezione al prefisso corrispondente
+            filter_map = {
+                "Errore": ["[ERRORE]", "[ERROR]"],
+                "Avviso": ["[AVVISO]", "[WARNING]"],
+                "Info": ["[INFO]"]
+            }
+            
+            prefixes = filter_map.get(selected_filter, [])
+            
+            # Filtra i messaggi in base ai prefissi
+            filtered_messages = []
+            if prefixes:
+                filtered_messages = [msg for msg in self.all_log_messages 
+                                if any(prefix in msg for prefix in prefixes)]
+            
+            # Aggiorna l'etichetta con il conteggio dei messaggi filtrati
+            if hasattr(self, 'log_count_label'):
+                self.log_count_label.config(
+                    text=f"Registro di debug dell'applicazione: {len(filtered_messages)} messaggi ({selected_filter})"
+                )
+            
+            # Pulisci il testo esistente e inserisci i messaggi filtrati
+            self.debug_text.config(state=tk.NORMAL)
+            self.debug_text.delete("1.0", tk.END)
+            
+            # Limita la visualizzazione a 5000 messaggi
+            max_display = 5000
+            if len(filtered_messages) > max_display:
+                self.debug_text.insert(tk.END, f"[Mostrando solo gli ultimi {max_display} di {len(filtered_messages)} messaggi filtrati...]\n\n")
+                filtered_messages = filtered_messages[-max_display:]
+            
+            # Inserisci i messaggi filtrati
+            for message in filtered_messages:
+                self.debug_text.insert(tk.END, message + "\n")
+        else:
+            # Comportamento standard senza filtro
+            # Aggiorna l'etichetta con il conteggio dei messaggi
+            if hasattr(self, 'log_count_label'):
+                self.log_count_label.config(text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
+            
+            # Inserisci solo i nuovi log
+            self.debug_text.config(state=tk.NORMAL)
+            
+            # Limita la visualizzazione a 5000 messaggi
+            max_display = 5000
+            
+            # Se il log è troppo grande, mostra un messaggio informativo
+            if len(self.debug_log) > max_display and self.last_displayed_log_index == 0:
+                self.debug_text.insert(tk.END, f"[Mostrando solo gli ultimi {max_display} di {len(self.debug_log)} messaggi...]\n\n")
+                # Aggiorna l'indice iniziale per iniziare dai messaggi più recenti
+                self.last_displayed_log_index = len(self.debug_log) - max_display
+            
+            # Inserisci i nuovi log
+            for i in range(self.last_displayed_log_index, len(self.debug_log)):
+                self.debug_text.insert(tk.END, self.debug_log[i] + "\n")
         
         # Aggiorna l'indice dell'ultimo messaggio visualizzato
         self.last_displayed_log_index = len(self.debug_log)
         
-        # Evidenzia gli errori con colore rosso
+        # Evidenzia gli errori con colori appropriati
         self.highlight_errors()
         
         # Decidi se scorrere alla fine se l'autoscroll è attivato
@@ -1289,11 +1338,11 @@ class FileSearchApp:
         """Registra un errore nel log di debug con dettagli aggiuntivi"""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # Crea un messaggio di errore dettagliato
-        error_message = f"[ERROR] {timestamp} - {message}"
+        # Crea un messaggio di errore dettagliato con prefisso in italiano
+        error_message = f"[ERRORE] {timestamp} - {message}"
         
         print(f"LOG_ERROR: {error_message[:100]}...")
-    
+
         # Registra nel log di debug
         if hasattr(self, 'debug_log'):
             self.debug_log.append(error_message)
@@ -1301,14 +1350,14 @@ class FileSearchApp:
             
         # Aggiungi informazioni sulla posizione dell'errore
         if location:
-            error_message += f" | Location: {location}"
+            error_message += f" | Posizione: {location}"
         
         # Aggiungi dettagli sull'eccezione
         if exception:
             exc_type = type(exception).__name__
             exc_details = str(exception)
             
-            error_message += f" | Exception: [{exc_type}]: {exc_details}"
+            error_message += f" | Eccezione: [{exc_type}]: {exc_details}"
         
         # Gestisci il traceback (priorità al traceback esplicito se fornito)
         traceback_info = ""
@@ -1361,83 +1410,65 @@ class FileSearchApp:
     
     @error_handler
     def highlight_errors(self):
-        """Evidenzia le righe di log con colori diversi in base al tipo di messaggio"""
-        if hasattr(self, 'debug_text'):
-            # Configura i tag per i diversi tipi di messaggi
-            self.debug_text.tag_config("error", foreground="#ff6b6b")  # Rosso per errori
-            self.debug_text.tag_config("warning", foreground="#FF8800")  # Arancione per warning
-            self.debug_text.tag_config("info", foreground="#FFFFFF")  # Bianco per info
-            
-            # Cerca tutte le righe con "[ERROR]"
-            start = "1.0"
-            while True:
-                start = self.debug_text.search("[ERROR]", start, tk.END)
-                if not start:
-                    break
-                    
-                # Trova la fine della riga
-                line_end = self.debug_text.search("\n", start, tk.END)
-                if not line_end:
-                    line_end = tk.END
-                    
-                # Crea un tag per questa riga
-                self.debug_text.tag_add("error", start, line_end)
-                
-                # Imposta il prossimo inizio ricerca
-                start = line_end
-            
-            # Cerca tutte le righe con "[WARNING]"
-            start = "1.0"
-            while True:
-                start = self.debug_text.search("[WARNING]", start, tk.END)
-                if not start:
-                    break
-                    
-                # Trova la fine della riga
-                line_end = self.debug_text.search("\n", start, tk.END)
-                if not line_end:
-                    line_end = tk.END
-                    
-                # Crea un tag per questa riga
-                self.debug_text.tag_add("warning", start, line_end)
-                
-                # Imposta il prossimo inizio ricerca
-                start = line_end
-                
-            # Cerca tutte le righe con "[INFO]"
-            start = "1.0"
-            while True:
-                start = self.debug_text.search("[INFO]", start, tk.END)
-                if not start:
-                    break
-                    
-                # Trova la fine della riga
-                line_end = self.debug_text.search("\n", start, tk.END)
-                if not line_end:
-                    line_end = tk.END
-                    
-                # Crea un tag per questa riga
-                self.debug_text.tag_add("info", start, line_end)
-                
-                # Imposta il prossimo inizio ricerca
-                start = line_end
+        """Evidenzia errori e avvisi nel testo con colori diversi"""
+        if not hasattr(self, 'debug_text') or not self.debug_text:
+            return
+               
+        # Prima rimuovi tutti i tag esistenti (più efficiente che rimuoverli riga per riga)
+        self.debug_text.tag_remove("error", "1.0", "end")
+        self.debug_text.tag_remove("warning", "1.0", "end")
+        self.debug_text.tag_remove("info", "1.0", "end")
         
-    @error_handler
-    def log_file_processing(self, file_path, content_length=0, found=False, error=None):
-        """Log dettagliato dell'elaborazione dei file per debug"""
-        ext = os.path.splitext(file_path)[1].lower()
-        message = f"Elaborazione {ext}: {os.path.basename(file_path)}"
-        
-        if error:
-            message += f" | ERRORE: {str(error)}"
-        elif content_length > 0:
-            message += f" | Contenuto estratto: {content_length} caratteri"
-            if found:
-                message += " | TROVATO"
-        else:
-            message += " | Nessun contenuto estratto"
+        # Cerca tutti i messaggi di errore (sia in inglese che in italiano)
+        start_index = "1.0"
+        while True:
+            # Cerca i prefissi di errore
+            error_pos = self.debug_text.search(r"\[(ERROR|ERRORE)\]", start_index, "end", regexp=True)
+            if not error_pos:
+                break
             
-        self.log_debug(message)
+            # Trova la fine della riga
+            line_end = self.debug_text.index(f"{error_pos} lineend")
+            
+            # Applica il tag di errore
+            self.debug_text.tag_add("error", error_pos, line_end)
+            
+            # Passa alla posizione successiva
+            start_index = line_end
+        
+        # Cerca tutti i messaggi di avviso (sia in inglese che in italiano)
+        start_index = "1.0"
+        while True:
+            # Cerca i prefissi di avviso
+            warning_pos = self.debug_text.search(r"\[(WARNING|AVVISO)\]", start_index, "end", regexp=True)
+            if not warning_pos:
+                break
+            
+            # Trova la fine della riga
+            line_end = self.debug_text.index(f"{warning_pos} lineend")
+            
+            # Applica il tag di warning
+            self.debug_text.tag_add("warning", warning_pos, line_end)
+            
+            # Passa alla posizione successiva
+            start_index = line_end
+        
+        # Cerca tutti i messaggi informativi
+        start_index = "1.0"
+        while True:
+            # Cerca i prefissi di info
+            info_pos = self.debug_text.search(r"\[INFO\]", start_index, "end", regexp=True)
+            if not info_pos:
+                break
+            
+            # Trova la fine della riga
+            line_end = self.debug_text.index(f"{info_pos} lineend")
+            
+            # Applica il tag di info
+            self.debug_text.tag_add("info", info_pos, line_end)
+            
+            # Passa alla posizione successiva
+            start_index = line_end
 
     @error_handler
     def check_and_notify_missing_libraries(self):
@@ -9459,7 +9490,7 @@ class FileSearchApp:
         
     @error_handler # Show debug log window with export functionality
     def show_debug_log(self):
-        """Displays a window with debug logs and export functionality"""
+        """Mostra una finestra con i log di debug e funzionalità di filtraggio"""
         if not hasattr(self, 'debug_window') or not self.debug_window.winfo_exists():
             self.debug_window = tk.Toplevel(self.root)
             self.debug_window.title("Debug Log")
@@ -9468,7 +9499,7 @@ class FileSearchApp:
             frame = ttk.Frame(self.debug_window)
             frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             
-            # Header frame con conteggio messaggi
+            # Header frame con conteggio messaggi e controlli di filtraggio
             header_frame = ttk.Frame(frame)
             header_frame.pack(fill=tk.X, pady=(0, 10))
             
@@ -9476,11 +9507,30 @@ class FileSearchApp:
             if not hasattr(self, 'debug_log'):
                 self.debug_log = []
             
-            # Etichetta informativa con conteggio
+            # Etichetta informativa con conteggio (spostata a sinistra)
             self.log_count_label = ttk.Label(header_frame, text=f"Registro di debug dell'applicazione: {len(self.debug_log)} messaggi")
-            self.log_count_label.pack(side=tk.LEFT)
+            self.log_count_label.pack(side=tk.LEFT, padx=(0, 20))
             
-            # Opzione auto-scroll
+            # Frame centrale per i controlli di filtraggio
+            filter_frame = ttk.Frame(header_frame)
+            filter_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            
+            # Etichetta e combobox per il filtraggio (centrati)
+            filter_inner_frame = ttk.Frame(filter_frame)
+            filter_inner_frame.pack(side=tk.TOP, anchor=tk.CENTER)
+            
+            filter_label = ttk.Label(filter_inner_frame, text="Filtra per tipo:")
+            filter_label.pack(side=tk.LEFT, padx=(0, 5))
+            
+            # Combobox per il filtraggio
+            self.filter_var = tk.StringVar(value="Tutti")
+            self.filter_combo = ttk.Combobox(filter_inner_frame, textvariable=self.filter_var, 
+                                            values=["Tutti", "Errore", "Avviso", "Info"],
+                                            width=10, state="readonly")
+            self.filter_combo.pack(side=tk.LEFT, padx=5)
+            self.filter_combo.bind("<<ComboboxSelected>>", self.filter_log_messages)
+            
+            # Opzione auto-scroll (spostata a destra)
             self.autoscroll_var = tk.BooleanVar(value=True)
             ttk.Checkbutton(header_frame, text="Auto scorrimento", variable=self.autoscroll_var).pack(side=tk.RIGHT, padx=5)
             
@@ -9496,7 +9546,7 @@ class FileSearchApp:
             h_scrollbar = ttk.Scrollbar(text_frame, orient=tk.HORIZONTAL)
             h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
             
-            # Text widget con sfondo scuro per migliore leggibilità
+            # Text widget con sfondo scuro per migliore leggibilità (mantenuto come nell'originale)
             self.debug_text = tk.Text(
                 text_frame, 
                 wrap=tk.NONE,  # Permette scroll orizzontale
@@ -9515,17 +9565,19 @@ class FileSearchApp:
             v_scrollbar.config(command=self.debug_text.yview)
             h_scrollbar.config(command=self.debug_text.xview)
             
+            # Configura i tag per i colori (mantenendo il tema scuro)
+            self.debug_text.tag_configure("error", foreground="#ff6b6b")    # Rosso più visibile su sfondo scuro
+            self.debug_text.tag_configure("warning", foreground="#ffb86c")  # Arancione più visibile
+            self.debug_text.tag_configure("info", foreground="#ffffff")     # Bianco chiaro per info
+            
             # Aggiungi pulsanti di utilità
             btn_frame = ttk.Frame(self.debug_window)
             btn_frame.pack(fill=tk.X, padx=10, pady=5)
             
-            # Rimuoviamo il pulsante "Aggiorna" che non serve più
-            # ttk.Button(btn_frame, text="Aggiorna", command=self.update_log_display).pack(side=tk.LEFT, padx=5)
-            
             ttk.Button(btn_frame, text="Pulisci Log", command=self.clear_log).pack(side=tk.LEFT, padx=5)
             ttk.Button(btn_frame, text="Esporta in TXT", command=self.export_log_to_txt).pack(side=tk.LEFT, padx=5)
             
-            # Posiziona la finestra al centro
+            # Posiziona la finestra al centro (mantenuto come nell'originale)
             self.debug_window.update_idletasks()
             width = self.debug_window.winfo_width()
             height = self.debug_window.winfo_height()
@@ -9536,6 +9588,14 @@ class FileSearchApp:
             # Imposta una dimensione minima ragionevole
             self.debug_window.minsize(800, 500)
             
+            # Memorizza la configurazione di filtraggio iniziale
+            self.current_filter = "Tutti"
+            
+            # Memorizza tutti i messaggi originali per il filtraggio
+            self.all_log_messages = []
+            if hasattr(self, 'debug_log'):
+                self.all_log_messages = self.debug_log.copy()
+            
             # Mostra il log corrente
             self.update_log_display()
 
@@ -9545,6 +9605,75 @@ class FileSearchApp:
             self.debug_window.focus_force()
             # Aggiorna il contenuto
             self.update_log_display()
+
+    @error_handler
+    def filter_log_messages(self, event=None):
+        """Filtra i messaggi di log in base al tipo selezionato"""
+        # Ottieni il filtro selezionato
+        selected_filter = self.filter_var.get()
+        self.current_filter = selected_filter
+        
+        # Se non ci sono log o la finestra non esiste, esci
+        if not hasattr(self, 'debug_log') or not hasattr(self, 'debug_text') or not self.debug_window.winfo_exists():
+            return
+        
+        # Salva tutti i messaggi se non l'abbiamo già fatto
+        if not hasattr(self, 'all_log_messages') or not self.all_log_messages:
+            self.all_log_messages = self.debug_log.copy()
+        
+        # Pulisci il testo esistente
+        self.debug_text.config(state=tk.NORMAL)
+        self.debug_text.delete("1.0", tk.END)
+        
+        # Applica il filtro
+        filtered_messages = []
+        
+        if selected_filter == "Tutti":
+            filtered_messages = self.all_log_messages
+        else:
+            # Mappa la selezione al prefisso corrispondente 
+            # (supporta sia prefissi in italiano che in inglese durante la transizione)
+            filter_map = {
+                "Errore": ["[ERRORE]", "[ERROR]"],
+                "Avviso": ["[AVVISO]", "[WARNING]"],
+                "Info": ["[INFO]"]
+            }
+            
+            prefixes = filter_map.get(selected_filter, [])
+            if prefixes:
+                filtered_messages = [msg for msg in self.all_log_messages 
+                                    if any(prefix in msg for prefix in prefixes)]
+        
+        # Aggiorna l'etichetta con il conteggio dei messaggi filtrati
+        if hasattr(self, 'log_count_label'):
+            if selected_filter == "Tutti":
+                self.log_count_label.config(
+                    text=f"Registro di debug dell'applicazione: {len(filtered_messages)} messaggi"
+                )
+            else:
+                self.log_count_label.config(
+                    text=f"Registro di debug dell'applicazione: {len(filtered_messages)} messaggi ({selected_filter})"
+                )
+        
+        # Inserisci i messaggi filtrati
+        for message in filtered_messages:
+            self.debug_text.insert(tk.END, message + "\n")
+        
+        # Applica la colorazione
+        self.highlight_errors()
+        
+        # Scorri alla fine se richiesto
+        if hasattr(self, 'autoscroll_var') and self.autoscroll_var.get():
+            self.debug_text.see(tk.END)
+        
+        # Rendi il testo di nuovo sola lettura
+        self.debug_text.config(state=tk.DISABLED)
+
+    def reset_log_filter(self):
+        """Resetta il filtro e mostra tutti i messaggi"""
+        if hasattr(self, 'filter_combo'):
+            self.filter_var.set("Tutti")
+            self.filter_log_messages()
 
     @error_handler
     def update_log_display(self):
@@ -9669,7 +9798,7 @@ class FileSearchApp:
             import getpass
             header = f"Debug Log - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
             header += f"Utente: {getpass.getuser()}\n"
-            header += f"Applicazione: File Search Tool V9.2.6 Beta\n"
+            header += f"Applicazione: File Search Tool V9.2.7 Beta\n"
             header += f"Numero totale messaggi: {len(self.debug_log)}\n"
             header += "-" * 80 + "\n\n"
             
@@ -9683,31 +9812,6 @@ class FileSearchApp:
         except Exception as e:
             tk.messagebox.showerror("Errore esportazione", 
                             f"Si è verificato un errore durante l'esportazione:\n{str(e)}")
-
-    @error_handler
-    def highlight_errors(self):
-        """Evidenzia le righe di errore nel log con colore rosso"""
-        if hasattr(self, 'debug_text'):
-            # Cerca tutte le righe con "[ERROR]"
-            start = "1.0"
-            while True:
-                start = self.debug_text.search("[ERROR]", start, tk.END)
-                if not start:
-                    break
-                    
-                # Trova la fine della riga
-                line_end = self.debug_text.search("\n", start, tk.END)
-                if not line_end:
-                    line_end = tk.END
-                    
-                # Crea un tag per questa riga
-                self.debug_text.tag_add("error", start, line_end)
-                
-                # Imposta il prossimo inizio ricerca
-                start = line_end
-                
-            # Configura il tag "error" per mostrare il testo in rosso
-            self.debug_text.tag_config("error", foreground="#ff6b6b")
 
 # Funzione principale per eseguire l'applicazione
 def main():
@@ -9758,7 +9862,7 @@ def create_splash_screen(parent):
     frame = ttk.Frame(splash_win, padding=20)
     frame.pack(fill=tk.BOTH, expand=tk.YES)
     
-    ttk.Label(frame, text="File Search Tool V9.2.6 Beta", 
+    ttk.Label(frame, text="File Search Tool V9.2.7 Beta", 
             font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
     ttk.Label(frame, text="Forensics G.di F.", 
             font=("Helvetica", 14)).pack(pady=(0, 20))
