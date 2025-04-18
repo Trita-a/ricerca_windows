@@ -9776,30 +9776,67 @@ class FileSearchApp:
 
     @error_handler
     def export_log_to_txt(self):
-        """Esporta il log completo in un file di testo"""
-        # Chiedi all'utente dove salvare il file
+        """Esporta i log in un file di testo in base al filtro selezionato"""
+        # Ottieni il filtro corrente dalla combobox
+        filtro_attuale = self.filter_var.get()
+        
+        # Debug: verifica i messaggi disponibili
+        if not hasattr(self, 'debug_log') or not self.debug_log:
+            tk.messagebox.showinfo("Nessun log da esportare", "Non ci sono messaggi di log da esportare.")
+            return
+        
+        # Assicurati che all_log_messages sia popolato
+        if not hasattr(self, 'all_log_messages') or not self.all_log_messages:
+            self.all_log_messages = self.debug_log.copy()
+        
+        # Applica il filtro con una logica più robusta
+        if filtro_attuale == "Tutti":
+            # Utilizza tutti i messaggi di log
+            log_filtrati = self.all_log_messages
+        elif filtro_attuale == "Errore":
+            # Cerca diverse varianti di errore
+            log_filtrati = [msg for msg in self.all_log_messages 
+                        if "[Errore]" in msg or "[ERRORE]" in msg or "[errore]" in msg
+                        or "ERROR" in msg.upper() or "ERRORE" in msg.upper()]
+        elif filtro_attuale == "Avviso":
+            # Cerca diverse varianti di avviso
+            log_filtrati = [msg for msg in self.all_log_messages 
+                        if "[Avviso]" in msg or "[AVVISO]" in msg or "[avviso]" in msg
+                        or "WARNING" in msg.upper() or "AVVISO" in msg.upper()]
+        elif filtro_attuale == "Info":
+            # Cerca diverse varianti di info
+            log_filtrati = [msg for msg in self.all_log_messages 
+                        if "[Info]" in msg or "[INFO]" in msg or "[info]" in msg
+                        or "INFO" in msg.upper()]
+        else:
+            # Fallback a tutti i messaggi
+            log_filtrati = self.all_log_messages
+        
+        # Verifica se ci sono log da esportare
+        if not log_filtrati:
+            tk.messagebox.showinfo("Nessun log da esportare", 
+                                f"Non ci sono messaggi di log del tipo '{filtro_attuale}' da esportare.")
+            return
+        
+        # Resto della funzione invariato
         file_path = tk.filedialog.asksaveasfilename(
             defaultextension=".txt",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-            title="Salva log come file di testo"
+            title=f"Salva log {filtro_attuale} come file di testo"
         )
         
         if not file_path:  # Utente ha annullato
             return
             
         try:
-            # Verifica che il debug log sia inizializzato
-            if not hasattr(self, 'debug_log'):
-                self.debug_log = []
-                
-            log_content = "\n".join(self.debug_log)
+            log_content = "\n".join(log_filtrati)
             
             # Aggiungi intestazione con timestamp e info utente
             import getpass
-            header = f"Debug Log - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+            header = f"Debug Log ({filtro_attuale}) - Esportato il {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
             header += f"Utente: {getpass.getuser()}\n"
             header += f"Applicazione: File Search Tool V9.2.7 Beta\n"
-            header += f"Numero totale messaggi: {len(self.debug_log)}\n"
+            header += f"Numero totale messaggi: {len(log_filtrati)}\n"
             header += "-" * 80 + "\n\n"
             
             # Scrivi su file
@@ -9807,8 +9844,8 @@ class FileSearchApp:
                 f.write(header + log_content)
 
             tk.messagebox.showinfo("Esportazione completata", 
-                            f"Log salvato con successo in:\n{file_path}\n\n"
-                            f"Il file contiene {len(self.debug_log)} messaggi di log.")
+                            f"Log di tipo '{filtro_attuale}' salvati con successo in:\n{file_path}\n\n"
+                            f"Il file contiene {len(log_filtrati)} messaggi di log.")
         except Exception as e:
             tk.messagebox.showerror("Errore esportazione", 
                             f"Si è verificato un errore durante l'esportazione:\n{str(e)}")
