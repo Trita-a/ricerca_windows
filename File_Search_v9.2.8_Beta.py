@@ -8173,8 +8173,7 @@ class FileSearchApp:
                 # Impostazioni di aggiornamento
                 "update_settings": getattr(self, 'update_settings', {
                     "auto_update": True,
-                    "update_frequency": "All'avvio",
-                    "last_update_check": "Mai"
+                    "update_frequency": "All'avvio"
                 })
             }
             
@@ -9243,8 +9242,7 @@ class FileSearchApp:
         if not hasattr(self, 'update_settings'):
             self.update_settings = {
                 "auto_update": True,
-                "update_frequency": "All'avvio",
-                "last_update_check": "Mai"
+                "update_frequency": "All'avvio"
             }
 
         # Checkbox per aggiornamento automatico
@@ -9256,24 +9254,6 @@ class FileSearchApp:
         self.create_tooltip(auto_update_check, 
                         "Attiva per controllare automaticamente la disponibilità\n"
                         "di nuovi aggiornamenti all'avvio dell'applicazione.")
-
-        # Frequenza di controllo
-        check_frequency_frame = ttk.Frame(update_frame)
-        check_frequency_frame.pack(fill=X, padx=10, pady=5)
-
-        ttk.Label(check_frequency_frame, text="Frequenza di controllo:").pack(side=LEFT, padx=5)
-
-        frequency_options = ["All'avvio", "Giornaliera", "Settimanale", "Mensile"]
-        frequency_var = StringVar(value=self.update_settings.get("update_frequency", "All'avvio"))
-        frequency_combo = ttk.Combobox(check_frequency_frame, 
-                                    values=frequency_options,
-                                    textvariable=frequency_var, 
-                                    state="readonly", 
-                                    width=15)
-        frequency_combo.pack(side=LEFT, padx=5)
-        self.create_tooltip(frequency_combo, 
-                        "Imposta quanto spesso verificare la disponibilità\n"
-                        "di nuovi aggiornamenti.")
 
         # Ultimo controllo
         last_check_frame = ttk.Frame(update_frame)
@@ -9307,6 +9287,14 @@ class FileSearchApp:
         self.create_tooltip(check_button, 
                         "Verifica immediatamente se è disponibile\n"
                         "una nuova versione dell'applicazione.")
+
+        # Pulsante per scaricare l'aggiornamento 
+        self.download_button = ttk.Button(
+            manual_check_frame,
+            text="Scarica aggiornamento",
+            command=lambda: self.download_update(self.latest_release_url))
+        self.download_button.pack(side=RIGHT, padx=0)
+        self.download_button.pack_forget()  # Nasconde il pulsante
 
         def save_options():
             try:
@@ -9356,8 +9344,7 @@ class FileSearchApp:
 
                 # Aggiorna le variabili dell'update settings nel metodo di salvataggio
                 self.update_settings["auto_update"] = auto_update_var.get()
-                self.update_settings["update_frequency"] = frequency_var.get()
-    
+                
                 #  Salva effettivamente le impostazioni su file
                 if hasattr(self, 'save_settings_to_file'):
                     self.save_settings_to_file()
@@ -9400,6 +9387,10 @@ class FileSearchApp:
     def check_for_updates(self, status_var=None, last_check_label=None):
         """Controlla se sono disponibili aggiornamenti sulla repository GitHub"""
         try:
+            # Nascondi il pulsante di download all'inizio del controllo
+            if hasattr(self, 'download_button') and self.download_button.winfo_exists():
+                self.download_button.pack_forget()
+            
             # Aggiorna variabili UI
             if status_var:
                 status_var.set("Verifica aggiornamenti in corso...")
@@ -9559,12 +9550,19 @@ class FileSearchApp:
                     # Usa la versione originale con suffisso per il messaggio
                     message = f"Aggiornamento disponibile: {latest_release.get('tag_name')} (attuale: {APP_VERSION})"
                     self.log_debug(message)
+                    
+                    # Memorizza l'URL della release per il pulsante di download
+                    self.latest_release_url = latest_release.get("html_url")
+                    
                     if status_var:
-                        download_message = (f"È disponibile la versione {latest_release.get('tag_name')}\n"
-                                        f"Clicca qui per scaricare l'aggiornamento")
+                        download_message = (f"È disponibile la versione {latest_release.get('tag_name')}")
                         status_var.set(download_message)
                         
-                    # Rendi cliccabile il messaggio di stato
+                    # Mostra il pulsante di download se esiste
+                    if hasattr(self, 'download_button') and self.download_button.winfo_exists():
+                        self.download_button.pack(side=RIGHT, padx=0)
+                    
+                    # Rendi cliccabile il messaggio di stato (manteniamo anche questa funzionalità)
                     if hasattr(self, 'update_status_label') and self.update_status_label.winfo_exists():
                         self.update_status_label.bind("<Button-1>", 
                                                 lambda e: self.download_update(latest_release.get("html_url")))
@@ -9576,6 +9574,11 @@ class FileSearchApp:
                     self.log_debug(message)
                     if status_var:
                         status_var.set(message)
+                        
+                    # Nascondi il pulsante di download se non ci sono aggiornamenti
+                    if hasattr(self, 'download_button') and self.download_button.winfo_exists():
+                        self.download_button.pack_forget()
+                        
                     return False, None
                     
             except requests.exceptions.RequestException as e:
