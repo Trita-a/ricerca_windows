@@ -39,7 +39,7 @@ APP_VERSION = "V9.2.8"
 APP_STAGE = "Beta"
 APP_NAME = "File Search Tool"
 APP_FULL_NAME = f"{APP_NAME} {APP_VERSION} {APP_STAGE}"
-APP_TITLE = f"{APP_NAME} {APP_VERSION} {APP_STAGE} Forensics G.di F."
+APP_TITLE = f"{APP_NAME} {APP_VERSION} {APP_STAGE} Forensics"
 
 # Elenco di librerie da installare se mancanti
 missing_libraries = []
@@ -8327,7 +8327,7 @@ class FileSearchApp:
         title_text_container = ttk.Frame(title_frame)
         title_text_container.pack(side=LEFT)
 
-        title_label = ttk.Label(title_text_container, text="File Search Tool.. Forensics G.di F.", 
+        title_label = ttk.Label(title_text_container, text=APP_TITLE, 
                             font=("Helvetica", 14, "bold"))
         title_label.pack(anchor=W)
 
@@ -9397,7 +9397,6 @@ class FileSearchApp:
         y = (dialog.winfo_screenheight() // 2) - (height // 2)
         dialog.geometry(f"{width}x{height}+{x}+{y}")
         
-    @error_handler
     def check_for_updates(self, status_var=None, last_check_label=None):
         """Controlla se sono disponibili aggiornamenti sulla repository GitHub"""
         try:
@@ -9414,9 +9413,20 @@ class FileSearchApp:
                 
             # Converti la versione in componenti numerici
             try:
-                # Supporta versioni come 9.2.7.1
-                version_parts = current_version.split(".")
-                current_v_tuple = tuple(map(int, version_parts))
+                # Estrai solo la parte numerica dalla versione corrente
+                import re
+                current_version_match = re.match(r"(\d+(?:\.\d+)*)", current_version)
+                if not current_version_match:
+                    self.log_debug(f"Errore nella conversione della versione corrente: {current_version}")
+                    if status_var:
+                        status_var.set("Errore nel controllo: formato versione non valido")
+                    return False, None
+                    
+                # Ottieni solo la parte numerica
+                current_numeric_version = current_version_match.group(1)
+                current_parts = current_numeric_version.split(".")
+                current_v_tuple = tuple(map(int, current_parts))
+                
             except ValueError:
                 self.log_debug(f"Errore nella conversione della versione corrente: {current_version}")
                 if status_var:
@@ -9441,7 +9451,7 @@ class FileSearchApp:
                     self.log_debug(f"Errore nella verifica della repository: {str(e)}")
                     
                 # Procedi con la richiesta delle release
-                api_url = "https://github.com/Nino19980/File-search-tools/releases/tag/v.9.2.8"
+                api_url = "https://api.github.com/repos/Nino19980/File-search-tools/releases"
                 self.log_debug(f"Richiesta API GitHub a: {api_url}")
                 
                 response = requests.get(api_url, timeout=10)
@@ -9487,23 +9497,48 @@ class FileSearchApp:
                 # Trova la release più recente
                 latest_release = releases[0]  # Le release sono già ordinate cronologicamente
                 latest_version = latest_release.get("tag_name", "")
-                
+
                 self.log_debug(f"Release più recente trovata: {latest_version}")
-                
+
+                # Verifica che il tag non sia solo 'v' o 'V' e contenga effettivamente numeri di versione
+                if latest_version.lower() == "v" or latest_version.strip() == "":
+                    self.log_debug(f"Tag di versione non valido: {latest_version}. Saltando controllo aggiornamenti.")
+                    if status_var:
+                        status_var.set("Tag di versione non valido. Impossibile verificare aggiornamenti.")
+                    return False, None
+
                 # Rimuovi 'v' o 'V' iniziale se presente
                 if latest_version.lower().startswith("v"):
                     latest_version = latest_version[1:]
+
+                # Estrai solo la parte numerica dalla versione GitHub
+                latest_version_match = re.match(r"(\d+(?:\.\d+)*)", latest_version)
+                if not latest_version_match:
+                    self.log_debug(f"Formato di versione non valido: {latest_version}")
+                    if status_var:
+                        status_var.set(f"Formato versione GitHub non valido: {latest_version}")
+                    return False, None
                     
+                # Ottieni solo la parte numerica
+                latest_numeric_version = latest_version_match.group(1)
+                
                 # Converti in componenti numerici per confronto
                 try:
-                    latest_parts = latest_version.split(".")
+                    latest_parts = latest_numeric_version.split(".")
+                    # Verifica che ci siano parti da convertire e che non siano vuote
+                    if not latest_parts or any(part.strip() == "" for part in latest_parts):
+                        self.log_debug(f"Formato di versione non valido: {latest_numeric_version}")
+                        if status_var:
+                            status_var.set(f"Formato versione GitHub non valido: {latest_numeric_version}")
+                        return False, None
+                    
                     latest_v_tuple = tuple(map(int, latest_parts))
                     
                     self.log_debug(f"Confronto versioni: attuale={current_v_tuple}, più recente={latest_v_tuple}")
-                except ValueError:
-                    self.log_debug(f"Errore nella conversione della versione GitHub: {latest_version}")
+                except ValueError as e:
+                    self.log_debug(f"Errore nella conversione della versione GitHub: {latest_numeric_version} - {str(e)}")
                     if status_var:
-                        status_var.set(f"Errore nel confronto versioni: formato non valido ({latest_version})")
+                        status_var.set(f"Errore nel confronto versioni: formato non valido ({latest_numeric_version})")
                     return False, None
                     
                 # Confronta le versioni
@@ -9521,10 +9556,11 @@ class FileSearchApp:
                 
                 # Aggiorna lo stato dell'interfaccia
                 if is_update_available:
-                    message = f"Aggiornamento disponibile: {latest_version} (attuale: {current_version})"
+                    # Usa la versione originale con suffisso per il messaggio
+                    message = f"Aggiornamento disponibile: {latest_release.get('tag_name')} (attuale: {APP_VERSION})"
                     self.log_debug(message)
                     if status_var:
-                        download_message = (f"È disponibile la versione {latest_version}\n"
+                        download_message = (f"È disponibile la versione {latest_release.get('tag_name')}\n"
                                         f"Clicca qui per scaricare l'aggiornamento")
                         status_var.set(download_message)
                         
@@ -9536,7 +9572,7 @@ class FileSearchApp:
                         
                     return True, latest_release
                 else:
-                    message = f"Sei già alla versione più recente: {current_version}"
+                    message = f"Sei già alla versione più recente: {APP_VERSION}"
                     self.log_debug(message)
                     if status_var:
                         status_var.set(message)
@@ -10355,7 +10391,7 @@ def create_splash_screen(parent):
     frame.pack(fill=tk.BOTH, expand=tk.YES)
     
     ttk.Label(frame, text=APP_FULL_NAME, font=("Helvetica", 18, "bold")).pack(pady=(10, 5))
-    ttk.Label(frame, text="Forensics G.di F.", font=("Helvetica", 14)).pack(pady=(0, 20))
+    ttk.Label(frame, text=APP_NAME, font=("Helvetica", 14)).pack(pady=(0, 20))
     ttk.Label(frame, text="Caricamento applicazione in corso...").pack()
     
     progress = ttk.Progressbar(frame, mode="indeterminate")
