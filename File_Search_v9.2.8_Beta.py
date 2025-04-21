@@ -9296,6 +9296,28 @@ class FileSearchApp:
         self.download_button.pack(side=RIGHT, padx=0)
         self.download_button.pack_forget()  # Nasconde il pulsante
 
+        release_notes_frame = ttk.LabelFrame(update_frame, text="Note di rilascio")
+        release_notes_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Utilizziamo un widget Text con scrollbar invece di una semplice Label
+        # per gestire meglio il testo potenzialmente lungo
+        release_notes_text = tk.Text(release_notes_frame, height=8, width=50, wrap="word")
+        release_notes_text.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        
+        # Aggiungi una scrollbar
+        notes_scrollbar = ttk.Scrollbar(release_notes_frame, orient="vertical", command=release_notes_text.yview)
+        notes_scrollbar.pack(side="right", fill="y")
+        release_notes_text.config(yscrollcommand=notes_scrollbar.set)
+        
+        # Configura il Text widget come di sola lettura
+        release_notes_text.config(state="disabled")
+        
+        # Salva il riferimento al widget per poterlo aggiornare in seguito
+        self.release_notes_text = release_notes_text
+        
+        # Inizialmente il widget è vuoto o mostra un messaggio predefinito
+        self.update_release_notes("Verifica gli aggiornamenti per visualizzare le note di rilascio.")
+        
         def save_options():
             try:
                                
@@ -9383,13 +9405,29 @@ class FileSearchApp:
         x = (dialog.winfo_screenwidth() // 2) - (width // 2)
         y = (dialog.winfo_screenheight() // 2) - (height // 2)
         dialog.geometry(f"{width}x{height}+{x}+{y}")
-        
+
+    def update_release_notes(self, text):
+        """Aggiorna il widget delle note di rilascio con il testo fornito"""
+        if hasattr(self, 'release_notes_text') and self.release_notes_text.winfo_exists():
+            # Abilita temporaneamente la modifica
+            self.release_notes_text.config(state="normal")
+            # Cancella il contenuto attuale
+            self.release_notes_text.delete(1.0, tk.END)
+            # Inserisci il nuovo testo
+            self.release_notes_text.insert(tk.END, text)
+            # Disabilita di nuovo la modifica
+            self.release_notes_text.config(state="disabled")
+            
     def check_for_updates(self, status_var=None, last_check_label=None):
         """Controlla se sono disponibili aggiornamenti sulla repository GitHub"""
         try:
             # Nascondi il pulsante di download all'inizio del controllo
             if hasattr(self, 'download_button') and self.download_button.winfo_exists():
                 self.download_button.pack_forget()
+            
+            # Aggiorna il widget delle note di rilascio con un messaggio iniziale
+            if hasattr(self, 'release_notes_text') and self.release_notes_text.winfo_exists():
+                self.update_release_notes("Verifica aggiornamenti in corso...")
             
             # Aggiorna variabili UI
             if status_var:
@@ -9411,6 +9449,7 @@ class FileSearchApp:
                     self.log_debug(f"Errore nella conversione della versione corrente: {current_version}")
                     if status_var:
                         status_var.set("Errore nel controllo: formato versione non valido")
+                    self.update_release_notes("Errore nel controllo: formato versione non valido")
                     return False, None
                     
                 # Ottieni solo la parte numerica
@@ -9422,6 +9461,7 @@ class FileSearchApp:
                 self.log_debug(f"Errore nella conversione della versione corrente: {current_version}")
                 if status_var:
                     status_var.set("Errore nel controllo: formato versione non valido")
+                self.update_release_notes("Errore nella conversione della versione corrente")
                 return False, None
                 
             try:
@@ -9437,6 +9477,7 @@ class FileSearchApp:
                         self.log_debug("Repository non trovata: verificare il nome utente e il nome repository")
                         if status_var:
                             status_var.set("Repository GitHub non trovata. Verificare la connessione Internet o le impostazioni.")
+                        self.update_release_notes("Repository GitHub non trovata. Verificare la connessione Internet o le impostazioni.")
                         return False, None
                 except Exception as e:
                     self.log_debug(f"Errore nella verifica della repository: {str(e)}")
@@ -9465,6 +9506,7 @@ class FileSearchApp:
                     
                     if status_var:
                         status_var.set(error_message)
+                    self.update_release_notes(error_message)
                     return False, None
                     
                 # Analizza la risposta JSON
@@ -9474,6 +9516,7 @@ class FileSearchApp:
                     self.log_debug("Nessuna release trovata su GitHub")
                     if status_var:
                         status_var.set("Nessuna release trovata su GitHub")
+                    self.update_release_notes("Nessuna release trovata su GitHub")
                     return False, None
                     
                 # Escludiamo sempre le versioni beta (prerelease)
@@ -9483,6 +9526,7 @@ class FileSearchApp:
                     self.log_debug("Nessuna release stabile trovata (versioni beta escluse)")
                     if status_var:
                         status_var.set("Nessuna release stabile disponibile")
+                    self.update_release_notes("Nessuna release stabile disponibile (versioni beta escluse)")
                     return False, None
                     
                 # Trova la release più recente
@@ -9496,6 +9540,7 @@ class FileSearchApp:
                     self.log_debug(f"Tag di versione non valido: {latest_version}. Saltando controllo aggiornamenti.")
                     if status_var:
                         status_var.set("Tag di versione non valido. Impossibile verificare aggiornamenti.")
+                    self.update_release_notes(f"Tag di versione non valido: {latest_version}. Impossibile verificare aggiornamenti.")
                     return False, None
 
                 # Rimuovi 'v' o 'V' iniziale se presente
@@ -9508,6 +9553,7 @@ class FileSearchApp:
                     self.log_debug(f"Formato di versione non valido: {latest_version}")
                     if status_var:
                         status_var.set(f"Formato versione GitHub non valido: {latest_version}")
+                    self.update_release_notes(f"Formato di versione non valido: {latest_version}")
                     return False, None
                     
                 # Ottieni solo la parte numerica
@@ -9521,6 +9567,7 @@ class FileSearchApp:
                         self.log_debug(f"Formato di versione non valido: {latest_numeric_version}")
                         if status_var:
                             status_var.set(f"Formato versione GitHub non valido: {latest_numeric_version}")
+                        self.update_release_notes(f"Formato di versione non valido: {latest_numeric_version}")
                         return False, None
                     
                     latest_v_tuple = tuple(map(int, latest_parts))
@@ -9530,6 +9577,7 @@ class FileSearchApp:
                     self.log_debug(f"Errore nella conversione della versione GitHub: {latest_numeric_version} - {str(e)}")
                     if status_var:
                         status_var.set(f"Errore nel confronto versioni: formato non valido ({latest_numeric_version})")
+                    self.update_release_notes(f"Errore nella conversione della versione GitHub: {latest_numeric_version}")
                     return False, None
                     
                 # Confronta le versioni
@@ -9562,11 +9610,16 @@ class FileSearchApp:
                     if hasattr(self, 'download_button') and self.download_button.winfo_exists():
                         self.download_button.pack(side=RIGHT, padx=0)
                     
-                    # Rendi cliccabile il messaggio di stato (manteniamo anche questa funzionalità)
+                    # Rendi cliccabile il messaggio di stato
                     if hasattr(self, 'update_status_label') and self.update_status_label.winfo_exists():
                         self.update_status_label.bind("<Button-1>", 
                                                 lambda e: self.download_update(latest_release.get("html_url")))
                         self.update_status_label.config(cursor="hand2", foreground="blue")
+                    
+                    # Estrai e visualizza le note di rilascio
+                    release_body = latest_release.get("body", "Nessuna nota di rilascio disponibile.")
+                    release_notes = f"Novità nella versione {latest_release.get('tag_name')}:\n\n{release_body}"
+                    self.update_release_notes(release_notes)
                         
                     return True, latest_release
                 else:
@@ -9574,10 +9627,13 @@ class FileSearchApp:
                     self.log_debug(message)
                     if status_var:
                         status_var.set(message)
-                        
+                    
                     # Nascondi il pulsante di download se non ci sono aggiornamenti
                     if hasattr(self, 'download_button') and self.download_button.winfo_exists():
                         self.download_button.pack_forget()
+                    
+                    # Aggiorna il testo delle note di rilascio
+                    self.update_release_notes("Sei già alla versione più recente. Non ci sono nuove note di rilascio da visualizzare.")
                         
                     return False, None
                     
@@ -9586,6 +9642,7 @@ class FileSearchApp:
                 self.log_debug(error_msg)
                 if status_var:
                     status_var.set(error_msg)
+                self.update_release_notes(f"Impossibile recuperare le note di rilascio: {error_msg}")
                 return False, None
                 
             except ValueError as e:
@@ -9593,6 +9650,7 @@ class FileSearchApp:
                 self.log_debug(error_msg)
                 if status_var:
                     status_var.set(error_msg)
+                self.update_release_notes(f"Impossibile recuperare le note di rilascio: {error_msg}")
                 return False, None
                 
         except Exception as e:
@@ -9600,6 +9658,7 @@ class FileSearchApp:
             self.log_debug(error_msg)
             if status_var:
                 status_var.set(error_msg)
+            self.update_release_notes(f"Impossibile recuperare le note di rilascio: {error_msg}")
             return False, None
 
     @error_handler
