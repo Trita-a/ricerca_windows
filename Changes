@@ -163,5 +163,8 @@ Corretto errore su debug log pulsante pulisci log
 Eliminato tasto aggiorna su debug log
 Corretti errori minori
 V 9.2.7
-Aggiunta la ricerca denro gli archivi
+Aggiunta la ricerca dentro gli archivi
 Miglioramento avvisi nel debug distinti per Errore, Avviso e Info
+V 9.2.8
+Aggiunta la ricerca all'inerno dei database
+Aggiunto aggiornamento applicazione
