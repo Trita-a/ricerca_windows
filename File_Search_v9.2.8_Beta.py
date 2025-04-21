@@ -26,7 +26,6 @@ from tkinter import filedialog, messagebox, BooleanVar, StringVar, IntVar
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import platform
-import requests
 import json
 import webbrowser
 
@@ -9434,6 +9433,11 @@ class FileSearchApp:
                 status_var.set("Verifica aggiornamenti in corso...")
             self.log_debug("Verifica aggiornamenti in corso...")
             
+            # Importazioni necessarie per HTTP e JSON
+            import urllib.request
+            import urllib.error
+            import json
+            
             # Ottieni la versione attuale (rimuovi "V" o "v" iniziale se presente)
             current_version = APP_VERSION
             current_stage = APP_STAGE
@@ -9470,47 +9474,98 @@ class FileSearchApp:
                 try:
                     # Verifica che la repository esista
                     repo_url = "https://api.github.com/repos/Nino19980/File-search-tools"
-                    repo_response = requests.get(repo_url, timeout=10)
                     
-                    # Se la risposta è 404, la repository non esiste
-                    if repo_response.status_code == 404:
-                        self.log_debug("Repository non trovata: verificare il nome utente e il nome repository")
+                    req = urllib.request.Request(repo_url)
+                    req.add_header('User-Agent', 'FileSearchApp/1.0')  # GitHub richiede uno User-Agent
+                    
+                    try:
+                        repo_response = urllib.request.urlopen(req, timeout=10)
+                        # La connessione è riuscita se arriviamo qui
+                    except urllib.error.HTTPError as e:
+                        if e.code == 404:
+                            self.log_debug("Repository non trovata: verificare il nome utente e il nome repository")
+                            if status_var:
+                                status_var.set("Repository GitHub non trovata. Verificare la connessione Internet o le impostazioni.")
+                            self.update_release_notes("Repository GitHub non trovata. Verificare la connessione Internet o le impostazioni.")
+                            return False, None
+                        else:
+                            # Gestione di altri errori HTTP
+                            self.log_debug(f"Errore nella risposta API GitHub: {e.code}")
+                            
+                            # Messaggio più informativo per l'utente
+                            error_message = f"Errore nel controllo: server GitHub ha risposto con codice {e.code}"
+                            
+                            if e.code == 403:
+                                error_message = "Limite di richieste API GitHub superato. Riprova più tardi."
+                            elif e.code >= 500:
+                                error_message = "Errore del server GitHub. Riprova più tardi."
+                            
+                            if status_var:
+                                status_var.set(error_message)
+                            self.update_release_notes(error_message)
+                            return False, None
+                    except urllib.error.URLError as e:
+                        self.log_debug(f"Errore di connessione durante la verifica della repository: {str(e)}")
                         if status_var:
-                            status_var.set("Repository GitHub non trovata. Verificare la connessione Internet o le impostazioni.")
-                        self.update_release_notes("Repository GitHub non trovata. Verificare la connessione Internet o le impostazioni.")
+                            status_var.set(f"Errore di connessione: {str(e.reason)}")
+                        self.update_release_notes(f"Errore di connessione: {str(e.reason)}")
                         return False, None
+                        
                 except Exception as e:
                     self.log_debug(f"Errore nella verifica della repository: {str(e)}")
-                    
+                    if status_var:
+                        status_var.set(f"Errore durante il controllo: {str(e)}")
+                    self.update_release_notes(f"Errore durante il controllo: {str(e)}")
+                    return False, None
+                        
                 # Procedi con la richiesta delle release
                 api_url = "https://api.github.com/repos/Nino19980/File-search-tools/releases"
                 self.log_debug(f"Richiesta API GitHub a: {api_url}")
                 
-                response = requests.get(api_url, timeout=10)
+                req = urllib.request.Request(api_url)
+                req.add_header('User-Agent', 'FileSearchApp/1.0')  # GitHub richiede uno User-Agent
                 
-                # Log della risposta per debug
-                self.log_debug(f"Risposta API GitHub: status={response.status_code}, content-length={len(response.content)}")
-                
-                if response.status_code != 200:
-                    self.log_debug(f"Errore nella risposta API GitHub: {response.status_code}")
+                try:
+                    response = urllib.request.urlopen(req, timeout=10)
+                    response_data = response.read()
+                    
+                    # Log della risposta per debug
+                    self.log_debug(f"Risposta API GitHub: status={response.getcode()}, content-length={len(response_data)}")
+                    
+                    # Analizza la risposta JSON
+                    releases = json.loads(response_data.decode('utf-8'))
+                    
+                except urllib.error.HTTPError as e:
+                    self.log_debug(f"Errore nella risposta API GitHub: {e.code}")
                     
                     # Messaggio più informativo per l'utente
-                    error_message = f"Errore nel controllo: server GitHub ha risposto con codice {response.status_code}"
+                    error_message = f"Errore nel controllo: server GitHub ha risposto con codice {e.code}"
                     
-                    if response.status_code == 404:
+                    if e.code == 404:
                         error_message = "Repository non trovata su GitHub. Verificare il nome repository o la connessione Internet."
-                    elif response.status_code == 403:
+                    elif e.code == 403:
                         error_message = "Limite di richieste API GitHub superato. Riprova più tardi."
-                    elif response.status_code >= 500:
+                    elif e.code >= 500:
                         error_message = "Errore del server GitHub. Riprova più tardi."
                     
                     if status_var:
                         status_var.set(error_message)
                     self.update_release_notes(error_message)
                     return False, None
-                    
-                # Analizza la risposta JSON
-                releases = response.json()
+                except urllib.error.URLError as e:
+                    error_msg = f"Errore di connessione durante il controllo: {str(e.reason)}"
+                    self.log_debug(error_msg)
+                    if status_var:
+                        status_var.set(error_msg)
+                    self.update_release_notes(f"Impossibile recuperare le note di rilascio: {error_msg}")
+                    return False, None
+                except json.JSONDecodeError as e:
+                    error_msg = f"Errore nell'analisi della risposta JSON: {str(e)}"
+                    self.log_debug(error_msg)
+                    if status_var:
+                        status_var.set(error_msg)
+                    self.update_release_notes(f"Impossibile recuperare le note di rilascio: {error_msg}")
+                    return False, None
                 
                 if not releases:
                     self.log_debug("Nessuna release trovata su GitHub")
@@ -9637,22 +9692,13 @@ class FileSearchApp:
                         
                     return False, None
                     
-            except requests.exceptions.RequestException as e:
-                error_msg = f"Errore di connessione durante il controllo: {str(e)}"
+            except Exception as e:
+                error_msg = f"Errore nel controllo aggiornamenti: {str(e)}"
                 self.log_debug(error_msg)
                 if status_var:
                     status_var.set(error_msg)
                 self.update_release_notes(f"Impossibile recuperare le note di rilascio: {error_msg}")
                 return False, None
-                
-            except ValueError as e:
-                error_msg = f"Errore nell'analisi della risposta JSON: {str(e)}"
-                self.log_debug(error_msg)
-                if status_var:
-                    status_var.set(error_msg)
-                self.update_release_notes(f"Impossibile recuperare le note di rilascio: {error_msg}")
-                return False, None
-                
         except Exception as e:
             error_msg = f"Errore nel controllo aggiornamenti: {str(e)}"
             self.log_debug(error_msg)
