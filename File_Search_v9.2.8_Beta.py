@@ -1,4 +1,3 @@
-# Importazioni essenziali per l'avvio
 import concurrent.futures
 import csv
 import functools
@@ -82,14 +81,13 @@ def error_handler(func):
             return None
     return wrapper
 
-# Dizionario per tracciare il supporto alle librerie - sarà popolato in seguito
 file_format_support = {
     "docx": False, "pdf": False, "pptx": False, "excel": False,
     "odt": False, "rtf": False, "xls": False, "doc": False,
     "ods": False, "odp": False, "epub": False, "mobi": False, 
-    "tex": True, "rst": True, "sqlite": True, "mdb": False,
+    "tex": True, "rst": True, "sqlite": True, "mdb": True,
     "odb": True, "tsv": True, "dbf": False, "dif": True,
-    "executable": True, "code_files": True
+    "executable": True, "code_files": True, "accdb": True  
 }
 
 class FileSearchApp:
@@ -554,7 +552,9 @@ class FileSearchApp:
         check_module("pyodbc", "mdb", "pyodbc")
         check_module("bs4", "epub_html", "beautifulsoup4")
         check_module("pefile", "pe_files", "pefile")
-        
+        check_module('pyodbc', 'mdb', 'pyodbc')
+        check_module('pyodbc', 'accdb', 'pyodbc')
+
         # Controlla win32com (per i formati legacy di Office)
         if os.name == 'nt':  # Solo su Windows
             try:
@@ -10530,3 +10530,4 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
+
