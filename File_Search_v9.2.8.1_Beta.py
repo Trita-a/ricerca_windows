@@ -179,7 +179,6 @@ file_format_support = {
         "description": "File di valori separati da tab",
         "enabled": True
     },
-    
     # Formati database
     "sqlite": {
         "extensions": [".sqlite", ".sqlite3", ".db"],
@@ -187,17 +186,18 @@ file_format_support = {
         "description": "Database SQLite",
         "enabled": True
     },
-    "mdb": {
-        "extensions": [".mdb"],
-        "libraries": ["jpype1"],
-        "description": "Database Microsoft Access (formato legacy)",
-        "enabled": True
+    "access_db": {
+        "extensions": [".accdb", ".mdb"],
+        "libraries": ["pyodbc"],  
+        "installed": False,
+        "description": "Database Microsoft Access"
     },
-    "accdb": {
-        "extensions": [".accdb"],
-        "libraries": ["jpype1"],
-        "description": "Database Microsoft Access",
-        "enabled": True
+    # Altri formati di database
+    "sqlite_db": {
+        "extensions": [".db", ".sqlite", ".sqlite3"],
+        "libraries": ["sqlite3"],
+        "installed": True,  # sqlite3 è nella libreria standard di Python
+        "description": "Database SQLite"
     },
     "odb": {
         "extensions": [".odb"],
@@ -676,7 +676,11 @@ class FileSearchApp:
                 # Usa importlib per evitare bloccaggi
                 import importlib
                 importlib.import_module(module_name)
+                # Se file_format_support ha struttura semplice (booleani)
                 file_format_support[format_key] = True
+                # Se file_format_support ha struttura complessa, usa:
+                # if format_key in file_format_support:
+                #     file_format_support[format_key]["installed"] = True
                 self.log_debug(f"Supporto {format_key} attivato")
             except ImportError:
                 missing_libraries.append(import_name or module_name)
@@ -692,11 +696,16 @@ class FileSearchApp:
         check_module("ebooklib", "epub", "ebooklib")
         check_module("mobi", "mobi", "mobi")
         check_module("dbfread", "dbf", "dbfread")
-        check_module("pyodbc", "mdb", "pyodbc")
+        
+        # Unifica il controllo per Access DB
+        check_module("pyodbc", "access_db", "pyodbc")
+        
+        # Aggiungi supporto SQLite (incluso nella libreria standard)
+        file_format_support["sqlite_db"] = True
+        self.log_debug("Supporto SQLite DB attivato (libreria standard)")
+        
         check_module("bs4", "epub_html", "beautifulsoup4")
         check_module("pefile", "pe_files", "pefile")
-        check_module('pyodbc', 'mdb', 'pyodbc')
-        check_module('pyodbc', 'accdb', 'pyodbc')
 
         # Controlla win32com (per i formati legacy di Office)
         if os.name == 'nt':  # Solo su Windows
@@ -847,7 +856,8 @@ class FileSearchApp:
         is_large_file = False
         is_binary_file = False
         is_network_file = False
-        is_email_file = False  # Nuovo flag per file email
+        is_email_file = False  # Flag per file email
+        is_database_file = False  # Nuovo flag per file database
         
         try:
             # Identifica se il file è su un percorso di rete
@@ -870,8 +880,13 @@ class FileSearchApp:
                 # Identifica file email che possono avere allegati
                 if ext.lower() in ['.msg', '.eml']:
                     is_email_file = True
-        except:
-            pass
+                    
+                # Identifica file di database che richiedono più tempo
+                if ext.lower() in ['.accdb', '.mdb', '.db', '.sqlite', '.sqlite3']:
+                    is_database_file = True
+                    self.log_debug(f"Rilevato file database: {file_path}")
+        except Exception as e:
+            self.log_error(f"Errore durante l'analisi del file {file_path}: {str(e)}")
         
         # CORREZIONE: Adatta il timeout in base al tipo di file
         timeout = 5.0  # Default 5 secondi
@@ -883,6 +898,9 @@ class FileSearchApp:
             timeout = min(timeout, 3.0)  # Limita a 3 secondi per file binari
         if is_email_file:
             timeout += 15.0  # Incremento significativo per file email con allegati
+        if is_database_file:
+            timeout += 30.0  # Timeout esteso (30 secondi aggiuntivi) per i database
+            self.log_debug(f"Timeout esteso a {timeout}s per il database: {file_path}")
         
         # Manteniamo liste invece di code per compatibilità
         result = [None]
@@ -899,6 +917,7 @@ class FileSearchApp:
             except Exception as e:
                 # Cattura eventuali eccezioni
                 exception[0] = e
+                self.log_error(f"Errore durante l'elaborazione del file {file_path}: {str(e)}")
             finally:
                 # Segna il completamento
                 processing_completed[0] = True
@@ -915,8 +934,8 @@ class FileSearchApp:
         if not processing_completed[0] and thread.is_alive():
             self.log_debug(f"Processing timed out for file: {file_path}")
             
-            # PARTE NUOVA: Gestione dei risultati tardivi per file email
-            if is_email_file:
+            # Gestione speciale per file di database e email (risultati tardivi)
+            if is_email_file or is_database_file:
                 def check_late_results():
                     if processing_completed[0] or not thread.is_alive():
                         # Il thread ha terminato, controlla se ci sono nuovi risultati
@@ -3139,8 +3158,39 @@ class FileSearchApp:
         # Prima verifica le condizioni più veloci (principio fail-fast)
         if not self.search_content.get():
             return False
+        
+        # Verifica se il file esiste prima di procedere
+        if not os.path.exists(file_path):
+            self.log_debug(f"File non trovato: {file_path}")
+            return False
                     
         ext = os.path.splitext(file_path)[1].lower()
+        
+        # Lista completa delle estensioni di database supportate
+        database_extensions = ['.accdb', '.mdb', '.db', '.sqlite', '.sqlite3', '.odb', '.dbf', '.dif']
+        
+        # Verifica se è un file database
+        is_database_file = ext in database_extensions
+        
+        # Controllo dimensione per i database (per evitare che i database enormi rallentino la ricerca)
+        if is_database_file:
+            try:
+                size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                # Se il database è troppo grande (>200MB), registra e chiedi conferma tramite cache
+                if size_mb > 200:
+                    # Usa una cache per ricordare le decisioni su database grandi
+                    cache_key = f"large_db_{file_path}"
+                    if hasattr(self, 'large_db_cache') and cache_key in self.large_db_cache:
+                        return self.large_db_cache[cache_key]
+                    
+                    self.log_debug(f"Database di grandi dimensioni ({size_mb:.2f} MB): {file_path}")
+                    # Impostazione predefinita: non cercare nei database troppo grandi
+                    if not hasattr(self, 'large_db_cache'):
+                        self.large_db_cache = {}
+                    self.large_db_cache[cache_key] = False
+                    return False
+            except Exception as e:
+                self.log_error(f"Errore nel controllo dimensione database {file_path}: {str(e)}")
         
         # Attiva sempre la ricerca nei file Office, indipendentemente dal livello di ricerca
         if ext in ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']:
@@ -3167,30 +3217,52 @@ class FileSearchApp:
             for format_key, format_info in self.file_format_support.items():
                 if isinstance(format_info, dict):  # Nuovo formato (dizionario)
                     if format_info.get("enabled", False) and ext in format_info.get("extensions", []):
-                        self.log_debug(f"Ricerca contenuto in file di tipo {format_info.get('description', format_key)}: {os.path.basename(file_path)}")
+                        # Log speciale per database
+                        if is_database_file:
+                            self.log_debug(f"Ricerca contenuto nel database: {os.path.basename(file_path)} ({ext})")
+                        else:
+                            self.log_debug(f"Ricerca contenuto in file di tipo {format_info.get('description', format_key)}: {os.path.basename(file_path)}")
                         return True
                 elif format_info:  # Vecchio formato (booleano True)
-                    # Mappa vecchie chiavi alle estensioni
+                    # Mappa vecchie chiavi alle estensioni con supporto esteso per database
                     format_extensions = {
+                        # Documenti Office
                         "docx": [".docx"], "pdf": [".pdf"], "pptx": [".pptx"], 
                         "excel": [".xlsx", ".xlsm"], "odt": [".odt"], "rtf": [".rtf"], 
                         "xls": [".xls"], "doc": [".doc"], "ods": [".ods"], 
-                        "odp": [".odp"], "epub": [".epub"], "mobi": [".mobi"],
-                        "tex": [".tex"], "rst": [".rst"], "sqlite": [".sqlite", ".sqlite3", ".db"], 
-                        "mdb": [".mdb"], "accdb": [".accdb"], "odb": [".odb"], 
+                        "odp": [".odp"], 
+                        
+                        # Ebook
+                        "epub": [".epub"], "mobi": [".mobi"],
+                        
+                        # Altro
+                        "tex": [".tex"], "rst": [".rst"], 
+                        
+                        # Database - esteso
+                        "sqlite_db": [".sqlite", ".sqlite3", ".db"], 
+                        "access_db": [".mdb", ".accdb"],  # Unificato per Access
+                        "odb": [".odb"], 
                         "tsv": [".tsv"], "dbf": [".dbf"], "dif": [".dif"]
                     }
                     if format_key in format_extensions and ext in format_extensions[format_key]:
-                        self.log_debug(f"Ricerca contenuto in file di tipo {format_key}: {os.path.basename(file_path)}")
+                        # Log speciale per database
+                        if is_database_file:
+                            self.log_debug(f"Ricerca contenuto nel database: {os.path.basename(file_path)} ({ext}) - Supporto: {format_key}")
+                        else:
+                            self.log_debug(f"Ricerca contenuto in file di tipo {format_key}: {os.path.basename(file_path)}")
                         return True
         
-        # Liste predefinite nel codice per ciascun livello
+        # Liste predefinite nel codice per ciascun livello - aggiornate con database
         base_extensions = ['.txt', '.md', '.csv', '.html', '.htm', '.xml', '.log', 
                         '.docx', '.doc', '.pdf', '.pptx', '.ppt', '.xlsx', '.xls', '.rtf', '.odt', '.ods', '.odp',
-                        '.csv','.eml', '.msg', '.emlx']
+                        '.csv','.eml', '.msg', '.emlx',
+                        # Database di base
+                        '.accdb', '.mdb', '.db', '.sqlite', '.sqlite3']
 
         advanced_extensions = base_extensions + ['.exe', '.dll', '.sys', '.bat', '.cmd', '.ps1', 
-                                            '.vbs', '.js', '.config', '.ini', '.json', '.reg']
+                                            '.vbs', '.js', '.config', '.ini', '.json', '.reg',
+                                            # Database avanzati
+                                            '.odb', '.dbf', '.dif']
                                             
         deep_extensions = advanced_extensions + ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.mp3', '.mp4', 
                                             '.avi', '.mov', '.mkv', '.wav', '.flac', '.zip', '.rar', 
@@ -3198,11 +3270,24 @@ class FileSearchApp:
         
         # Verifica il livello predefinito se non è nelle estensioni personalizzate
         if search_level == "base" and ext in base_extensions:
+            # Log speciale per database
+            if is_database_file:
+                self.log_debug(f"Ricerca base contenuto nel database: {os.path.basename(file_path)} ({ext})")
             return True
         elif search_level == "avanzata" and ext in advanced_extensions:
+            # Log speciale per database
+            if is_database_file:
+                self.log_debug(f"Ricerca avanzata contenuto nel database: {os.path.basename(file_path)} ({ext})")
             return True
         elif search_level == "profonda" and ext in deep_extensions:
+            # Log speciale per database
+            if is_database_file:
+                self.log_debug(f"Ricerca profonda contenuto nel database: {os.path.basename(file_path)} ({ext})")
             return True
+        
+        # Aggiungi ulteriore log per estensioni non supportate
+        if is_database_file:
+            self.log_debug(f"Database non supportato per la ricerca nel contenuto: {os.path.basename(file_path)} ({ext}) - Livello: {search_level}")
         
         return False
 
@@ -3460,7 +3545,7 @@ class FileSearchApp:
             content = ""
             text_content = ""
             result = ""
-            extension = os.path.splitext(file_path.lower())[1]
+            extension = os.path.splitext(file_path)[1].lower()
         
             # Verifica se il file è un archivio compresso
             compressed_extensions = ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso', '.tgz', '.xz', '.cab', '.jar']
@@ -4089,141 +4174,74 @@ class FileSearchApp:
             if self.stop_search:
                 return ""        
             # SQLite database (.db, .sqlite, .sqlite3) - NUOVO
-            elif ext in ['.db', '.sqlite', '.sqlite3']:
+            elif extension in [".db", ".sqlite", ".sqlite3"]:
                 try:
                     import sqlite3
-                    self.log_debug(f"Processando file SQLite: {file_path}")
+                    content = []
                     
-                    # Verifica che sia un file SQLite valido
-                    if not os.path.getsize(file_path) > 100:
-                        return ""
-                        
-                    try:
-                        # Connetti al database
-                        conn = sqlite3.connect(file_path)
-                        cursor = conn.cursor()
-                        
-                        # Ottieni la lista delle tabelle
-                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                        tables = cursor.fetchall()
-                        
-                        content_parts = []
-                        content_parts.append(f"Database SQLite: {os.path.basename(file_path)}")
-                        content_parts.append(f"Numero di tabelle: {len(tables)}")
-                        
-                        # Estrai struttura e campione di dati da ogni tabella
-                        for table in tables:
-                            table_name = table[0]
-                            content_parts.append(f"\n--- Tabella: {table_name} ---")
+                    conn = sqlite3.connect(file_path)
+                    cursor = conn.cursor()
+                    
+                    # Ottieni le tabelle
+                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                    tables = [table[0] for table in cursor.fetchall()]
+                    
+                    # Leggi i dati da ogni tabella
+                    for table in tables:
+                        try:
+                            cursor.execute(f"SELECT * FROM [{table}]")
+                            columns = [description[0] for description in cursor.description]
+                            rows = cursor.fetchall()
                             
-                            # Ottieni struttura della tabella
-                            cursor.execute(f"PRAGMA table_info({table_name});")
-                            columns = cursor.fetchall()
-                            col_names = [col[1] for col in columns]
-                            content_parts.append("Colonne: " + ", ".join(col_names))
+                            content.append(f"Tabella: {table}")
+                            content.append("Colonne: " + ", ".join(columns))
                             
-                            # Ottieni un campione di dati (massimo 10 righe)
-                            try:
-                                cursor.execute(f"SELECT * FROM {table_name} LIMIT 10;")
-                                rows = cursor.fetchall()
-                                if rows:
-                                    content_parts.append(f"Campione dati ({len(rows)} righe):")
-                                    for row in rows:
-                                        content_parts.append(str(row))
-                            except:
-                                content_parts.append("Errore nell'estrazione del campione dati")
-                        
-                        conn.close()
-                        content = "\n".join(content_parts)
-                        self.log_debug(f"Estratti {len(content)} caratteri da SQLite")
-                        return content
-                        
-                    except sqlite3.Error:
-                        # Non è un database SQLite valido o è cifrato
-                        return ""
-                except ImportError:
-                    self.log_debug("Libreria sqlite3 non disponibile")
-                    return ""
+                            for row in rows:
+                                row_data = [str(value) for value in row]
+                                content.append(" | ".join(row_data))
+                        except Exception as e:
+                            self.log_error(f"Errore nella lettura della tabella SQLite {table}: {str(e)}")
+                    
+                    conn.close()
+                    return "\n".join(content)
                 except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file SQLite {file_path}: {str(e)}")
+                    self.log_error(f"Errore nell'accesso al database SQLite {file_path}: {str(e)}")
                     return ""
-
-            if self.stop_search:
-                return ""
+            
             # Microsoft Access (.mdb, .accdb)
-            elif ext in ['.mdb', '.accdb']:
+            if extension in [".accdb", ".mdb"] and file_format_support.get("access_db", {}).get("installed", False):
                 try:
-                    import pyodbc
-                    self.log_debug(f"Processando file Access: {file_path}")
-
-                    # Verifica che siamo su Windows
-                    if os.name != 'nt':
-                        self.log_debug("L'accesso ai file MDB/ACCDB è supportato solo su Windows")
-                        return ""
-
-                    # Verifica la presenza del driver ODBC per Access
-                    access_drivers = [d for d in pyodbc.drivers() if "Access" in d and ("mdb" in d.lower() or "accdb" in d.lower())]
-                    if not access_drivers:
-                        self.log_debug("Driver ODBC per Access non trovato. Installa 'Microsoft Access Database Engine Redistributable'.")
-                        return "[ERRORE] Driver ODBC per Access non trovato. Installa 'Microsoft Access Database Engine Redistributable'."
-                    driver = access_drivers[-1]  # Usa il driver più recente installato
-
-                    conn_str = f"Driver={{{driver}}};DBQ={file_path};"
-
-                    try:
-                        conn = pyodbc.connect(conn_str)
-                        cursor = conn.cursor()
-
-                        # Ottieni l'elenco delle tabelle
-                        tables = []
-                        for row in cursor.tables():
-                            if row.table_type == 'TABLE':
-                                tables.append(row.table_name)
-
-                        content_parts = []
-                        content_parts.append(f"Database Access: {os.path.basename(file_path)}")
-                        content_parts.append(f"Numero di tabelle: {len(tables)}")
-
-                        # Estrai struttura e dati da ogni tabella
-                        for table in tables:
-                            if self.stop_search:
-                                return ""
-
-                            content_parts.append(f"\n--- Tabella: {table} ---")
-
-                            # Ottieni struttura della tabella
-                            columns = cursor.columns(table=table)
-                            col_names = [col.column_name for col in columns]
-                            content_parts.append("Colonne: " + ", ".join(col_names))
-
-                            # Ricerca nei dati della tabella
-                            try:
-                                cursor.execute(f"SELECT * FROM [{table}]")
-                                rows = cursor.fetchall()
-                                if rows:
-                                    content_parts.append(f"Dati ({len(rows)} righe):")
-                                    for row in rows:
-                                        row_str = " ".join([str(cell) for cell in row if cell is not None])
-                                        content_parts.append(row_str)
-                            except Exception as e:
-                                content_parts.append(f"Errore nell'estrazione dei dati: {str(e)}")
-
-                        conn.close()
-                        content = "\n".join(content_parts)
-                        self.log_debug(f"Estratti {len(content)} caratteri da Access")
-                        self.log_debug(f"[DEBUG ACCESS] Estratto contenuto di {file_path} (len={len(content)})")
-                        return content
-
-                    except pyodbc.Error as e:
-                        self.log_debug(f"Errore di accesso al database: {str(e)}")
-                        if 'IM002' in str(e):
-                            return "[ERRORE] Driver ODBC per Access non trovato o non configurato. Installa 'Microsoft Access Database Engine Redistributable'."
-                        return ""
-                except ImportError:
-                    self.log_debug("Libreria pyodbc non disponibile")
-                    return ""
+                    import pyodbc  # o pypyodbc
+                    content = []
+                    
+                    # Connessione al database Access
+                    conn_str = f"Driver={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={file_path}"
+                    conn = pyodbc.connect(conn_str)
+                    cursor = conn.cursor()
+                    
+                    # Ottieni tutte le tabelle
+                    tables = [table.table_name for table in cursor.tables(tableType='TABLE')]
+                    
+                    # Leggi i dati da ogni tabella
+                    for table in tables:
+                        try:
+                            cursor.execute(f"SELECT * FROM [{table}]")
+                            columns = [column[0] for column in cursor.description]
+                            rows = cursor.fetchall()
+                            
+                            content.append(f"Tabella: {table}")
+                            content.append("Colonne: " + ", ".join(columns))
+                            
+                            for row in rows:
+                                row_data = [str(value) for value in row]
+                                content.append(" | ".join(row_data))
+                        except Exception as e:
+                            self.log_error(f"Errore nella lettura della tabella {table}: {str(e)}")
+                    
+                    conn.close()
+                    return "\n".join(content)
                 except Exception as e:
-                    self.log_debug(f"Errore nell'analisi del file Access {file_path}: {str(e)}")
+                    self.log_error(f"Errore nell'accesso al database {file_path}: {str(e)}")
                     return ""
 
             # OpenDocument Database (.odb)
@@ -10710,4 +10728,3 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
-
