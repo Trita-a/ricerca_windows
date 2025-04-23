@@ -170,7 +170,7 @@ Aggiunta la ricerca all'inerno dei database
 Aggiunto aggiornamento applicazione
 Correzioni minori
 V 9.2.9
-Aggiunto ricerca Windows.edb : 
+Aggiunto ricerca Windows.edb (Database di indicizzazione): 
 Velocità della ricerca: 
     Fino a 10-20 volte più veloce rispetto alla scansione tradizionale
     Ricerca nel contenuto performante: Non serve aprire ogni file
