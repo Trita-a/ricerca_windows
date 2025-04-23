@@ -10437,6 +10437,25 @@ class FileSearchApp:
                 self.auto_memory_management = auto_memory_var.get()
                 self.memory_usage_percent = memory_percent_var.get()
 
+                # Salva le opzioni di rete
+                self.network_search_enabled = network_search_var.get()
+                self.network_retry_count = network_retry_var.get()
+                self.network_parallel_searches = network_parallel_var.get()
+
+                # Aggiorna il NetworkSearchOptimizer se è stato inizializzato
+                if hasattr(self, 'network_optimizer'):
+                    self.network_optimizer.retry_count = self.network_retry_count
+
+                # Salva le opzioni per file di grandi dimensioni
+                self.large_file_search_enabled = large_file_var.get()
+                self.large_file_threshold = large_file_threshold_var.get() * 1024 * 1024  # Converte da MB a byte
+                self.huge_file_threshold = huge_file_threshold_var.get() * 1024 * 1024    # Converte da MB a byte
+
+                # Aggiorna il LargeFileHandler se è stato inizializzato
+                if hasattr(self, 'large_file_handler'):
+                    self.large_file_handler.large_file_threshold = self.large_file_threshold
+                    self.large_file_handler.huge_file_threshold = self.huge_file_threshold
+
                 # Aggiorna le variabili dell'update settings nel metodo di salvataggio
                 self.update_settings["auto_update"] = auto_update_var.get()
                 
