@@ -169,3 +169,16 @@ V 9.2.8
 Aggiunta la ricerca all'inerno dei database
 Aggiunto aggiornamento applicazione
 Correzioni minori
+V 9.2.9
+Aggiunto ricerca Windows.edb : 
+Velocità della ricerca: 
+    Fino a 10-20 volte più veloce rispetto alla scansione tradizionale
+    Ricerca nel contenuto performante: Non serve aprire ogni file
+    Minore utilizzo di risorse: Riduce l'impatto su CPU e disco
+Limitazioni:
+    Funziona solo su cartelle indicizzate dal sistema
+    Richiede che il servizio Windows Search sia attivo
+    Non supporta ricerche complesse come espressioni regolari
+
+Miglioramenti per la Ricerca in Rete: Ricerca più veloce su percorsi di rete.
+Miglioramenti per File di Grandi Dimensioni
