@@ -29,6 +29,7 @@ import json
 import webbrowser
 import win32com.client
 import pythoncom
+import hashlib
 
 # Import necessari per Windows Search
 try:
@@ -102,11 +103,17 @@ file_format_support = {
 
 # Aggiungi questa classe prima della definizione della classe FileSearchApp
 class WindowsSearchHelper:
-    """Classe per utilizzare Windows Search Service tramite COM per ricerche veloci"""
+    """Classe per utilizzare Windows Search Service tramite COM per ricerche veloci
+    con supporto migliorato per percorsi di rete e file di grandi dimensioni"""
     
     def __init__(self, logger=None):
         self.available = self._check_service_availability()
         self.logger = logger
+        self.query_cache = {}  # Cache per i risultati delle query
+        self.cache_timeout = 300  # Tempo di validità della cache in secondi
+        self.connection_timeout = 10  # Timeout per le connessioni in secondi
+        self.retry_attempts = 3  # Tentativi per le operazioni COM su rete
+        self.is_network_optimized = True  # Abilita ottimizzazioni per rete
         
     def log(self, message, level="info"):
         """Gestione log con fallback su print"""
@@ -138,29 +145,67 @@ class WindowsSearchHelper:
         finally:
             pythoncom.CoUninitialize()
     
-    def search_files(self, search_path, keywords, file_extensions=None, max_results=1000):
-        """
-        Esegue la ricerca di file utilizzando Windows Search
+    def _is_network_path(self, path):
+        """Determina se un percorso è su rete"""
+        if path.startswith('\\\\') or path.startswith('//'):
+            return True
         
-        Args:
-            search_path (str): Percorso in cui cercare
-            keywords (list): Lista di parole chiave da cercare
-            file_extensions (list, optional): Lista di estensioni file da includere
-            max_results (int, optional): Numero massimo di risultati
-            
-        Returns:
-            list: Lista dei percorsi dei file trovati
-        """
+        # Controlla se è un'unità di rete mappata
+        if len(path) >= 2 and path[1] == ':':
+            drive_letter = path[0].upper()
+            try:
+                result = subprocess.run(["net", "use", f"{drive_letter}:"], 
+                                       capture_output=True, text=True, timeout=2)
+                return "Remote name" in result.stdout
+            except:
+                pass
+        return False
+    
+    def _get_connection(self, network_path=False):
+        """Crea una connessione COM con gestione migliorata per rete"""
+        retry_count = self.retry_attempts if network_path else 1
+        
+        for attempt in range(retry_count):
+            try:
+                connection = win32com.client.Dispatch("ADODB.Connection")
+                connection.ConnectionTimeout = self.connection_timeout
+                connection.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
+                return connection
+            except Exception as e:
+                if attempt == retry_count - 1:
+                    raise
+                time.sleep(0.5)  # Attendi prima di riprovare
+        
+        return None  # Non dovrebbe mai arrivare qui
+    
+    def search_files(self, search_path, keywords, file_extensions=None, max_results=1000, use_cache=True):
+        """Esegue la ricerca di file utilizzando Windows Search"""
         if not self.available:
             self.log("Servizio Windows Search non disponibile. Passando alla ricerca standard.", "warning")
             return []
         
+        # Calcola un hash per questa query per la cache
+        query_key = f"{search_path}:{','.join(sorted(keywords))}:{','.join(sorted(file_extensions or []))}"
+        query_hash = hashlib.md5(query_key.encode()).hexdigest()
+        
+        # Controlla se abbiamo risultati in cache
+        if use_cache and query_hash in self.query_cache:
+            cache_entry = self.query_cache[query_hash]
+            cache_time, cache_results = cache_entry
+            
+            # Verifica se la cache è ancora valida
+            if (time.time() - cache_time) < self.cache_timeout:
+                self.log(f"Risultati recuperati dalla cache per {search_path}", "info")
+                return cache_results
+        
+        # Determina se stiamo cercando su un percorso di rete
+        is_network = self._is_network_path(search_path) if self.is_network_optimized else False
+        
         try:
             pythoncom.CoInitialize()
             
-            # Prepara la stringa di connessione
-            connection = win32com.client.Dispatch("ADODB.Connection")
-            connection.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
+            # Prepara la stringa di connessione con gestione ottimizzata per rete
+            connection = self._get_connection(network_path=is_network)
             
             # Prepara la query SQL
             recordset = win32com.client.Dispatch("ADODB.Recordset")
@@ -179,31 +224,68 @@ class WindowsSearchHelper:
                 ext_list = ", ".join(f"'{ext.replace('.', '')}'" for ext in file_extensions)
                 extension_condition = f" AND System.FileExtension IN ({ext_list})"
             
-            # Costruisci la query completa
-            scope_condition = f"SCOPE = '{search_path}'"
-            query = f"SELECT System.ItemPathDisplay FROM SystemIndex WHERE {scope_condition} AND ({keyword_query}){extension_condition}"
+            # Ottimizzazione della query per percorsi di rete
+            if is_network:
+                # Per i percorsi di rete, prima cerca solo nei nomi dei file per velocità
+                scope_condition = f"SCOPE = '{search_path}'"
+                query = f"SELECT System.ItemPathDisplay FROM SystemIndex WHERE {scope_condition} AND ({keyword_query}){extension_condition}"
+                self.log(f"Query Windows Search ottimizzata per rete: {query}")
+            else:
+                # Query standard
+                scope_condition = f"SCOPE = '{search_path}'"
+                query = f"SELECT System.ItemPathDisplay FROM SystemIndex WHERE {scope_condition} AND ({keyword_query}){extension_condition}"
+                self.log(f"Query Windows Search: {query}")
             
-            self.log(f"Query Windows Search: {query}")
+            # Imposta timeout per l'esecuzione della query (più lungo per rete)
+            recordset.CursorLocation = 3  # adUseClient
+            recordset.MaxRecords = max_results
             
-            # Esegui la query
-            recordset.Open(query, connection)
+            # Esegui la query con gestione migliorata degli errori
+            try:
+                recordset.Open(query, connection)
+            except Exception as e:
+                if is_network:
+                    # Per errori su rete, prova una query più semplice
+                    self.log(f"Errore nella query complessa su rete, tentativo con query semplificata: {str(e)}", "warning")
+                    query = f"SELECT System.ItemPathDisplay FROM SystemIndex WHERE {scope_condition} AND CONTAINS(System.FileName, '*')"
+                    try:
+                        recordset.Open(query, connection)
+                    except:
+                        raise  # Se fallisce anche la query semplificata, propaga l'errore
+                else:
+                    raise
             
             # Raccogli i risultati
             results = []
             count = 0
             
             while not recordset.EOF and count < max_results:
-                file_path = recordset.Fields.Item("System.ItemPathDisplay").Value
-                if os.path.exists(file_path):  # Verifica che il file esista ancora
-                    results.append(file_path)
-                count += 1
-                recordset.MoveNext()
+                try:
+                    file_path = recordset.Fields.Item("System.ItemPathDisplay").Value
+                    if os.path.exists(file_path):  # Verifica che il file esista ancora
+                        results.append(file_path)
+                    count += 1
+                    recordset.MoveNext()
+                except Exception as e:
+                    self.log(f"Errore durante l'accesso al record: {str(e)}", "warning")
+                    recordset.MoveNext()
             
             # Chiudi le connessioni
             recordset.Close()
             connection.Close()
             
             self.log(f"Ricerca Windows Search completata. Trovati {len(results)} risultati.")
+            
+            # Salva i risultati in cache
+            self.query_cache[query_hash] = (time.time(), results)
+            
+            # Pulisci la cache se è diventata troppo grande
+            if len(self.query_cache) > 50:  # Limite di 50 query in cache
+                oldest_keys = sorted(self.query_cache.keys(), 
+                                   key=lambda k: self.query_cache[k][0])[:10]
+                for key in oldest_keys:
+                    del self.query_cache[key]
+            
             return results
             
         except Exception as e:
@@ -212,25 +294,31 @@ class WindowsSearchHelper:
         finally:
             pythoncom.CoUninitialize()
     
-    def index_status(self, path):
-        """
-        Verifica lo stato di indicizzazione di un percorso
+    def search_files_async(self, search_path, keywords, callback, file_extensions=None, max_results=1000):
+        """Esegue la ricerca in modo asincrono per non bloccare l'interfaccia"""
+        def search_thread():
+            results = self.search_files(search_path, keywords, file_extensions, max_results)
+            if callback:
+                callback(results)
         
-        Args:
-            path (str): Percorso da verificare
-            
-        Returns:
-            bool: True se il percorso è indicizzato, False altrimenti
-        """
+        thread = threading.Thread(target=search_thread)
+        thread.daemon = True
+        thread.start()
+        return thread
+    
+    def index_status(self, path):
+        """Verifica lo stato di indicizzazione di un percorso"""
         if not self.available:
             return False
-            
+        
+        # Controlla se è un percorso di rete
+        is_network = self._is_network_path(path) if self.is_network_optimized else False
+        
         try:
             pythoncom.CoInitialize()
             
             # Ottieni lo stato di indicizzazione dal servizio
-            connection = win32com.client.Dispatch("ADODB.Connection")
-            connection.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
+            connection = self._get_connection(network_path=is_network)
             
             recordset = win32com.client.Dispatch("ADODB.Recordset")
             query = f"SELECT System.Search.CatalogName FROM SystemIndex WHERE SCOPE = '{path}'"
@@ -242,11 +330,541 @@ class WindowsSearchHelper:
             connection.Close()
             
             return indexed
-        except Exception:
+        except Exception as e:
+            self.log(f"Errore durante la verifica dello stato di indicizzazione: {str(e)}", "warning")
             return False
         finally:
             pythoncom.CoUninitialize()
+            
+    def optimize_query_for_path(self, path, keywords, file_extensions=None):
+        """Ottimizza la strategia di query in base al tipo di percorso"""
+        is_network = self._is_network_path(path) if self.is_network_optimized else False
+        
+        # Costruisci la condizione per le parole chiave
+        keyword_conditions = []
+        for keyword in keywords:
+            if is_network:
+                # Su rete, inizialmente cerca solo nei nomi dei file per velocità
+                keyword_conditions.append(f"CONTAINS(System.FileName, '\"{keyword}\"')")
+            else:
+                # Altrimenti cerca ovunque
+                keyword_conditions.append(f"CONTAINS(System.FileName, '\"{keyword}\"') OR CONTAINS(System.Search.Contents, '\"{keyword}\"')")
+        
+        keyword_query = " AND ".join(f"({condition})" for condition in keyword_conditions)
+        
+        # Aggiungi condizione per le estensioni file se specificate
+        extension_condition = ""
+        if file_extensions and len(file_extensions) > 0:
+            ext_list = ", ".join(f"'{ext.replace('.', '')}'" for ext in file_extensions)
+            extension_condition = f" AND System.FileExtension IN ({ext_list})"
+        
+        # Costruisci la query completa
+        scope_condition = f"SCOPE = '{path}'"
+        query = f"SELECT System.ItemPathDisplay FROM SystemIndex WHERE {scope_condition} AND ({keyword_query}){extension_condition}"
+        
+        return query, is_network
+    
+    def clear_cache(self):
+        """Pulisce la cache delle query"""
+        self.query_cache.clear()
+        self.log("Cache delle query Windows Search pulita")
+    
+    def set_network_optimization(self, enabled=True):
+        """Abilita o disabilita le ottimizzazioni di rete"""
+        self.is_network_optimized = enabled
+        self.log(f"Ottimizzazione di rete {'abilitata' if enabled else 'disabilitata'}")
+    
+    def set_timeout(self, timeout_seconds):
+        """Imposta il timeout per le connessioni"""
+        self.connection_timeout = timeout_seconds
+        self.log(f"Timeout di connessione impostato a {timeout_seconds} secondi")
+    
+    def set_retry_attempts(self, attempts):
+        """Imposta il numero di tentativi per le operazioni COM su rete"""
+        self.retry_attempts = attempts
+        self.log(f"Tentativi per operazioni COM impostati a {attempts}")
+    
+    def set_cache_timeout(self, timeout_seconds):
+        """Imposta il tempo di validità della cache"""
+        self.cache_timeout = timeout_seconds
+        self.log(f"Timeout della cache impostato a {timeout_seconds} secondi")
 
+class NetworkSearchOptimizer:
+    """Classe per ottimizzare la ricerca su percorsi di rete"""
+    
+    def __init__(self, logger=None):
+        self.logger = logger
+        self.network_cache = {}  # Cache dei risultati di rete
+        self.network_connections = {}  # Stato delle connessioni di rete
+        self.retry_count = 3  # Numero di tentativi per le operazioni di rete
+        self.chunk_size = 8 * 1024 * 1024  # 8MB per trasferimento di rete
+        self.timeout_multiplier = 2.5  # Moltiplicatore di timeout per percorsi di rete
+    
+    def log(self, message, level="info"):
+        if self.logger:
+            if level == "debug":
+                self.logger.debug(message)
+            elif level == "info":
+                self.logger.info(message)
+            elif level == "warning":
+                self.logger.warning(message)
+            elif level == "error":
+                self.logger.error(message)
+    
+    def optimize_network_path(self, path):
+        """Ottimizza un percorso di rete per le prestazioni"""
+        if not self.is_network_path(path):
+            return path
+            
+        # Normalizza percorso di rete
+        normalized_path = self._normalize_network_path(path)
+        
+        # Verifica la connessione e pre-autentica se necessario
+        self._ensure_network_connection(normalized_path)
+        
+        return normalized_path
+    
+    def _normalize_network_path(self, path):
+        """Normalizza un percorso di rete per un accesso più coerente"""
+        # Sostituisci più backslash con uno solo
+        normalized = re.sub(r'\\{2,}', r'\\', path)
+        
+        # Assicurati che i percorsi UNC inizino con \\
+        if normalized.startswith('\\') and not normalized.startswith('\\\\'):
+            normalized = '\\' + normalized
+        
+        return normalized
+    
+    def _ensure_network_connection(self, path):
+        """Assicura che la connessione di rete sia attiva e autenticata"""
+        # Estrai server dal percorso di rete
+        server_match = re.match(r'\\\\([^\\]+)', path)
+        if not server_match:
+            return False
+            
+        server = server_match.group(1)
+        
+        # Se abbiamo già verificato questa connessione di rete, ritorna il risultato memorizzato
+        if server in self.network_connections:
+            return self.network_connections[server]
+            
+        try:
+            # Verifica che il server sia raggiungibile
+            for i in range(self.retry_count):
+                try:
+                    subprocess.run(["ping", "-n", "1", "-w", "1000", server], 
+                                  capture_output=True, check=True, timeout=2)
+                    break
+                except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+                    if i == self.retry_count - 1:
+                        self.log(f"Impossibile connettersi al server di rete: {server}", "warning")
+                        self.network_connections[server] = False
+                        return False
+            
+            # Memorizza il risultato
+            self.network_connections[server] = True
+            return True
+        except Exception as e:
+            self.log(f"Errore durante la verifica della connessione di rete a {server}: {str(e)}", "error")
+            self.network_connections[server] = False
+            return False
+    
+    def is_network_path(self, path):
+        """Determina se un percorso è un percorso di rete"""
+        if path.startswith('\\\\') or path.startswith('//'):
+            return True
+        # Controlla se è un'unità di rete mappata
+        if len(path) >= 2 and path[1] == ':':
+            drive_letter = path[0].upper()
+            try:
+                # Usa subprocess per eseguire il comando net use
+                result = subprocess.run(["net", "use", f"{drive_letter}:"], 
+                                       capture_output=True, text=True, timeout=2)
+                return "Remote name" in result.stdout
+            except:
+                pass
+        return False
+    
+    def get_network_files(self, path, pattern="*", recursive=True, max_depth=3):
+        """Ottiene un elenco di file da un percorso di rete con il pattern specificato"""
+        cache_key = f"{path}:{pattern}:{recursive}:{max_depth}"
+        
+        # Controlla se i risultati sono nella cache
+        if cache_key in self.network_cache:
+            self.log(f"Risultati di rete recuperati dalla cache per {path}", "debug")
+            return self.network_cache[cache_key]
+        
+        # Assicurati che il percorso di rete sia ottimizzato
+        path = self.optimize_network_path(path)
+        
+        files = []
+        try:
+            # Usa robocopy per elencare i file di rete in modo efficiente
+            # Robocopy ha una migliore gestione degli errori di rete rispetto a os.walk
+            temp_output = tempfile.NamedTemporaryFile(delete=False, suffix='.txt')
+            temp_output.close()
+            
+            depth_param = f"/LEV:{max_depth}" if recursive else "/LEV:1"
+            cmd = [
+                "robocopy", 
+                path, 
+                os.devnull, 
+                pattern,
+                "/L",      # Solo elenco, non copia
+                "/NJH",    # No Job Header
+                "/NJS",    # No Job Summary
+                "/NC",     # No Class
+                "/NS",     # No Size
+                depth_param,
+                f"/LOG:{temp_output.name}"
+            ]
+            
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            
+            # Leggi i risultati dal file temporaneo
+            with open(temp_output.name, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('New File') and not line.endswith('\\'):
+                        # Estrai il percorso del file
+                        file_path = os.path.join(path, line.strip())
+                        files.append(file_path)
+            
+            # Pulisci il file temporaneo
+            os.unlink(temp_output.name)
+            
+            # Memorizza i risultati nella cache
+            self.network_cache[cache_key] = files
+            
+            return files
+        except Exception as e:
+            self.log(f"Errore durante l'enumerazione dei file di rete in {path}: {str(e)}", "error")
+            return []
+    
+    def read_network_file_in_chunks(self, file_path, keywords, chunk_size=None):
+        """Legge un file di rete in blocchi per ridurre l'utilizzo della memoria"""
+        if chunk_size is None:
+            chunk_size = self.chunk_size
+            
+        try:
+            found_keywords = set()
+            file_size = os.path.getsize(file_path)
+            
+            # Per file piccoli, leggi tutto in una volta
+            if file_size < chunk_size:
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+                try:
+                    text = content.decode('utf-8', errors='ignore')
+                    for keyword in keywords:
+                        if keyword.lower() in text.lower():
+                            found_keywords.add(keyword)
+                except:
+                    pass
+                return len(found_keywords) > 0, found_keywords
+            
+            # Per file grandi, leggi a blocchi
+            with open(file_path, 'rb') as f:
+                buffer = b""
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    
+                    # Aggiungi il chunk al buffer esistente
+                    buffer += chunk
+                    
+                    # Decodifica e cerca le parole chiave
+                    try:
+                        text = buffer.decode('utf-8', errors='ignore')
+                        for keyword in keywords:
+                            if keyword.lower() in text.lower():
+                                found_keywords.add(keyword)
+                    except:
+                        pass
+                    
+                    # Se abbiamo trovato tutte le parole chiave, possiamo fermarci
+                    if len(found_keywords) == len(keywords):
+                        return True, found_keywords
+                    
+                    # Mantieni l'ultima parte del buffer per gestire le parole chiave divise tra i chunk
+                    buffer = buffer[-100:]  # Mantieni gli ultimi 100 byte
+            
+            return len(found_keywords) > 0, found_keywords
+        except Exception as e:
+            self.log(f"Errore durante la lettura del file di rete {file_path}: {str(e)}", "error")
+            return False, set()
+    
+    def get_network_timeout(self, standard_timeout):
+        """Calcola il timeout ottimale per le operazioni di rete"""
+        return standard_timeout * self.timeout_multiplier
+    
+class LargeFileHandler:
+    """Classe per gestire in modo efficiente i file di grandi dimensioni"""
+    
+    def __init__(self, logger=None):
+        self.logger = logger
+        self.large_file_threshold = 50 * 1024 * 1024  # 50 MB
+        self.huge_file_threshold = 500 * 1024 * 1024  # 500 MB
+        self.read_chunk_size = 4 * 1024 * 1024  # 4 MB
+        self.max_preview_size = 10 * 1024  # 10 KB per l'anteprima
+        self.supported_parsers = {}
+        
+        # Inizializza i parser specifici per tipo di file
+        self._initialize_file_parsers()
+    
+    def log(self, message, level="info"):
+        if self.logger:
+            if level == "debug":
+                self.logger.debug(message)
+            elif level == "info":
+                self.logger.info(message)
+            elif level == "warning":
+                self.logger.warning(message)
+            elif level == "error":
+                self.logger.error(message)
+    
+    def _initialize_file_parsers(self):
+        """Inizializza i parser specializzati per i vari tipi di file"""
+        # Aggiungiamo parser per tipi di file comuni che potrebbero essere grandi
+        try:
+            import xml.etree.ElementTree as ET
+            self.supported_parsers['.xml'] = self._parse_xml
+        except ImportError:
+            self.log("Modulo xml.etree.ElementTree non disponibile", "warning")
+        
+        try:
+            import csv
+            self.supported_parsers['.csv'] = self._parse_csv
+        except ImportError:
+            self.log("Modulo csv non disponibile", "warning")
+        
+        try:
+            import json
+            self.supported_parsers['.json'] = self._parse_json
+        except ImportError:
+            self.log("Modulo json non disponibile", "warning")
+    
+    def is_large_file(self, file_path):
+        """Determina se un file è considerato 'grande'"""
+        try:
+            return os.path.getsize(file_path) > self.large_file_threshold
+        except:
+            return False
+    
+    def is_huge_file(self, file_path):
+        """Determina se un file è considerato 'enorme'"""
+        try:
+            return os.path.getsize(file_path) > self.huge_file_threshold
+        except:
+            return False
+    
+    def search_in_large_file(self, file_path, keywords, is_whole_word=False):
+        """Cerca keywords in un file di grandi dimensioni in modo ottimizzato"""
+        extension = os.path.splitext(file_path)[1].lower()
+        
+        # Usa un parser specifico se disponibile per questo tipo di file
+        if extension in self.supported_parsers:
+            return self.supported_parsers[extension](file_path, keywords, is_whole_word)
+        
+        # Altrimenti usa la ricerca generica a blocchi
+        return self._chunk_search(file_path, keywords, is_whole_word)
+    
+    def _chunk_search(self, file_path, keywords, is_whole_word=False):
+        """Cerca keywords in un file leggendolo a blocchi"""
+        keywords_lower = [k.lower() for k in keywords]
+        found_keywords = set()
+        overlap = max(len(max(keywords, key=len)) * 2, 200)  # Sovrapponi i blocchi per evitare di perdere keyword spezzate
+        
+        try:
+            with open(file_path, 'rb') as f:
+                file_size = os.path.getsize(file_path)
+                
+                # Per file molto grandi, aumenta la dimensione del chunk
+                chunk_size = self.read_chunk_size
+                if file_size > self.huge_file_threshold:
+                    chunk_size = self.read_chunk_size * 2
+                
+                # Buffer per sovrapporre i blocchi
+                last_data = b""
+                position = 0
+                
+                while position < file_size:
+                    # Leggi un nuovo blocco
+                    f.seek(position)
+                    new_data = f.read(chunk_size)
+                    if not new_data:
+                        break
+                    
+                    # Combina con i dati precedenti per gestire le keyword divise
+                    data = last_data + new_data
+                    
+                    # Converti in testo e cerca
+                    try:
+                        text = data.decode('utf-8', errors='ignore')
+                        text_lower = text.lower()
+                        
+                        for i, keyword in enumerate(keywords_lower):
+                            if is_whole_word:
+                                # Cerca parole intere usando espressioni regolari
+                                import re
+                                pattern = r'\b' + re.escape(keyword) + r'\b'
+                                if re.search(pattern, text_lower, re.IGNORECASE):
+                                    found_keywords.add(keywords[i])
+                            else:
+                                if keyword in text_lower:
+                                    found_keywords.add(keywords[i])
+                    except Exception as e:
+                        self.log(f"Errore nella decodifica del testo in {file_path}: {str(e)}", "error")
+                    
+                    # Se abbiamo trovato tutte le keywords, fermiamoci
+                    if len(found_keywords) == len(keywords):
+                        return True, found_keywords
+                    
+                    # Salva gli ultimi overlap byte per la prossima iterazione
+                    last_data = new_data[-overlap:] if len(new_data) > overlap else new_data
+                    
+                    # Avanza nella posizione
+                    position += chunk_size - overlap
+            
+            return len(found_keywords) > 0, found_keywords
+        
+        except Exception as e:
+            self.log(f"Errore durante la ricerca a blocchi in {file_path}: {str(e)}", "error")
+            return False, set()
+    
+    def _parse_xml(self, file_path, keywords, is_whole_word=False):
+        """Cerca in modo efficiente in file XML di grandi dimensioni"""
+        import xml.sax
+        import re
+        
+        class XMLHandler(xml.sax.ContentHandler):
+            def __init__(self, keywords, is_whole_word):
+                self.keywords = [k.lower() for k in keywords]
+                self.original_keywords = keywords
+                self.found_keywords = set()
+                self.current_text = ""
+                self.is_whole_word = is_whole_word
+            
+            def characters(self, content):
+                self.current_text += content
+            
+            def endElement(self, name):
+                text_lower = self.current_text.lower()
+                
+                for i, keyword in enumerate(self.keywords):
+                    if self.is_whole_word:
+                        pattern = r'\b' + re.escape(keyword) + r'\b'
+                        if re.search(pattern, text_lower, re.IGNORECASE):
+                            self.found_keywords.add(self.original_keywords[i])
+                    else:
+                        if keyword in text_lower:
+                            self.found_keywords.add(self.original_keywords[i])
+                
+                self.current_text = ""
+        
+        try:
+            handler = XMLHandler(keywords, is_whole_word)
+            parser = xml.sax.make_parser()
+            parser.setContentHandler(handler)
+            parser.parse(file_path)
+            return len(handler.found_keywords) > 0, handler.found_keywords
+        except Exception as e:
+            self.log(f"Errore durante il parsing XML di {file_path}: {str(e)}", "warning")
+            # Fallback alla ricerca a blocchi
+            return self._chunk_search(file_path, keywords, is_whole_word)
+    
+    def _parse_csv(self, file_path, keywords, is_whole_word=False):
+        """Cerca in modo efficiente in file CSV di grandi dimensioni"""
+        import csv
+        import re
+        
+        found_keywords = set()
+        keywords_lower = [k.lower() for k in keywords]
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore', newline='') as csvfile:
+                reader = csv.reader(csvfile)
+                
+                # Leggi solo le prime 1000 righe per file molto grandi
+                if self.is_huge_file(file_path):
+                    rows_to_read = 1000
+                else:
+                    rows_to_read = float('inf')
+                
+                for i, row in enumerate(reader):
+                    if i >= rows_to_read:
+                        break
+                    
+                    for cell in row:
+                        cell_lower = cell.lower()
+                        for i, keyword in enumerate(keywords_lower):
+                            if is_whole_word:
+                                pattern = r'\b' + re.escape(keyword) + r'\b'
+                                if re.search(pattern, cell_lower, re.IGNORECASE):
+                                    found_keywords.add(keywords[i])
+                            else:
+                                if keyword in cell_lower:
+                                    found_keywords.add(keywords[i])
+                    
+                    # Se abbiamo trovato tutte le keywords, fermiamoci
+                    if len(found_keywords) == len(keywords):
+                        return True, found_keywords
+            
+            return len(found_keywords) > 0, found_keywords
+        except Exception as e:
+            self.log(f"Errore durante il parsing CSV di {file_path}: {str(e)}", "warning")
+            # Fallback alla ricerca a blocchi
+            return self._chunk_search(file_path, keywords, is_whole_word)
+    
+    def _parse_json(self, file_path, keywords, is_whole_word=False):
+        """Cerca in modo efficiente in file JSON di grandi dimensioni"""
+        import json
+        import re
+        
+        try:
+            # Per file JSON enormi, usa una strategia di parsing a blocchi
+            if self.is_huge_file(file_path):
+                return self._chunk_search(file_path, keywords, is_whole_word)
+            
+            # Per file JSON di dimensioni gestibili, carica tutto
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                data = json.load(f)
+            
+            # Converti in testo per cercare le keywords
+            text = json.dumps(data, ensure_ascii=False)
+            text_lower = text.lower()
+            
+            found_keywords = set()
+            for i, keyword in enumerate(keywords):
+                keyword_lower = keyword.lower()
+                if is_whole_word:
+                    pattern = r'\b' + re.escape(keyword_lower) + r'\b'
+                    if re.search(pattern, text_lower, re.IGNORECASE):
+                        found_keywords.add(keyword)
+                else:
+                    if keyword_lower in text_lower:
+                        found_keywords.add(keyword)
+            
+            return len(found_keywords) > 0, found_keywords
+        except Exception as e:
+            self.log(f"Errore durante il parsing JSON di {file_path}: {str(e)}", "warning")
+            # Fallback alla ricerca a blocchi
+            return self._chunk_search(file_path, keywords, is_whole_word)
+    
+    def get_file_preview(self, file_path):
+        """Ottiene un'anteprima di un file di grandi dimensioni"""
+        try:
+            with open(file_path, 'rb') as f:
+                data = f.read(self.max_preview_size)
+                try:
+                    preview = data.decode('utf-8', errors='ignore')
+                    return preview + ("..." if os.path.getsize(file_path) > self.max_preview_size else "")
+                except:
+                    return f"[Anteprima non disponibile: contenuto binario]"
+        except Exception as e:
+            return f"[Errore nell'apertura del file: {str(e)}]"
+        
 class FileSearchApp:
     @error_handler
     def __init__(self, root):
@@ -386,6 +1004,26 @@ class FileSearchApp:
         
         # Aggiungi questa riga: lista permanente per i log completi dalla creazione dell'app
         self.complete_debug_log_history = []
+
+        # Inizializza le classi di ottimizzazione
+        self.network_optimizer = NetworkSearchOptimizer(logger=self.logger)
+        self.large_file_handler = LargeFileHandler(logger=self.logger)
+        
+        # Configura le opzioni di rete
+        self.network_retry_count = 3
+        self.network_search_enabled = True
+        self.network_parallel_searches = 4  # Numero di ricerche parallele su rete
+        
+        # Configura le opzioni per file di grandi dimensioni
+        self.large_file_search_enabled = True
+        self.large_file_threshold = 50 * 1024 * 1024  # 50 MB
+        self.huge_file_threshold = 500 * 1024 * 1024  # 500 MB
+        
+        # Configura anche la classe WindowsSearchHelper con le ottimizzazioni
+        if hasattr(self, 'windows_search_helper'):
+            self.windows_search_helper.set_network_optimization(self.network_search_enabled)
+            self.windows_search_helper.set_retry_attempts(self.network_retry_count)
+            self.windows_search_helper.set_timeout(10)
 
     @error_handler
     def _init_remaining_variables(self):
@@ -9499,6 +10137,84 @@ class FileSearchApp:
         memory_details_label.pack(anchor=tk.W, padx=5, pady=5)
         update_memory_details()
 
+        # Ottimizzazione Rete
+        network_frame = ttk.LabelFrame(performance_frame, text="Ottimizzazione Rete", padding=10)
+        network_frame.pack(fill=X, pady=10)
+
+        network_grid = ttk.Frame(network_frame)
+        network_grid.pack(fill=X)
+
+        # Checkbox per abilitare ottimizzazione rete
+        network_search_var = BooleanVar(value=getattr(self, 'network_search_enabled', True))
+        network_check = ttk.Checkbutton(network_grid, text="Ottimizza ricerca su percorsi di rete", 
+                                    variable=network_search_var)
+        network_check.grid(row=0, column=0, columnspan=2, sticky=W, padx=5, pady=5)
+        self.create_tooltip(network_check, 
+                        "Abilita ottimizzazioni specifiche per migliorare le prestazioni\n"
+                        "durante la ricerca su unità di rete o percorsi UNC.\n"
+                        "Migliora la stabilità e riduce i timeout su connessioni lente.")
+
+        # Tentativi di connessione
+        retry_label = ttk.Label(network_grid, text="Tentativi di connessione:")
+        retry_label.grid(row=1, column=0, sticky=W, padx=5, pady=5)
+        network_retry_var = IntVar(value=getattr(self, 'network_retry_count', 3))
+        network_retry = ttk.Spinbox(network_grid, from_=1, to=10, width=5, textvariable=network_retry_var)
+        network_retry.grid(row=1, column=1, padx=5, pady=5, sticky=W)
+        self.create_tooltip(network_retry, 
+                        "Numero di tentativi prima di considerare fallita una\n"
+                        "connessione di rete. Valori più alti migliorano l'affidabilità\n"
+                        "su reti instabili ma possono rallentare la ricerca.")
+
+        # Ricerche parallele su rete
+        parallel_net_label = ttk.Label(network_grid, text="Ricerche parallele:")
+        parallel_net_label.grid(row=1, column=2, sticky=W, padx=20, pady=5)
+        network_parallel_var = IntVar(value=getattr(self, 'network_parallel_searches', 4))
+        network_parallel = ttk.Spinbox(network_grid, from_=1, to=16, width=5, textvariable=network_parallel_var)
+        network_parallel.grid(row=1, column=3, padx=5, pady=5, sticky=W)
+        self.create_tooltip(network_parallel, 
+                        "Numero di operazioni di rete da eseguire in parallelo.\n"
+                        "Valori più alti possono accelerare la ricerca ma\n"
+                        "potrebbero sovraccaricare connessioni lente.")
+
+        # Ottimizzazione File Grandi
+        large_file_frame = ttk.LabelFrame(performance_frame, text="Ottimizzazione File Grandi", padding=10)
+        large_file_frame.pack(fill=X, pady=10)
+
+        large_file_grid = ttk.Frame(large_file_frame)
+        large_file_grid.pack(fill=X)
+
+        # Checkbox per abilitare ottimizzazione file grandi
+        large_file_var = BooleanVar(value=getattr(self, 'large_file_search_enabled', True))
+        large_file_check = ttk.Checkbutton(large_file_grid, text="Ottimizza ricerca in file di grandi dimensioni", 
+                                        variable=large_file_var)
+        large_file_check.grid(row=0, column=0, columnspan=2, sticky=W, padx=5, pady=5)
+        self.create_tooltip(large_file_check, 
+                        "Abilita ottimizzazioni per la gestione efficiente di file di grandi dimensioni.\n"
+                        "Riduce il consumo di memoria e aumenta le prestazioni durante la ricerca\n"
+                        "in file XML, JSON, CSV, log e altri file di grandi dimensioni.")
+
+        # Soglia file grandi
+        large_threshold_label = ttk.Label(large_file_grid, text="Soglia file grandi (MB):")
+        large_threshold_label.grid(row=1, column=0, sticky=W, padx=5, pady=5)
+        large_file_threshold_var = IntVar(value=getattr(self, 'large_file_threshold', 50 * 1024 * 1024) // (1024 * 1024))
+        large_file_threshold = ttk.Spinbox(large_file_grid, from_=10, to=1000, width=5, textvariable=large_file_threshold_var)
+        large_file_threshold.grid(row=1, column=1, padx=5, pady=5, sticky=W)
+        self.create_tooltip(large_file_threshold, 
+                        "Dimensione in MB oltre la quale un file viene considerato 'grande'.\n"
+                        "I file che superano questa soglia verranno elaborati utilizzando\n"
+                        "tecniche di lettura a blocchi per ridurre il consumo di memoria.")
+
+        # Soglia file enormi
+        huge_threshold_label = ttk.Label(large_file_grid, text="Soglia file enormi (MB):")
+        huge_threshold_label.grid(row=1, column=2, sticky=W, padx=20, pady=5)
+        huge_file_threshold_var = IntVar(value=getattr(self, 'huge_file_threshold', 500 * 1024 * 1024) // (1024 * 1024))
+        huge_file_threshold = ttk.Spinbox(large_file_grid, from_=100, to=5000, width=5, textvariable=huge_file_threshold_var)
+        huge_file_threshold.grid(row=1, column=3, padx=5, pady=5, sticky=W)
+        self.create_tooltip(huge_file_threshold, 
+                        "Dimensione in MB oltre la quale un file viene considerato 'enorme'.\n"
+                        "Per questi file verranno applicate ulteriori ottimizzazioni e\n"
+                        "potrebbero essere analizzati solo parzialmente per garantire prestazioni.")
+
         toggle_memory_slider()
         # Pulsanti finali per la finestra
         btn_frame = ttk.Frame(main_frame)
@@ -9557,6 +10273,15 @@ class FileSearchApp:
             update_memory_details()
             toggle_memory_slider()
             
+            # Aggiungi il ripristino delle impostazioni di rete e file grandi
+            network_search_var.set(True)
+            network_retry_var.set(3)
+            network_parallel_var.set(4)
+            
+            large_file_var.set(True)
+            large_file_threshold_var.set(50)
+            huge_file_threshold_var.set(500)
+
             # Mostra conferma all'utente
             messagebox.showinfo("Ripristino", "I valori predefiniti sono stati ripristinati.")
 
@@ -10879,4 +11604,3 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
-
