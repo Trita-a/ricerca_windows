@@ -44,7 +44,7 @@ if platform.system() == "Windows":
     CREATE_NO_WINDOW = 0x08000000  # Per Python < 3.7
 
 # Informazioni sulla versione dell'applicazione
-APP_VERSION = "V9.2.8"
+APP_VERSION = "V9.2.9"
 APP_STAGE = "Beta"
 APP_NAME = "File Search Tool"
 APP_FULL_NAME = f"{APP_NAME} {APP_VERSION} {APP_STAGE}"
@@ -9997,8 +9997,35 @@ class FileSearchApp:
                     "Utile quando si cercano file personali.")
         
         # ================= Scheda 5: Performance =================
-        performance_frame = ttk.Frame(notebook, padding=15)
-        notebook.add(performance_frame, text="Performance")
+        performance_container = ttk.Frame(notebook)
+        notebook.add(performance_container, text="Performance")
+        
+        # Creiamo il canvas con scrollbar
+        perf_canvas = tk.Canvas(performance_container)
+        perf_scrollbar = ttk.Scrollbar(performance_container, orient="vertical", command=perf_canvas.yview)
+        perf_canvas.configure(yscrollcommand=perf_scrollbar.set)
+        
+        # Posizionamento del canvas e della scrollbar
+        perf_scrollbar.pack(side=RIGHT, fill=Y)
+        perf_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
+        
+        # Frame interno che conterrà tutti i controlli
+        performance_frame = ttk.Frame(perf_canvas, padding=15)
+        
+        # Crea un ID per il frame all'interno del canvas
+        perf_canvas_frame = perf_canvas.create_window((0, 0), window=performance_frame, anchor="nw")
+        
+        # Funzione per aggiornare la regione di scorrimento
+        def configure_perf_scroll_region(event):
+            perf_canvas.configure(scrollregion=perf_canvas.bbox("all"))
+            
+        # Funzione per aggiornare la larghezza del frame nel canvas
+        def configure_perf_canvas(event):
+            perf_canvas.itemconfig(perf_canvas_frame, width=event.width)
+            
+        # Configura eventi per il ridimensionamento
+        performance_frame.bind("<Configure>", configure_perf_scroll_region)
+        perf_canvas.bind("<Configure>", configure_perf_canvas)
 
         # Timeout e limiti
         timeout_frame = ttk.LabelFrame(performance_frame, text="Timeout e limiti", padding=10)
