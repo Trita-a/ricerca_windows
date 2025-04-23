@@ -44,7 +44,7 @@ if platform.system() == "Windows":
     CREATE_NO_WINDOW = 0x08000000  # Per Python < 3.7
 
 # Informazioni sulla versione dell'applicazione
-APP_VERSION = "V9.2.9"
+APP_VERSION = "V9.2.8"
 APP_STAGE = "Beta"
 APP_NAME = "File Search Tool"
 APP_FULL_NAME = f"{APP_NAME} {APP_VERSION} {APP_STAGE}"
@@ -7044,110 +7044,15 @@ class FileSearchApp:
             style.configure("Treeview", background="#ffffff", foreground="#000000", fieldbackground="#ffffff")
             self.results_list.tag_configure("directory", background="#e6f2ff", foreground="#000000")
             self.results_list.tag_configure("file", background="#ffffff", foreground="#000000")
-            # AGGIUNGI QUI: Nuovo stile per gli allegati
             self.results_list.tag_configure("attachment", background="#f8f8e0", foreground="#000000")
+            
         # Configura i colori per il tema scuro
         elif theme == "dark":
             # Codice esistente per configurare il tema scuro
             style.configure("Treeview", background="#333333", foreground="#ffffff", fieldbackground="#333333")
             self.results_list.tag_configure("directory", background="#4d4d4d", foreground="#ffffff")
             self.results_list.tag_configure("file", background="#333333", foreground="#ffffff")
-            # AGGIUNGI QUI: Nuovo stile per gli allegati
             self.results_list.tag_configure("attachment", background="#464630", foreground="#ffffff")
-
-    @error_handler
-    def show_block_options(self):
-        """Mostra la finestra di dialogo per le opzioni avanzate di ricerca a blocchi"""
-        dialog = ttk.Toplevel(self.root)
-        dialog.title("Opzioni Avanzate Ricerca a Blocchi")
-        dialog.geometry("560x600")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # Frame principale con padding
-        main_frame = ttk.Frame(dialog, padding=10)
-        main_frame.pack(fill=BOTH, expand=YES)
-        
-        # Descrizione
-        ttk.Label(main_frame, text="Configura le opzioni per ottimizzare la ricerca a blocchi", 
-             font=("", 10, "bold")).pack(anchor=W, pady=(0, 10))
-        
-        description = ttk.Label(main_frame, text="La ricerca a blocchi divide la scansione in blocchi più piccoli "
-                                        "per migliorare le prestazioni e la reattività dell'interfaccia.",
-                         wraplength=520, justify=LEFT)
-        description.pack(fill=X, pady=(0, 10))
-        
-        # Frame per opzioni dei blocchi
-        block_frame = ttk.LabelFrame(main_frame, text="Dimensione e Parallelismo", padding=10)
-        block_frame.pack(fill=X, pady=5)
-        
-        # Grid per organizzare le opzioni
-        grid = ttk.Frame(block_frame)
-        grid.pack(fill=X)
-        
-        # Opzione: Max file per blocco
-        ttk.Label(grid, text="Max file per blocco:").grid(row=0, column=0, sticky=W, padx=5, pady=5)
-        files_per_block = ttk.Spinbox(grid, from_=100, to=10000, increment=100, width=7,
-                                 textvariable=self.max_files_per_block)
-        files_per_block.grid(row=0, column=1, padx=5, pady=5)
-        
-        # Opzione: Max blocchi paralleli
-        ttk.Label(grid, text="Blocchi paralleli:").grid(row=0, column=2, sticky=W, padx=(20, 5), pady=5)
-        parallel_blocks = ttk.Spinbox(grid, from_=1, to=16, increment=1, width=5,
-                                 textvariable=self.max_parallel_blocks)
-        parallel_blocks.grid(row=0, column=3, padx=5, pady=5)
-        
-        # Checkbox per opzioni aggiuntive
-        auto_adjust = ttk.Checkbutton(grid, text="Adatta automaticamente la dimensione dei blocchi",
-                                variable=self.block_size_auto_adjust)
-        auto_adjust.grid(row=1, column=0, columnspan=4, sticky=W, padx=5, pady=5)
-        self.create_tooltip(auto_adjust, "Regola automaticamente la dimensione dei blocchi in base al tipo di ricerca e al sistema")
-        
-        # Frame per opzioni di prioritizzazione
-        priority_frame = ttk.LabelFrame(main_frame, text="Priorità di Ricerca", padding=10)
-        priority_frame.pack(fill=X, pady=10)
-        
-        # Checkbox per dare priorità alle cartelle utente
-        user_priority = ttk.Checkbutton(priority_frame, text="Dare priorità alle cartelle utente (Users, Documents, Desktop, ecc)",
-                                variable=self.prioritize_user_folders)
-        user_priority.pack(anchor=W, padx=5, pady=5)
-        self.create_tooltip(user_priority, "Elabora prima le cartelle più importanti per trovare risultati utili più velocemente")
-        
-        # Frame per spiegazione avanzata
-        info_frame = ttk.LabelFrame(main_frame, text="Come funziona", padding=10)
-        info_frame.pack(fill=X, pady=10)
-        
-        info_text = "La ricerca a blocchi divide le cartelle in unità di lavoro più piccole (blocchi) " \
-                "che vengono elaborate in base alla priorità. Questo permette di:\n\n" \
-                "• Ottenere risultati utili più rapidamente\n" \
-                "• Migliorare la reattività dell'interfaccia durante la ricerca\n" \
-                "• Distribuire meglio il carico di lavoro sui thread\n" \
-                "• Gestire meglio la memoria per ricerche su grandi volumi di dati"
-        
-        info_label = ttk.Label(info_frame, text=info_text, wraplength=520, justify=LEFT)
-        info_label.pack(fill=X, padx=5, pady=5)
-        
-        # Pulsanti per chiudere/applicare
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=X, pady=(10, 0))
-        
-        # Pulsante per ripristinare valori predefiniti
-        ttk.Button(btn_frame, text="Valori predefiniti", 
-              command=lambda: [self.max_files_per_block.set(1000), 
-                              self.max_parallel_blocks.set(4),
-                              self.prioritize_user_folders.set(True),
-                              self.block_size_auto_adjust.set(True)]).pack(side=LEFT, padx=5)
-        
-        # Pulsante di chiusura
-        ttk.Button(btn_frame, text="Chiudi", command=dialog.destroy).pack(side=RIGHT, padx=5)
-        
-        # Centra la finestra
-        dialog.update_idletasks()
-        width = dialog.winfo_width()
-        height = dialog.winfo_height()
-        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
-        y = (dialog.winfo_screenheight() // 2) - (height // 2)
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
 
     @error_handler
     def copy_selected(self):
@@ -8493,130 +8398,6 @@ class FileSearchApp:
             self.log_debug(f"Errore nell'apertura del percorso: {str(e)}")
 
     @error_handler
-    def show_advanced_filters_dialog(self):
-        """Mostra la finestra di dialogo per i filtri di ricerca avanzati"""
-        dialog = ttk.Toplevel(self.root)
-        dialog.title("Filtri avanzati")
-        dialog.geometry("530x250")  # Increased height to accommodate the new field
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        # Filtri dimensione
-        size_frame = ttk.LabelFrame(dialog, text="Dimensione file")
-        size_frame.pack(fill=X, padx=10, pady=5)
-        
-        ttk.Label(size_frame, text="Min (KB):").grid(row=0, column=0, padx=5, pady=5)
-        min_size = ttk.Entry(size_frame, width=10)
-        min_size.grid(row=0, column=1, padx=5, pady=5)
-        min_size.insert(0, str(self.advanced_filters["size_min"] // 1024))
-        self.create_tooltip(min_size, "Quando viene imposto un valore maggiore di zero, solo i file con dimensione superiore a questo valore verranno inclusi nei risultati")
-        
-        ttk.Label(size_frame, text="Max (KB):").grid(row=0, column=2, padx=5, pady=5)
-        max_size = ttk.Entry(size_frame, width=10)
-        max_size.grid(row=0, column=3, padx=5, pady=5)
-        max_size.insert(0, str(self.advanced_filters["size_max"] // 1024 if self.advanced_filters["size_max"] else 0))
-        self.create_tooltip(max_size, "Quando viene imposto un valore maggiore di zero, solo i file con dimensione inferiore a questo valore verranno inclusi nei risultati")
-
-        # Filtri data - FORMAT DD-MM-YYYY
-        date_frame = ttk.LabelFrame(dialog, text="Data modifica (DD-MM-YYYY)")
-        date_frame.pack(fill=X, padx=10, pady=5)
-        
-        ttk.Label(date_frame, text="Da:").grid(row=0, column=0, padx=5, pady=5)
-        min_date = ttk.DateEntry(date_frame, dateformat="%d-%m-%Y")
-        min_date.grid(row=0, column=1, padx=5, pady=5)
-        
-        ttk.Label(date_frame, text="A:").grid(row=0, column=2, padx=5, pady=5)
-        max_date = ttk.DateEntry(date_frame, dateformat="%d-%m-%Y")
-        max_date.grid(row=0, column=3, padx=5, pady=5)
-        
-        # Cancella sempre le date precedenti
-        min_date.entry.delete(0, "end")
-        max_date.entry.delete(0, "end")
-              
-        # Aggiungiamo un frame di debug per vedere i filtri correnti
-        debug_frame = ttk.LabelFrame(dialog, text="Debug - Stato filtri correnti")
-        debug_frame.pack(fill=X, padx=10, pady=5)
-        
-        debug_text = ttk.Text(debug_frame, height=3, width=50)
-        debug_text.pack(fill=X, padx=5, pady=5)
-        debug_text.insert("1.0", f"Data min: {self.advanced_filters['date_min']}\n")
-        debug_text.insert("2.0", f"Data max: {self.advanced_filters['date_max']}\n")
-        debug_text.insert("3.0", f"Extensions: {self.advanced_filters['extensions']}")
-        debug_text.config(state="disabled")
-        
-        # Pulsante Salva
-        def save_filters():
-            try:
-                # Analizza i filtri di dimensione
-                min_kb = int(min_size.get() or 0)
-                max_kb = int(max_size.get() or 0)
-                self.advanced_filters["size_min"] = min_kb * 1024
-                self.advanced_filters["size_max"] = max_kb * 1024
-                
-                # Ottieni le date nel formato DD-MM-YYYY
-                min_date_value = min_date.entry.get().strip()
-                max_date_value = max_date.entry.get().strip()
-                
-                print(f"DEBUG - Date inserite: min={min_date_value}, max={max_date_value}")
-                
-                # Validazione date
-                if min_date_value:
-                    try:
-                        # Verifica formato corretto
-                        datetime.strptime(min_date_value, "%d-%m-%Y")
-                    except ValueError:
-                        messagebox.showerror("Errore", "Formato data minima non valido. Usa DD-MM-YYYY")
-                        return
-                
-                if max_date_value:
-                    try:
-                        # Verifica formato corretto
-                        datetime.strptime(max_date_value, "%d-%m-%Y")
-                    except ValueError:
-                        messagebox.showerror("Errore", "Formato data massima non valido. Usa DD-MM-YYYY")
-                        return
-                
-                # Verifica che la data minima non sia successiva alla data massima
-                if min_date_value and max_date_value:
-                    min_date_obj = datetime.strptime(min_date_value, "%d-%m-%Y")
-                    max_date_obj = datetime.strptime(max_date_value, "%d-%m-%Y")
-                    
-                    if min_date_obj > max_date_obj:
-                        messagebox.showerror("Errore", 
-                                        "La data di inizio non può essere successiva alla data di fine")
-                        return
-                
-                # Salva le date validate
-                self.advanced_filters["date_min"] = min_date_value
-                self.advanced_filters["date_max"] = max_date_value
-                
-                print(f"Filtri salvati: {self.advanced_filters}")  # Debug info
-                dialog.destroy()
-                
-            except ValueError:
-                messagebox.showerror("Errore", "Inserisci valori numerici validi per le dimensioni")
-        
-        # Creato un frame per i pulsanti nella stessa riga
-        buttons_frame = ttk.Frame(dialog)
-        buttons_frame.pack(fill=X, pady=10, padx=10)
-        
-        # Pulsante Annulla a sinistra
-        ttk.Button(buttons_frame, text="Annulla", command=dialog.destroy).pack(side=RIGHT, padx=5)
-        
-        # Pulsante Salva a destra
-        ttk.Button(buttons_frame, text="Salva", command=save_filters).pack(side=RIGHT, padx=5)
-
-        dialog.update_idletasks()  # Aggiorna la finestra per ottenere le dimensioni corrette
-        width = dialog.winfo_width()
-        height = dialog.winfo_height()
-        x = (dialog.winfo_screenwidth() // 2) - (width // 2)
-        y = (dialog.winfo_screenheight() // 2) - (height // 2)
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # Imposta una dimensione minima per la finestra
-        dialog.minsize(500, 400)
-
-    @error_handler
     def configure_extensions(self, mode="base"):
         """Dialog to configure file extensions for different search modes"""
         dialog = ttk.Toplevel(self.root)
@@ -9578,7 +9359,7 @@ class FileSearchApp:
         """Mostra una finestra di dialogo unificata per tutte le opzioni avanzate"""
         dialog = ttk.Toplevel(self.root)
         dialog.title("Impostazioni avanzate")
-        dialog.geometry("700x750")
+        dialog.geometry("800x800")
         dialog.transient(self.root)
         dialog.grab_set()
         
