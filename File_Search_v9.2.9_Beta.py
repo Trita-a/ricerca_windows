@@ -868,29 +868,41 @@ class LargeFileHandler:
 class FileSearchApp:
     @error_handler
     def __init__(self, root):
-        self.root = root
-        self.root.title(APP_TITLE)
-        
-        # Imposta subito il debug mode per poter loggare
-        self.debug_mode = True
-        self.debug_log = []
-        # Aggiungi questa riga per inizializzare current_user
-        self.current_user = getpass.getuser()
-        
-        # Inizializza tutte le variabili in un passaggio
-        self._init_essential_variables()
-        self._init_remaining_variables()
-        
-        # Crea l'intera interfaccia in una volta sola
-        self.create_widgets()
-        
-        # Applica il tema una sola volta
-        self.update_theme_colors("dark")
-        
-        # Esegui attività di background dopo un breve ritardo
-        self.root.after(500, self._delayed_startup_tasks)
-        # Controlla gli aggiornamenti all'avvio (dopo l'inizializzazione completa)
-        self.root.after(5000, self.check_for_updates_on_startup)
+            self.root = root
+            self.root.title(APP_TITLE)
+            
+            # Reset monitoraggio memoria
+            self.search_in_progress = False
+            self.memory_monitor_id = None
+            
+            # Imposta subito il debug mode per poter loggare
+            self.debug_mode = True
+            self.debug_log = []
+            # Aggiungi questa riga per inizializzare current_user
+            self.current_user = getpass.getuser()
+            
+            # Assicurati che all'avvio non ci siano timer attivi da esecuzioni precedenti
+            for attr in dir(self):
+                if attr.startswith('_after_id_') or attr.endswith('_timer_id'):
+                    try:
+                        after_id = getattr(self, attr)
+                        if isinstance(after_id, int) and after_id > 0:
+                            self.root.after_cancel(after_id)
+                            self.debug_log.append(f"[DEBUG] Cancellato timer {attr}: {after_id}")
+                    except Exception:
+                        pass  # Ignora errori nel cleanup iniziale
+            
+            # Inizializza tutte le variabili in un passaggio
+            self._init_essential_variables()
+            self._init_remaining_variables()
+            
+            # Crea l'intera interfaccia in una volta sola
+            self.create_widgets()
+            
+            # Esegui attività di background dopo un breve ritardo
+            self.root.after(500, self._delayed_startup_tasks)
+            # Controlla gli aggiornamenti all'avvio (dopo l'inizializzazione completa)
+            self.root.after(5000, self.check_for_updates_on_startup)
 
     @error_handler
     def create_base_interface(self):
@@ -1261,9 +1273,6 @@ class FileSearchApp:
             
             # Imposta il focus sul campo di ricerca
             self.path_entry.focus_set()
-            
-            # Imposta il tema iniziale
-            self.update_theme_colors("dark")
             
             self.log_debug("Interfaccia utente completamente caricata")
             
@@ -1693,6 +1702,19 @@ class FileSearchApp:
     def monitor_memory_usage(self):
         """Monitoraggio periodico dell'utilizzo della memoria. Rileva situazioni critiche e interviene preventivamente."""
         try:
+            # Verifica se il monitoraggio dovrebbe essere attivo
+            if not hasattr(self, 'search_in_progress') or not self.search_in_progress:
+                self.log_debug("Monitoraggio memoria terminato: ricerca non più attiva")
+                self.memory_monitor_id = None
+                return
+                
+            # Controlla anche il flag is_searching come doppia verifica
+            if not hasattr(self, 'is_searching') or not self.is_searching:
+                self.log_debug("Monitoraggio memoria terminato: flag is_searching è False")
+                self.search_in_progress = False
+                self.memory_monitor_id = None
+                return
+                
             # Esegui solo ogni 30 secondi per ridurre l'overhead
             if not hasattr(self, '_last_memory_check'):
                 self._last_memory_check = time.time()
@@ -1716,6 +1738,9 @@ class FileSearchApp:
             memory_percent = getattr(self, 'memory_usage_percent', 75)
             memory_limit = total_ram * (memory_percent / 100)
             usage_ratio = memory_used_mb / memory_limit
+            
+            # Log standard dell'utilizzo della memoria (sempre mostrato)
+            self.log_debug(f"Gestione memoria automatica: Utilizzo corrente {memory_used_mb:.2f} MB, soglia {memory_limit:.2f} MB")
             
             # Se superiamo l'80% del limite configurato, avvisa e forza una pulizia
             if usage_ratio > 0.8:
@@ -1742,9 +1767,55 @@ class FileSearchApp:
             self.log_debug(f"Errore nel monitoraggio della memoria: {str(e)}")
             
         finally:
-            # Riprogram,a il prossimo controllo
-            if hasattr(self, 'root') and self.root:
-                self.root.after(30000, self.monitor_memory_usage)
+            # Riprogramma il prossimo controllo solo se il monitoraggio è ancora attivo
+            if (hasattr(self, 'search_in_progress') and self.search_in_progress and 
+                hasattr(self, 'is_searching') and self.is_searching and 
+                hasattr(self, 'root') and self.root):
+                self.memory_monitor_id = self.root.after(30000, self.monitor_memory_usage)
+            else:
+                self.log_debug("Monitoraggio memoria non riprogrammato: ricerca non più attiva")
+                # Assicuriamoci che i flag siano coerenti
+                self.search_in_progress = False
+                # Azzera l'ID del timer
+                self.memory_monitor_id = None
+
+    @error_handler
+    def start_memory_monitoring(self):
+        """Avvia il monitoraggio della memoria con sicurezza"""
+        # Prima ferma qualsiasi monitoraggio esistente per evitare duplicati
+        self.stop_memory_monitoring()
+        
+        # Inizializza lo stato e il timestamp
+        self.search_in_progress = True
+        self._last_memory_check = time.time()
+        
+        # Log diagnosticov
+        self.log_debug("AVVIO: Monitoraggio memoria automatica iniziato")
+        
+        # Avvia il ciclo di monitoraggio
+        self.memory_monitor_id = self.root.after(5000, self.monitor_memory_usage)
+        
+        # Verifica che l'ID sia salvato correttamente
+        self.log_debug(f"ID Monitoraggio Memoria: {self.memory_monitor_id}")
+
+    @error_handler
+    def stop_memory_monitoring(self):
+        """Ferma qualsiasi monitoraggio memoria in corso in modo sicuro"""
+        # Imposta il flag di ricerca in corso a False
+        self.search_in_progress = False
+        
+        # Cancella il timer se esiste
+        if hasattr(self, 'memory_monitor_id') and self.memory_monitor_id:
+            try:
+                self.root.after_cancel(self.memory_monitor_id)
+                self.log_debug(f"STOP: Monitoraggio memoria fermato (ID: {self.memory_monitor_id})")
+            except Exception as e:
+                self.log_debug(f"ERRORE nel fermare il monitoraggio memoria: {str(e)}")
+            finally:
+                # Azzera l'ID in ogni caso
+                self.memory_monitor_id = None
+        else:
+            self.log_debug("Nessun monitoraggio memoria attivo da fermare")
 
     @error_handler
     def run_with_timeout(self, func, args=(), kwargs={}, timeout_sec=10):
@@ -2760,8 +2831,11 @@ class FileSearchApp:
         # Reset per la nuova ricerca
         self.stop_search = False
         
-        # IMPORTANTE: Imposta is_searching PRIMA di disabilitare i controlli
+        # Imposta is_searching PRIMA di disabilitare i controlli
         self.is_searching = True
+
+        # Avvia il monitoraggio della memoria
+        self.start_memory_monitoring()
         
         # CRITICO: Crea un nuovo executor per questa ricerca
         max_workers = max(1, min(32, self.worker_threads.get()))
@@ -3009,9 +3083,6 @@ class FileSearchApp:
                 total_time_str = f"{seconds}sec"
             
             self.total_time_label.config(text=total_time_str) 
-    # Esempio di utilizzo per cambiare il tema
-    def change_theme(self, theme):
-        self.update_theme_colors(theme)
 
     @error_handler
     def calculate_block_priority(self, directory):
@@ -6772,6 +6843,9 @@ class FileSearchApp:
         self.is_searching = False
         self.stop_search = False
         
+        # Ferma il monitoraggio della memoria
+        self.stop_memory_monitoring()
+
         # Resetta l'elenco dei file processati
         self.processed_files = set()
         # Elimina flag temporanei di interruzione se presenti
@@ -6820,6 +6894,9 @@ class FileSearchApp:
         self.stop_search = True
         self.is_searching = False
         
+        # Ferma il monitoraggio della memoria
+        self.stop_memory_monitoring()
+
         # 2. Aggiorna l'interfaccia
         self.status_label["text"] = "Interruzione ricerca in corso... attendere"
         self.analyzed_files_label["text"] = "Ricerca interrotta dall'utente"
@@ -7034,25 +7111,54 @@ class FileSearchApp:
             self.selected_files_size_label.config(text="Selezionati: 0 (0 file)")
 
     @error_handler
-    def update_theme_colors(self, theme="light"):
+    def update_theme_colors(self, theme=None):
         """Aggiorna i colori del tema per evidenziare cartelle e file"""
+        if theme is None:
+            # Se non viene specificato un tema, usa quello attualmente selezionato
+            if hasattr(self, 'theme_combobox'):
+                theme = self.theme_combobox.get()
+            else:
+                theme = "darkly"  # Predefinito
+        
         style = ttk.Style()
-    
-        # Configura i colori per il tema chiaro
-        if theme == "light":
-            # Codice esistente per configurare il tema chiaro
+        
+        # Configura i colori in base al tema
+        if theme in ["minty", "cosmo"]:  # Temi chiari
             style.configure("Treeview", background="#ffffff", foreground="#000000", fieldbackground="#ffffff")
-            self.results_list.tag_configure("directory", background="#e6f2ff", foreground="#000000")
-            self.results_list.tag_configure("file", background="#ffffff", foreground="#000000")
-            self.results_list.tag_configure("attachment", background="#f8f8e0", foreground="#000000")
+            if hasattr(self, 'results_list'):
+                self.results_list.tag_configure("directory", background="#e6f2ff", foreground="#000000")
+                self.results_list.tag_configure("file", background="#ffffff", foreground="#000000")
+                self.results_list.tag_configure("attachment", background="#f8f8e0", foreground="#000000")
             
-        # Configura i colori per il tema scuro
-        elif theme == "dark":
-            # Codice esistente per configurare il tema scuro
+            # Configura la finestra di debug se esiste
+            if hasattr(self, 'debug_log_text'):
+                self.debug_log_text.configure(background="#ffffff", foreground="#000000")
+        
+        elif theme in ["darkly", "cyborg"]:  # Temi scuri
             style.configure("Treeview", background="#333333", foreground="#ffffff", fieldbackground="#333333")
-            self.results_list.tag_configure("directory", background="#4d4d4d", foreground="#ffffff")
-            self.results_list.tag_configure("file", background="#333333", foreground="#ffffff")
-            self.results_list.tag_configure("attachment", background="#464630", foreground="#ffffff")
+            if hasattr(self, 'results_list'):
+                self.results_list.tag_configure("directory", background="#4d4d4d", foreground="#ffffff")
+                self.results_list.tag_configure("file", background="#333333", foreground="#ffffff")
+                self.results_list.tag_configure("attachment", background="#464630", foreground="#ffffff")
+            
+            # Configura la finestra di debug se esiste
+            if hasattr(self, 'debug_log_text'):
+                self.debug_log_text.configure(background="#333333", foreground="#ffffff")
+        
+        # Personalizzazioni specifiche per tema
+        if theme == "darkly":
+            style.configure("Treeview", background="#121212", foreground="#e0e0e0", fieldbackground="#121212")
+            if hasattr(self, 'results_list'):
+                self.results_list.tag_configure("directory", background="#1a1a1a", foreground="#ffffff")
+                self.results_list.tag_configure("file", background="#121212", foreground="#e0e0e0")
+                self.results_list.tag_configure("attachment", background="#1d1d1a", foreground="#e0e0e0")
+        
+        elif theme == "cyborg":
+            style.configure("Treeview", background="#060606", foreground="#ffffff", fieldbackground="#060606")
+            if hasattr(self, 'results_list'):
+                self.results_list.tag_configure("directory", background="#181818", foreground="#2a9fd6")
+                self.results_list.tag_configure("file", background="#060606", foreground="#ffffff")
+                self.results_list.tag_configure("attachment", background="#151515", foreground="#77b300")
 
     @error_handler
     def copy_selected(self):
@@ -9014,12 +9120,23 @@ class FileSearchApp:
         theme_frame.pack(side=LEFT, expand=True, fill=Y)
 
         ttk.Label(theme_frame, text="Tema:").pack(side=LEFT)
-        themes = ttk.Style().theme_names()
-        self.theme_combobox = ttk.Combobox(theme_frame, values=themes, width=15)
+        # Limitiamo i temi disponibili a quelli specificati
+        available_themes = ["minty", "cosmo", "darkly", "cyborg"]
+        self.theme_combobox = ttk.Combobox(theme_frame, values=available_themes, width=15)
         self.theme_combobox.pack(side=LEFT, padx=5)
-        self.theme_combobox.current(themes.index("darkly"))
-        self.theme_combobox.bind("<<ComboboxSelected>>", lambda e: [ttk.Style().theme_use(self.theme_combobox.get()),self.update_theme_colors()])
 
+        # Carica il tema salvato o usa darkly come predefinito
+        saved_theme = self.load_saved_theme()
+        if saved_theme in available_themes:
+            self.theme_combobox.set(saved_theme)
+        else:
+            self.theme_combobox.set("darkly")
+
+        self.theme_combobox.bind("<<ComboboxSelected>>", lambda e: [
+            ttk.Style().theme_use(self.theme_combobox.get()),
+            self.update_theme_colors(self.theme_combobox.get()),
+            self.save_theme_preference(self.theme_combobox.get())
+        ])
         # 3. Data/ora e utente a destra - rimane invariato
         datetime_frame = ttk.Frame(header_frame)
         datetime_frame.pack(side=RIGHT, fill=Y)
@@ -9348,12 +9465,75 @@ class FileSearchApp:
         # Aggiungi binding per l'evento di selezione
         self.results_list.bind("<<TreeviewSelect>>", self.update_selected_files_size)
 
-        # Applica stili alle righe
-        self.update_theme_colors()
-
         # Auto-focus sull'entry del percorso all'avvio
         self.path_entry.focus_set()
 
+    @error_handler
+    def change_theme(self, theme):
+        """Cambia il tema dell'interfaccia e salva la preferenza"""
+        # Verifica che il tema sia valido
+        valid_themes = ["minty", "cosmo", "darkly", "cyborg"]
+        if theme not in valid_themes:
+            self.log_debug(f"Tema '{theme}' non valido, uso darkly come predefinito")
+            theme = "darkly"
+        
+        # Applica il tema a livello di stile ttk
+        ttk.Style().theme_use(theme)
+        
+        # Aggiorna i colori personalizzati
+        self.update_theme_colors(theme)
+        
+        # Aggiorna la selezione nella combobox se esiste
+        if hasattr(self, 'theme_combobox') and self.theme_combobox is not None:
+            self.theme_combobox.set(theme)
+        
+        # Salva la preferenza
+        self.save_theme_preference(theme)
+
+    @error_handler
+    def save_theme_preference(self, theme):
+        """Salva la preferenza del tema nelle impostazioni"""
+        try:
+            settings_file = os.path.join(os.path.expanduser("~"), ".file_search_settings.json")
+            
+            # Carica le impostazioni esistenti o crea un nuovo dizionario
+            if os.path.exists(settings_file):
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+            else:
+                settings = {}
+            
+            # Aggiorna o aggiungi la preferenza del tema
+            settings["theme"] = theme
+            
+            # Salva le impostazioni aggiornate
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2)
+            
+            self.log_debug(f"Tema '{theme}' salvato nelle impostazioni")
+        except Exception as e:
+            self.log_error(f"Impossibile salvare la preferenza del tema: {str(e)}")
+
+    @error_handler
+    def load_saved_theme(self):
+        """Carica il tema salvato dalle impostazioni"""
+        try:
+            settings_file = os.path.join(os.path.expanduser("~"), ".file_search_settings.json")
+            
+            if os.path.exists(settings_file):
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                
+                if "theme" in settings:
+                    self.log_debug(f"Tema caricato dalle impostazioni: {settings['theme']}")
+                    return settings["theme"]
+            
+            # Se non è stato trovato alcun tema salvato, restituisci None
+            return None
+        except Exception as e:
+            self.log_error(f"Impossibile caricare la preferenza del tema: {str(e)}")
+            return None
+    
     @error_handler
     def show_advanced_options(self):
         """Mostra una finestra di dialogo unificata per tutte le opzioni avanzate"""
@@ -10959,8 +11139,37 @@ class FileSearchApp:
         
     @error_handler # Show debug log window with export functionality
     def show_debug_log(self):
-        """Mostra una finestra con i log di debug e funzionalità di filtraggio"""
+        """Mostra una finestra con i log di debug e funzionalità di filtraggio, rispettando il tema corrente"""
+        # Ottieni il tema corrente
+        current_theme = "darkly"  # Valore predefinito
+        if hasattr(self, 'theme_combobox') and self.theme_combobox is not None:
+            current_theme = self.theme_combobox.get()
+        
+        # Determina i colori in base al tema
+        is_dark_theme = current_theme in ["darkly", "cyborg"]
+        
+        # Colori per il testo di debug
+        bg_color = "#1e1e1e" if is_dark_theme else "#ffffff"
+        fg_color = "#e0e0e0" if is_dark_theme else "#000000"
+        
+        # Colori per i tipi di messaggi
+        error_color = "#ff6b6b" if is_dark_theme else "#cc0000"
+        warning_color = "#ffb86c" if is_dark_theme else "#ff8800"
+        info_color = "#ffffff" if is_dark_theme else "#000000"
+        
+        # Personalizzazioni specifiche per tema
+        if current_theme == "darkly":
+            bg_color = "#121212"
+        elif current_theme == "cyborg":
+            bg_color = "#060606"
+            info_color = "#2a9fd6"
+        elif current_theme == "minty":
+            info_color = "#78c2ad"
+        elif current_theme == "cosmo":
+            info_color = "#2780e3"
+        
         if not hasattr(self, 'debug_window') or not self.debug_window.winfo_exists():
+            # Crea la finestra di debug
             self.debug_window = tk.Toplevel(self.root)
             self.debug_window.title("Debug Log")
             self.debug_window.geometry("1400x900")
@@ -11015,14 +11224,14 @@ class FileSearchApp:
             h_scrollbar = ttk.Scrollbar(text_frame, orient=tk.HORIZONTAL)
             h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
             
-            # Text widget con sfondo scuro per migliore leggibilità (mantenuto come nell'originale)
+            # Text widget con colori basati sul tema
             self.debug_text = tk.Text(
                 text_frame, 
                 wrap=tk.NONE,  # Permette scroll orizzontale
                 width=80, 
                 height=20,
-                bg="#1e1e1e",  # Sfondo scuro
-                fg="#e0e0e0",  # Testo chiaro
+                bg=bg_color,  # Sfondo basato sul tema
+                fg=fg_color,  # Testo basato sul tema
                 font=("Consolas", 10),  # Font a larghezza fissa
                 xscrollcommand=h_scrollbar.set,
                 yscrollcommand=v_scrollbar.set
@@ -11034,10 +11243,10 @@ class FileSearchApp:
             v_scrollbar.config(command=self.debug_text.yview)
             h_scrollbar.config(command=self.debug_text.xview)
             
-            # Configura i tag per i colori (mantenendo il tema scuro)
-            self.debug_text.tag_configure("error", foreground="#ff6b6b")    # Rosso più visibile su sfondo scuro
-            self.debug_text.tag_configure("warning", foreground="#ffb86c")  # Arancione più visibile
-            self.debug_text.tag_configure("info", foreground="#ffffff")     # Bianco chiaro per info
+            # Configura i tag per i colori in base al tema
+            self.debug_text.tag_configure("error", foreground=error_color)
+            self.debug_text.tag_configure("warning", foreground=warning_color)
+            self.debug_text.tag_configure("info", foreground=info_color)
             
             # Aggiungi pulsanti di utilità
             btn_frame = ttk.Frame(self.debug_window)
@@ -11046,7 +11255,7 @@ class FileSearchApp:
             ttk.Button(btn_frame, text="Pulisci Log", command=self.clear_log).pack(side=tk.LEFT, padx=5)
             ttk.Button(btn_frame, text="Esporta in TXT", command=self.export_log_to_txt).pack(side=tk.LEFT, padx=5)
             
-            # Posiziona la finestra al centro (mantenuto come nell'originale)
+            # Posiziona la finestra al centro
             self.debug_window.update_idletasks()
             width = self.debug_window.winfo_width()
             height = self.debug_window.winfo_height()
@@ -11067,11 +11276,21 @@ class FileSearchApp:
             
             # Mostra il log corrente
             self.update_log_display()
-
         else:
             # Se la finestra esiste già, portala in primo piano
             self.debug_window.lift()
             self.debug_window.focus_force()
+            
+            # Aggiorna il tema se il widget debug_text esiste
+            if hasattr(self, 'debug_text'):
+                # Applica i colori del tema corrente
+                self.debug_text.configure(bg=bg_color, fg=fg_color)
+                
+                # Aggiorna i tag per i colori
+                self.debug_text.tag_configure("error", foreground=error_color)
+                self.debug_text.tag_configure("warning", foreground=warning_color)
+                self.debug_text.tag_configure("info", foreground=info_color)
+            
             # Aggiorna il contenuto
             self.update_log_display()
 
@@ -11354,8 +11573,22 @@ class FileSearchApp:
 def main():
     import sys
     
-    # Crea la finestra principale con il tema desiderato
-    root = ttk.Window(themename="darkly")
+    # Controlla se ci sono impostazioni salvate per il tema
+    settings_file = os.path.join(os.path.expanduser("~"), ".file_search_settings.json")
+    initial_theme = "darkly"  # Tema predefinito
+    
+    try:
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            
+            if "theme" in settings and settings["theme"] in ["minty", "cosmo", "darkly", "cyborg"]:
+                initial_theme = settings["theme"]
+    except Exception:
+        pass  # In caso di errore, usa il tema predefinito
+    
+    # Crea la finestra principale con il tema caricato
+    root = ttk.Window(themename=initial_theme)
     root.withdraw()  # Nascondi completamente la finestra durante l'inizializzazione
     
     # Crea la schermata di splash
