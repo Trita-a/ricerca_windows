@@ -7105,6 +7105,7 @@ class FileSearchApp:
     @error_handler
     def update_selected_files_size(self, event=None):
         """Calcola e visualizza la dimensione totale dei file selezionati"""
+        # Ottieni SOLO gli elementi esplicitamente selezionati dall'utente
         selected_items = self.results_list.selection()
         
         total_size = 0
@@ -7120,12 +7121,14 @@ class FileSearchApp:
                 # Estrai il valore numerico dalla stringa della dimensione
                 if size_str and isinstance(size_str, str):
                     try:
-                        if 'KB' in size_str:
-                            size_value = float(size_str.split()[0]) * 1024
-                        elif 'MB' in size_str:
-                            size_value = float(size_str.split()[0]) * 1024 * 1024
+                        if 'TB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024 * 1024 * 1024 * 1024
                         elif 'GB' in size_str:
                             size_value = float(size_str.split()[0]) * 1024 * 1024 * 1024
+                        elif 'MB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024 * 1024
+                        elif 'KB' in size_str:
+                            size_value = float(size_str.split()[0]) * 1024
                         else:
                             # Assume B o altra unità
                             size_value = float(size_str.split()[0])
@@ -8368,9 +8371,11 @@ class FileSearchApp:
             return f"{size_bytes / 1024:.2f} KB"
         elif size_bytes < 1024 * 1024 * 1024:
             return f"{size_bytes / (1024 * 1024):.2f} MB"
-        else:
+        elif size_bytes < 1024 * 1024 * 1024 * 1024:
             return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
-    
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024 * 1024):.2f} TB"
+        
     @error_handler
     def calculate_file_hash(self, file_path, algorithms=None):
         """Calcola gli hash di un file usando gli algoritmi specificati :param file_path: Percorso del file
@@ -9206,7 +9211,7 @@ class FileSearchApp:
         self.path_entry = ttk.Entry(path_frame, textvariable=self.search_path)
         self.path_entry.pack(side=LEFT, fill=X, expand=YES, padx=5)
         
-        self.browse_btn = ttk.Button(path_frame, text="Sfoglia", command=self.browse_directory, width=10)
+        self.browse_btn = ttk.Button(path_frame, text="📁 Sfoglia", command=self.browse_directory, width=10)
         self.browse_btn.pack(side=LEFT)
         
         # ------------------------------------------------------
@@ -9260,7 +9265,7 @@ class FileSearchApp:
         action_buttons.pack(side=LEFT, fill=Y)
 
         # Pulsante di ricerca (principale)
-        self.search_button = ttk.Button(action_buttons, text="CERCA", 
+        self.search_button = ttk.Button(action_buttons, text="🔍 CERCA", 
                                     command=self.start_search, 
                                     style="primary.TButton", width=15)
         self.search_button.pack(side=LEFT, padx=10)
@@ -9345,8 +9350,8 @@ class FileSearchApp:
         ttk.Label(disk_grid, textvariable=self.dir_size_var, font=("", 9, "bold")).pack(side=LEFT, padx=(0, 15))
 
         # 5. Pulsante aggiorna
-        refresh_size_btn = ttk.Button(disk_grid, text="Aggiorna", command=self.refresh_directory_size, 
-                                width=8, style="info.TButton")
+        refresh_size_btn = ttk.Button(disk_grid, text="🔄 Aggiorna", command=self.refresh_directory_size, 
+                                width=12, style="info.TButton")
         refresh_size_btn.pack(side=LEFT, padx=5)
         
         # ==========================================================
