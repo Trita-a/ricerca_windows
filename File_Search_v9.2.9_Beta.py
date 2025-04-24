@@ -1800,22 +1800,29 @@ class FileSearchApp:
 
     @error_handler
     def stop_memory_monitoring(self):
-        """Ferma qualsiasi monitoraggio memoria in corso in modo sicuro"""
-        # Imposta il flag di ricerca in corso a False
+        """Ferma il monitoraggio della memoria senza interferire con la ricerca"""
+        self.log_debug("RICHIESTA STOP: Fermando monitoraggio memoria")
+        
+        # Imposta SOLO il flag di monitoraggio memoria a False
         self.search_in_progress = False
         
-        # Cancella il timer se esiste
+        # Cancella timer in modo più aggressivo
         if hasattr(self, 'memory_monitor_id') and self.memory_monitor_id:
             try:
+                # Tentativo principale
                 self.root.after_cancel(self.memory_monitor_id)
-                self.log_debug(f"STOP: Monitoraggio memoria fermato (ID: {self.memory_monitor_id})")
+                self.log_debug(f"Timer memoria cancellato: {self.memory_monitor_id}")
             except Exception as e:
-                self.log_debug(f"ERRORE nel fermare il monitoraggio memoria: {str(e)}")
-            finally:
-                # Azzera l'ID in ogni caso
-                self.memory_monitor_id = None
+                self.log_debug(f"Errore cancellazione timer: {str(e)}")
+            
+            # Sempre resetta l'ID
+            self.memory_monitor_id = None
         else:
             self.log_debug("Nessun monitoraggio memoria attivo da fermare")
+        
+        # FORZA una pulizia di memoria
+        gc.collect()
+        self.log_debug("STOP COMPLETO: Monitoraggio memoria fermato")
 
     @error_handler
     def run_with_timeout(self, func, args=(), kwargs={}, timeout_sec=10):
