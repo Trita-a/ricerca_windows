@@ -6932,7 +6932,7 @@ class FileSearchApp:
                 self.log_debug(f"Errore generale nell'interruzione: {str(e)}")
                 self.search_executor = None
         
-        # 5. NUOVO: Visualizza risultati parziali trovati
+        # 5. Visualizza risultati parziali trovati
         self.root.after(500, self.update_results_list)
         
         # 6. Riabilita l'interfaccia utente dopo l'interruzione
@@ -6956,6 +6956,9 @@ class FileSearchApp:
             # Reimpostazione completa dello stato
             self.reset_search_state()
             
+            # Calcola la dimensione totale dei file trovati fino all'interruzione
+            self.update_total_files_size()
+
             self.status_label["text"] = "Ricerca interrotta dall'utente"
             self.log_debug("Interfaccia ripristinata dopo interruzione")
         except Exception as e:
