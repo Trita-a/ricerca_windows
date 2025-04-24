@@ -6967,27 +6967,45 @@ class FileSearchApp:
     @error_handler
     def update_results_list(self):
         """Aggiorna la lista dei risultati con i risultati trovati"""
+        # Aggiorna i colori del tema prima di aggiornare la lista (garantisce i colori corretti)
+        self.update_theme_colors()
+        
         # Pulisci la lista attuale
         for item in self.results_list.get_children():
             self.results_list.delete(item)
         
+        attachment_count = 0  # Counter per debug
+        
         # Aggiungi i risultati alla lista
         for result in self.search_results:
-            # Gestisci il nuovo formato del risultato con 7 elementi (incluso from_attachment)
-            if len(result) >= 7:
-                item_type, author, size, modified, created, path, from_attachment = result
+            # Verifica se il risultato è un dizionario o una tupla/lista
+            if isinstance(result, dict):
+                # Formato dizionario (nuovo formato)
+                item_type = result.get("type", "File")
+                author = result.get("author", "")
+                size = result.get("size", "0 B")
+                modified = result.get("modified", "")
+                created = result.get("created", "")
+                path = result.get("path", "")
+                from_attachment = result.get("is_attachment", False)
             else:
-                item_type, author, size, modified, created, path = result
-                from_attachment = False
+                # Formato tupla/lista (vecchio formato)
+                if len(result) >= 7:
+                    item_type, author, size, modified, created, path, from_attachment = result
+                else:
+                    item_type, author, size, modified, created, path = result
+                    from_attachment = False
             
             # Imposta l'icona della graffetta nella colonna dedicata
             attachment_icon = "📎" if from_attachment else ""
             
-            # Applica stile in base al tipo di elemento
-            if item_type == "Directory":
-                tags = ("directory",)
-            elif from_attachment:
+            # Applica stile in base al tipo di elemento con priorità per gli allegati
+            if from_attachment:
                 tags = ("attachment",)  # Tag speciale per gli allegati
+                attachment_count += 1
+                self.log_debug(f"Allegato trovato ({attachment_count}): {path}")
+            elif item_type == "Directory":
+                tags = ("directory",)
             else:
                 tags = ("file",)
             
@@ -7006,6 +7024,8 @@ class FileSearchApp:
         
         # Aggiorna lo stato
         self.status_label["text"] = f"Trovati {len(self.search_results)} risultati"
+        if attachment_count > 0:
+            self.status_label["text"] += f" (inclusi {attachment_count} allegati)"
         
         # Aggiorna la dimensione totale dei file trovati
         self.update_total_files_size()
@@ -7019,6 +7039,7 @@ class FileSearchApp:
             # Opzionalmente, mostra il contenuto del primo risultato
             if hasattr(self, 'auto_preview') and self.auto_preview.get():
                 self.show_file_contents()
+
     
     @error_handler
     def update_total_files_size(self):
@@ -7125,43 +7146,55 @@ class FileSearchApp:
         
         style = ttk.Style()
         
+        # Definisci i colori di sfondo per ogni tema
+        bg_colors = {
+            "minty": "#f8f9fa",
+            "cosmo": "#f8f9fa",
+            "darkly": "#222",
+            "cyborg": "#060606"
+        }
+        
+        # Ottieni il colore di sfondo corrente
+        bg_color = bg_colors.get(theme, "#222")  # Default se il tema non è nella lista
+        
         # Configura i colori in base al tema
         if theme in ["minty", "cosmo"]:  # Temi chiari
-            style.configure("Treeview", background="#ffffff", foreground="#000000", fieldbackground="#ffffff")
+            # Usa lo sfondo dell'applicazione anche per la treeview
+            style.configure("Treeview", background=bg_color, foreground="#000000", fieldbackground=bg_color)
             if hasattr(self, 'results_list'):
                 self.results_list.tag_configure("directory", background="#e6f2ff", foreground="#000000")
-                self.results_list.tag_configure("file", background="#ffffff", foreground="#000000")
+                self.results_list.tag_configure("file", background=bg_color, foreground="#000000")
                 self.results_list.tag_configure("attachment", background="#f8f8e0", foreground="#000000")
             
             # Configura la finestra di debug se esiste
             if hasattr(self, 'debug_log_text'):
-                self.debug_log_text.configure(background="#ffffff", foreground="#000000")
+                self.debug_log_text.configure(background=bg_color, foreground="#000000")
         
         elif theme in ["darkly", "cyborg"]:  # Temi scuri
-            style.configure("Treeview", background="#333333", foreground="#ffffff", fieldbackground="#333333")
-            if hasattr(self, 'results_list'):
-                self.results_list.tag_configure("directory", background="#4d4d4d", foreground="#ffffff")
-                self.results_list.tag_configure("file", background="#333333", foreground="#ffffff")
-                self.results_list.tag_configure("attachment", background="#464630", foreground="#ffffff")
+            # Usa lo sfondo dell'applicazione anche per la treeview
+            style.configure("Treeview", background=bg_color, foreground="#ffffff", fieldbackground=bg_color)
+            
+            # Configura i colori specifici per ogni tema
+            if theme == "darkly":
+                if hasattr(self, 'results_list'):
+                    self.results_list.tag_configure("directory", background="#303030", foreground="#ffffff")
+                    self.results_list.tag_configure("file", background=bg_color, foreground="#ffffff")
+                    self.results_list.tag_configure("attachment", background="#a0a080", foreground="#ffffff")
+                    
+            elif theme == "cyborg":
+                if hasattr(self, 'results_list'):
+                    self.results_list.tag_configure("directory", background="#181818", foreground="#2a9fd6")
+                    self.results_list.tag_configure("file", background=bg_color, foreground="#ffffff")
+                    self.results_list.tag_configure("attachment", background="#a0a080", foreground="#ffffff")
             
             # Configura la finestra di debug se esiste
             if hasattr(self, 'debug_log_text'):
-                self.debug_log_text.configure(background="#333333", foreground="#ffffff")
+                self.debug_log_text.configure(background=bg_color, foreground="#ffffff")
         
-        # Personalizzazioni specifiche per tema
-        if theme == "darkly":
-            style.configure("Treeview", background="#121212", foreground="#e0e0e0", fieldbackground="#121212")
-            if hasattr(self, 'results_list'):
-                self.results_list.tag_configure("directory", background="#1a1a1a", foreground="#ffffff")
-                self.results_list.tag_configure("file", background="#121212", foreground="#e0e0e0")
-                self.results_list.tag_configure("attachment", background="#1d1d1a", foreground="#e0e0e0")
-        
-        elif theme == "cyborg":
-            style.configure("Treeview", background="#060606", foreground="#ffffff", fieldbackground="#060606")
-            if hasattr(self, 'results_list'):
-                self.results_list.tag_configure("directory", background="#181818", foreground="#2a9fd6")
-                self.results_list.tag_configure("file", background="#060606", foreground="#ffffff")
-                self.results_list.tag_configure("attachment", background="#151515", foreground="#77b300")
+        # Aggiorna anche la selezione nella treeview
+        style.map("Treeview",
+                background=[('selected', '#375a7f' if theme in ["darkly", "cyborg"] else '#2780e3')],
+                foreground=[('selected', '#ffffff')])
 
     @error_handler
     def copy_selected(self):
