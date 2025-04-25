@@ -1001,6 +1001,15 @@ class FileSearchApp:
         self.progress_queue = queue.Queue()
         self.search_depth = StringVar(value="base") 
         self.excluded_dirs = []
+        
+        # Variabili per sistema e configurazione
+        self.app_name = APP_NAME
+        self.app_version = APP_VERSION
+        self.app_stage = APP_STAGE
+        self.app_full_name = APP_FULL_NAME
+        self.debug_mode = True
+        self.is_search_running = False
+        self.search_interrupted = False
 
         # Inizializza impostazioni per la gestione della RAM
         self.auto_memory_management = True
@@ -1016,7 +1025,7 @@ class FileSearchApp:
         self.use_indexing = tk.BooleanVar(value=True)
         self.skip_permission_errors = tk.BooleanVar(value=True)
         
-        # Variabili per data/ora e utente (datetime_var già inizializzato)
+        # Variabili per data/ora e utente
         self.user_var = StringVar(value=getpass.getuser())
         
         # Variabili essenziali per l'interfaccia
@@ -1032,32 +1041,34 @@ class FileSearchApp:
         self.total_disk_var = StringVar(value="")
         self.used_disk_var = StringVar(value="")
         self.free_disk_var = StringVar(value="")
+        
+        # Variabili per il monitoraggio e tracking
+        self.files_checked = 0
+        self.files_matched = 0
+        self.dirs_checked = 0
+        self.skipped_files = 0
+        self.search_start_time = None
+        self.total_search_time = 0
+        self.search_completed = False
+        self.last_status_update = 0
+        self.status_update_interval = 0.2  # secondi
+        
+        # Variabili per i file e le estensioni
+        self.all_file_extensions = set()
+        self.extension_categories = {}
+        self.selected_extensions = {}
+        self.skipped_extensions = set()
+        self.excluded_extensions = set()
+        self.excluded_folders = set()
+        self.total_files_size = 0
+        self.selected_files_size = 0
+        self.path_disk_info = {}
 
         # Inizializza le classi di ottimizzazione
-        self.network_optimizer = NetworkSearchOptimizer(logger=self.logger)
-        self.large_file_handler = LargeFileHandler(logger=self.logger)
+        self.network_optimizer = NetworkSearchOptimizer(logger=self)
+        self.large_file_handler = LargeFileHandler(logger=self)
+        self.windows_search_helper = WindowsSearchHelper(logger=self)
 
-        # Inizializza tutte le variabili utilizzate nel caricamento delle impostazioni
-        self.timeout_enabled = tk.BooleanVar(value=False)
-        self.timeout_seconds = tk.IntVar(value=3600)
-        self.max_files_to_check = tk.IntVar(value=100000)
-        self.max_results = tk.IntVar(value=50000)
-        self.worker_threads = tk.IntVar(value=4)
-        self.max_file_size_mb = tk.IntVar(value=100)
-        self.use_indexing = tk.BooleanVar(value=True)
-        self.skip_permission_errors = tk.BooleanVar(value=True)
-        self.auto_memory_management = True
-        self.memory_usage_percent = 75
-
-        # Add a queue for debug logs
-        self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
-        
-        # Aggiungi questa riga: lista permanente per i log completi dalla creazione dell'app
-        self.complete_debug_log_history = []
-
-        # Add a queue for debug logs
-        self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
-        
         # Configura le opzioni di rete
         self.network_retry_count = 3
         self.network_search_enabled = True
@@ -1073,6 +1084,29 @@ class FileSearchApp:
             self.windows_search_helper.set_network_optimization(self.network_search_enabled)
             self.windows_search_helper.set_retry_attempts(self.network_retry_count)
             self.windows_search_helper.set_timeout(10)
+        
+        # Variabili per logging e debug
+        self.log_messages = []
+        self.log_count = 0
+        self.error_count = 0
+        self.warning_count = 0
+        self.info_count = 0
+        self.log_filter_text = ""
+        
+        # Debug logs queue (rimuovo la duplicazione)
+        self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
+        
+        # Aggiungi questa riga: lista permanente per i log completi dalla creazione dell'app
+        self.complete_debug_log_history = []
+            
+        # Altre variabili che potrebbero essere necessarie
+        self.search_whole_words = False
+        self.search_case_sensitive = False
+        self.search_timeout = 120  # secondi
+        self.system_search_running = False
+        self.search_was_timeout = False
+        self.extension_filter_enabled = True
+        self.skipped_files_log = []
 
     @error_handler
     def _init_remaining_variables(self):
@@ -11149,56 +11183,6 @@ class FileSearchApp:
             else:
                 # Rimuovi eventuali indicatori di ordinamento da altre colonne
                 tv.heading(c, text=tv.heading(c, 'text').split(' ')[0])
-
-    @error_handler # Add this to the FileSearchApp class to track log messages
-    def _init_essential_variables(self):
-        """Inizializza solo le variabili essenziali per l'avvio"""
-        # Inizializza datetime_var subito all'inizio per evitare errori di sequenza
-        self.datetime_var = StringVar()
-        self.max_depth = 5
-        
-        # Variabili principali per la ricerca
-        self.search_content = BooleanVar(value=True)
-        self.search_path = StringVar()
-        self.keywords = StringVar()
-        self.search_results = []
-        self.search_files = BooleanVar(value=True)
-        self.search_folders = BooleanVar(value=True)
-        self.is_searching = False
-        self.progress_queue = queue.Queue()
-        self.search_depth = StringVar(value="base") 
-        self.excluded_dirs = []
-        
-        # Inizializza impostazioni per la gestione della RAM
-        self.auto_memory_management = True
-        self.memory_usage_percent = 75
-
-        # Inizializza tutte le variabili utilizzate nelle impostazioni
-        self.timeout_enabled = tk.BooleanVar(value=False)
-        self.timeout_seconds = tk.IntVar(value=3600)
-        self.max_files_to_check = tk.IntVar(value=100000)
-        self.max_results = tk.IntVar(value=50000)
-        self.worker_threads = tk.IntVar(value=4)
-        self.max_file_size_mb = tk.IntVar(value=100)
-        self.use_indexing = tk.BooleanVar(value=True)
-        self.skip_permission_errors = tk.BooleanVar(value=True)
-
-        # Variabili per data/ora e utente (datetime_var già inizializzato)
-        self.user_var = StringVar(value=getpass.getuser())
-        
-        # Variabili essenziali per l'interfaccia
-        self.ignore_hidden = BooleanVar(value=True)
-        self.search_executor = None
-        self.exclude_system_files = BooleanVar(value=True)
-        self.whole_word_search = BooleanVar(value=False)
-        self.dir_size_calculation = StringVar(value="disabilitato")
-        
-        # Variabili per la visualizzazione
-        self.directory_calculation_enabled = False
-        self.dir_size_var = StringVar(value="")
-        self.total_disk_var = StringVar(value="")
-        self.used_disk_var = StringVar(value="")
-        self.free_disk_var = StringVar(value="")
         
     @error_handler # Show debug log window with export functionality
     def show_debug_log(self):
