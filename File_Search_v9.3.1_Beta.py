@@ -4198,7 +4198,81 @@ class FileSearchApp:
                     pass
     
     @error_handler
-    # Funzione per calcolare il tempo rimanente stimato
+    def process_file_batch(self, file_batch, files_checked, last_update_time, 
+                        start_time, keywords, search_content, futures):
+        """Processa un batch di file in modo ottimizzato"""
+        # Evita batch vuoti
+        if not file_batch:
+            return 0, last_update_time
+        
+        # Aggiorna il contatore di file processati
+        files_processed = len(file_batch)
+        files_checked[0] += files_processed
+        
+        # Monitora la memoria dopo ogni batch
+        try:
+            if hasattr(self, 'memory_manager'):
+                current_memory = self.memory_manager.get_memory_status()
+                if current_memory['percent'] > 80:
+                    self.log_debug(f"Memoria alta durante processamento batch ({current_memory['percent']}%), esecuzione pulizia")
+                    gc.collect(0)  # Raccolta garbage leggera
+        except Exception as e:
+            self.log_debug(f"Errore nel monitoraggio memoria durante batch: {str(e)}")
+        
+        # Crea futures per ogni file nel batch, se è attiva la ricerca parallela
+        batch_futures = []
+        for file_path in file_batch:
+            # Verifica se il file è già stato processato (per evitare duplicati)
+            if file_path in self.processed_files:
+                continue
+                
+            self.processed_files.add(file_path)
+            
+            # Aggiungi alla lista dei file da elaborare in parallelo
+            if self.search_executor and not self.stop_search:
+                try:
+                    future = self.search_executor.submit(
+                        self.process_file, file_path, keywords, search_content
+                    )
+                    batch_futures.append(future)
+                    futures.append(future)
+                except Exception as e:
+                    self.log_debug(f"Errore nel submit del file {file_path}: {str(e)}")
+        
+        # Aggiorna lo stato solo periodicamente per evitare troppe chiamate
+        current_time = time.time()
+        if current_time - last_update_time[0] > 1.0:  # Aggiorna al massimo ogni secondo
+            elapsed_time = current_time - start_time
+            try:
+                # Calcola tempo stimato rimanente
+                if files_checked[0] > 0 and elapsed_time > 0:
+                    # Usa self.max_files_to_check.get() per il limite massimo
+                    progress = min(100, int((files_checked[0] / self.max_files_to_check.get()) * 100))
+                    self.progress_queue.put(("progress", progress))
+                    
+                    # Calcola e mostra il tempo stimato
+                    estimated_total = self.calculate_remaining_time(files_checked[0], 
+                                                                self.max_files_to_check.get(), 
+                                                                elapsed_time)
+                    
+                    # Aggiorna lo stato nella UI con i dettagli della ricerca
+                    status_msg = (f"Analizzati {files_checked[0]} file in {int(elapsed_time)}s " +
+                                f"(Attivi: {len(batch_futures)}, Tempo stimato: {estimated_total})")
+                    self.progress_queue.put(("status", status_msg))
+            except Exception as e:
+                self.log_debug(f"Errore nell'aggiornamento stato durante processamento batch: {str(e)}")
+                
+            # Aggiorna il timestamp dell'ultimo aggiornamento
+            last_update_time[0] = current_time
+            
+            # Verifica se la ricerca deve essere interrotta
+            if self.stop_search:
+                self.log_debug("Ricerca interrotta durante processamento batch")
+                return files_processed, last_update_time
+        
+        return files_processed, last_update_time
+
+    @error_handler
     def calculate_remaining_time(self, files_processed, max_files, elapsed_time):
         """Calcola il tempo rimanente stimato in base al progresso attuale"""
         if files_processed == 0 or elapsed_time == 0:
@@ -7672,53 +7746,68 @@ class FileSearchApp:
         
         # Aggiungi i risultati alla lista
         for result in self.search_results:
-            # Verifica se il risultato è un dizionario o una tupla/lista
-            if isinstance(result, dict):
-                # Formato dizionario (nuovo formato)
-                item_type = result.get("type", "File")
-                author = result.get("author", "")
-                size = result.get("size", "0 B")
-                modified = result.get("modified", "")
-                created = result.get("created", "")
-                path = result.get("path", "")
-                from_attachment = result.get("is_attachment", False)
-            else:
-                # Formato tupla/lista (vecchio formato)
-                if len(result) >= 7:
-                    item_type, author, size, modified, created, path, from_attachment = result
+            try:
+                # Salta i risultati booleani che causano l'errore
+                if isinstance(result, bool):
+                    self.log_debug(f"Ignorato risultato booleano: {result}")
+                    continue
+                    
+                # Verifica se il risultato è un dizionario o una tupla/lista
+                if isinstance(result, dict):
+                    # Formato dizionario (nuovo formato)
+                    item_type = result.get("type", "File")
+                    author = result.get("author", "")
+                    size = result.get("size", "0 B")
+                    modified = result.get("modified", "")
+                    created = result.get("created", "")
+                    path = result.get("path", "")
+                    from_attachment = result.get("is_attachment", False)
                 else:
-                    item_type, author, size, modified, created, path = result
-                    from_attachment = False
-            
-            # Imposta l'icona della graffetta nella colonna dedicata
-            attachment_icon = "📎" if from_attachment else ""
-            
-            # Applica stile in base al tipo di elemento con priorità per gli allegati
-            if from_attachment:
-                tags = ("attachment",)  # Tag speciale per gli allegati
-                attachment_count += 1
-                self.log_debug(f"Allegato trovato ({attachment_count}): {path}")
-            elif item_type == "Directory":
-                tags = ("directory",)
-            else:
-                tags = ("file",)
-            
-            display_values = (
-                item_type,        # Tipo
-                attachment_icon,  # Icona allegato
-                size,             # Dimensione
-                modified,         # Data modifica
-                created,          # Data creazione
-                author,           # Nome/Autore
-                path              # Percorso
-            )
+                    # Formato tupla/lista (vecchio formato)
+                    # Verifica che il risultato sia di un tipo che supporta len()
+                    if not hasattr(result, '__len__'):
+                        self.log_debug(f"Ignorato risultato di tipo non supportato: {type(result)}")
+                        continue
+                        
+                    if len(result) >= 7:
+                        item_type, author, size, modified, created, path, from_attachment = result
+                    else:
+                        item_type, author, size, modified, created, path = result
+                        from_attachment = False
                 
-            # Inserisci l'elemento nella TreeView con i tag appropriati
-            item_id = self.results_list.insert("", "end", values=display_values, tags=tags)
-            
-            # Memorizza solo gli elementi che NON sono allegati
-            if not from_attachment:
-                non_attachment_items.append(item_id)
+                # Imposta l'icona della graffetta nella colonna dedicata
+                attachment_icon = "📎" if from_attachment else ""
+                
+                # Applica stile in base al tipo di elemento con priorità per gli allegati
+                if from_attachment:
+                    tags = ("attachment",)  # Tag speciale per gli allegati
+                    attachment_count += 1
+                    self.log_debug(f"Allegato trovato ({attachment_count}): {path}")
+                elif item_type == "Directory":
+                    tags = ("directory",)
+                else:
+                    tags = ("file",)
+                
+                display_values = (
+                    item_type,        # Tipo
+                    attachment_icon,  # Icona allegato
+                    size,             # Dimensione
+                    modified,         # Data modifica
+                    created,          # Data creazione
+                    author,           # Nome/Autore
+                    path              # Percorso
+                )
+                    
+                # Inserisci l'elemento nella TreeView con i tag appropriati
+                item_id = self.results_list.insert("", "end", values=display_values, tags=tags)
+                
+                # Memorizza solo gli elementi che NON sono allegati
+                if not from_attachment:
+                    non_attachment_items.append(item_id)
+                    
+            except Exception as e:
+                self.log_debug(f"Errore nel processare un risultato: {str(e)}")
+                continue
         
         # Aggiorna lo stato
         self.status_label["text"] = f"Trovati {len(self.search_results)} risultati"
@@ -7733,7 +7822,6 @@ class FileSearchApp:
             self.results_list.selection_set(non_attachment_items[0])
             self.results_list.focus(non_attachment_items[0])
 
-    
     @error_handler
     def update_total_files_size(self):
         """Calcola e aggiorna la dimensione totale dei file trovati"""
