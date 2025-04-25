@@ -956,6 +956,9 @@ class FileSearchApp:
         import concurrent.futures
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers)
 
+        # Tracciamento file già processati (per evitare duplicati)
+        self.processed_files = set()
+
         # Variabili principali per la ricerca
         self.search_content = BooleanVar(value=True)
         self.search_path = StringVar()
@@ -971,6 +974,7 @@ class FileSearchApp:
         # Inizializza impostazioni per la gestione della RAM
         self.auto_memory_management = True
         self.memory_usage_percent = 75
+        
         # Inizializza tutte le variabili utilizzate nelle impostazioni
         self.timeout_enabled = tk.BooleanVar(value=False)
         self.timeout_seconds = tk.IntVar(value=3600)
@@ -998,6 +1002,9 @@ class FileSearchApp:
         self.used_disk_var = StringVar(value="")
         self.free_disk_var = StringVar(value="")
 
+        # Inizializza le classi di ottimizzazione
+        self.network_optimizer = NetworkSearchOptimizer(logger=self.logger)
+        self.large_file_handler = LargeFileHandler(logger=self.logger)
 
         # Inizializza tutte le variabili utilizzate nel caricamento delle impostazioni
         self.timeout_enabled = tk.BooleanVar(value=False)
@@ -1017,9 +1024,8 @@ class FileSearchApp:
         # Aggiungi questa riga: lista permanente per i log completi dalla creazione dell'app
         self.complete_debug_log_history = []
 
-        # Inizializza le classi di ottimizzazione
-        self.network_optimizer = NetworkSearchOptimizer(logger=self.logger)
-        self.large_file_handler = LargeFileHandler(logger=self.logger)
+        # Add a queue for debug logs
+        self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
         
         # Configura le opzioni di rete
         self.network_retry_count = 3
@@ -11143,8 +11149,6 @@ class FileSearchApp:
         self.datetime_var = StringVar()
         self.max_depth = 5
         
-        # Tracciamento file già processati (per evitare duplicati)
-        self.processed_files = set()
         # Variabili principali per la ricerca
         self.search_content = BooleanVar(value=True)
         self.search_path = StringVar()
@@ -11160,6 +11164,7 @@ class FileSearchApp:
         # Inizializza impostazioni per la gestione della RAM
         self.auto_memory_management = True
         self.memory_usage_percent = 75
+
         # Inizializza tutte le variabili utilizzate nelle impostazioni
         self.timeout_enabled = tk.BooleanVar(value=False)
         self.timeout_seconds = tk.IntVar(value=3600)
@@ -11186,9 +11191,6 @@ class FileSearchApp:
         self.total_disk_var = StringVar(value="")
         self.used_disk_var = StringVar(value="")
         self.free_disk_var = StringVar(value="")
-        
-        # Add a queue for debug logs
-        self.debug_logs_queue = queue.Queue(maxsize=5000)  # Limit to 5000 entries to avoid memory issues
         
     @error_handler # Show debug log window with export functionality
     def show_debug_log(self):
