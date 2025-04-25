@@ -881,6 +881,14 @@ class FileSearchApp:
             # Aggiungi questa riga per inizializzare current_user
             self.current_user = getpass.getuser()
             
+            # Imposta icona se disponibile
+            try:
+                icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "search_icon.ico")
+                if os.path.exists(icon_path):
+                    self.root.iconbitmap(icon_path)
+            except:
+                pass
+        
             # Assicurati che all'avvio non ci siano timer attivi da esecuzioni precedenti
             for attr in dir(self):
                 if attr.startswith('_after_id_') or attr.endswith('_timer_id'):
