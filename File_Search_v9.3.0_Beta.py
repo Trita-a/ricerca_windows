@@ -101,7 +101,54 @@ file_format_support = {
     "executable": True, "code_files": True, "accdb": True  
 }
 
-# Aggiungi questa classe prima della definizione della classe FileSearchApp
+class PathUtils:
+    """Classe di utilità per operazioni sui percorsi di file e cartelle.
+    Contiene metodi relativi all'identificazione e gestione di percorsi di rete."""
+    
+    @staticmethod
+    def is_network_path(path):
+        """Determina se un percorso è un percorso di rete."""
+        if not path:
+            return False
+        
+        # Percorsi UNC Windows (\\server\share)
+        if path.startswith('\\\\') or path.startswith('//'):
+            return True
+            
+        # Percorsi di rete mappati su Windows (Z:\ dove Z è una lettera mappata)
+        if os.name == 'nt' and len(path) >= 2 and path[1] == ':':
+            try:
+                # Usa net use per verificare se è un drive mappato
+                drive_letter = path[0].upper() + ':'
+                
+                # Aggiungiamo il flag per nascondere la finestra CMD
+                CREATE_NO_WINDOW = 0x08000000  # Per versioni di Python precedenti alla 3.7
+                
+                result = subprocess.run(
+                    ['net', 'use', drive_letter], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=2,
+                    creationflags=CREATE_NO_WINDOW)
+                
+                return "Remote name" in result.stdout or "Nome remoto" in result.stdout
+            except:
+                pass
+                
+        # Riconoscimento di percorsi HTTP/FTP (addizionale rispetto al codice originale)
+        if path.startswith(('http://', 'https://', 'ftp://')):
+            return True
+        
+        return False
+    
+    def get_network_path_info(path):
+        """Restituisce informazioni su un percorso di rete (estensione per funzionalità future).
+        dict: Informazioni sul percorso di rete o None se non è un percorso di rete"""
+        if not PathUtils.is_network_path(path):
+            return None
+            
+        return {"is_network": True, "path": path}
+    
 class WindowsSearchHelper:
     """Classe per utilizzare Windows Search Service tramite COM per ricerche veloci
     con supporto migliorato per percorsi di rete e file di grandi dimensioni"""
@@ -147,19 +194,7 @@ class WindowsSearchHelper:
     
     def _is_network_path(self, path):
         """Determina se un percorso è su rete"""
-        if path.startswith('\\\\') or path.startswith('//'):
-            return True
-        
-        # Controlla se è un'unità di rete mappata
-        if len(path) >= 2 and path[1] == ':':
-            drive_letter = path[0].upper()
-            try:
-                result = subprocess.run(["net", "use", f"{drive_letter}:"], 
-                                       capture_output=True, text=True, timeout=2)
-                return "Remote name" in result.stdout
-            except:
-                pass
-        return False
+        return PathUtils.is_network_path(path)
     
     def _get_connection(self, network_path=False):
         """Crea una connessione COM con gestione migliorata per rete"""
@@ -471,19 +506,7 @@ class NetworkSearchOptimizer:
     
     def is_network_path(self, path):
         """Determina se un percorso è un percorso di rete"""
-        if path.startswith('\\\\') or path.startswith('//'):
-            return True
-        # Controlla se è un'unità di rete mappata
-        if len(path) >= 2 and path[1] == ':':
-            drive_letter = path[0].upper()
-            try:
-                # Usa subprocess per eseguire il comando net use
-                result = subprocess.run(["net", "use", f"{drive_letter}:"], 
-                                       capture_output=True, text=True, timeout=2)
-                return "Remote name" in result.stdout
-            except:
-                pass
-        return False
+        return PathUtils.is_network_path(path)
     
     def get_network_files(self, path, pattern="*", recursive=True, max_depth=3):
         """Ottiene un elenco di file da un percorso di rete con il pattern specificato"""
@@ -2581,30 +2604,7 @@ class FileSearchApp:
     def is_network_path(self, path):
         """Verifica se il percorso è un percorso di rete"""
         # Percorsi UNC Windows (\\server\share)
-        if path.startswith('\\\\') or path.startswith('//'):
-            return True
-            
-        # Percorsi di rete mappati su Windows (Z:\ dove Z è una lettera mappata)
-        if os.name == 'nt' and len(path) >= 2 and path[1] == ':':
-            try:
-                # Usa net use per verificare se è un drive mappato
-                drive_letter = path[0].upper() + ':'
-                
-                # Aggiungiamo il flag per nascondere la finestra CMD
-                CREATE_NO_WINDOW = 0x08000000  # Per versioni di Python precedenti alla 3.7
-                
-                result = subprocess.run(
-                    ['net', 'use', drive_letter], 
-                    capture_output=True, 
-                    text=True, 
-                    timeout=2,
-                    creationflags=CREATE_NO_WINDOW)
-                
-                return "Remote name" in result.stdout or "Nome remoto" in result.stdout
-            except:
-                pass
-
-        return False
+        return PathUtils.is_network_path(path)
 
     @error_handler
     def show_optimization_tips(self, path):
