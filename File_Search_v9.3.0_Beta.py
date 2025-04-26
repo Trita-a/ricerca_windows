@@ -163,16 +163,19 @@ class WindowsSearchHelper:
         self.is_network_optimized = True  # Abilita ottimizzazioni per rete
         
     def log(self, message, level="info"):
-        """Gestione log con fallback su print"""
         if self.logger:
-            if level == "error":
+            if hasattr(self.logger, level):
+                # Logger standard con metodi info, error, etc.
+                getattr(self.logger, level)(message)
+            elif hasattr(self.logger, 'log_debug') and level == "info":
+                # FileSearchApp ha log_debug invece di info
+                self.logger.log_debug(message)
+            elif hasattr(self.logger, 'log_error') and level == "error":
+                # FileSearchApp ha log_error invece di error
                 self.logger.log_error(message)
-            elif level == "warning":
-                self.logger.log_debug(f"WARNING: {message}")
             else:
-                self.logger.log_debug(f"INFO: {message}")
-        else:
-            print(f"[{level.upper()}] {message}")
+                # Fallback: prova a usare print in caso di emergenza
+                print(f"[{level.upper()}] {message}")
     
     def _check_service_availability(self):
         """Verifica se il servizio Windows Search è disponibile e attivo"""
@@ -668,19 +671,38 @@ class LargeFileHandler:
         except ImportError:
             self.log("Modulo json non disponibile", "warning")
     
+    def get_file_size_category(self, file_path):
+        """ Categorizza un file in base alla sua dimensione.Categoria del file ("normal", "medium", "large", "huge", o "gigantic")"""
+        try:
+            # Verifica che il file esista
+            if not os.path.exists(file_path) or not os.path.isfile(file_path):
+                return "normal"
+                
+            # Ottieni la dimensione del file una sola volta
+            file_size = os.path.getsize(file_path)
+            
+            # Categorizza in base alle soglie
+            if file_size >= self.gigantic_file_threshold:
+                return "gigantic"
+            elif file_size >= self.huge_file_threshold:
+                return "huge"
+            elif file_size >= self.large_file_threshold:
+                return "large"
+            elif file_size >= self.medium_file_threshold:
+                return "medium"
+            else:
+                return "normal"
+        except Exception as e:
+            self.log(f"Errore nel determinare la categoria del file {file_path}: {str(e)}", "error")
+            return "normal"  # In caso di errore, tratta come file normale
+
     def is_large_file(self, file_path):
         """Determina se un file è considerato 'grande'"""
-        try:
-            return os.path.getsize(file_path) > self.large_file_threshold
-        except:
-            return False
-    
+        return self.get_file_size_category(file_path) in ["large", "huge", "gigantic"]
+        
     def is_huge_file(self, file_path):
         """Determina se un file è considerato 'enorme'"""
-        try:
-            return os.path.getsize(file_path) > self.huge_file_threshold
-        except:
-            return False
+        return self.get_file_size_category(file_path) in ["huge", "gigantic"]
     
     def search_in_large_file(self, file_path, keywords, is_whole_word=False):
         """Cerca keywords in un file di grandi dimensioni in modo ottimizzato"""
@@ -1066,7 +1088,7 @@ class FileSearchApp:
 
         # Inizializza le classi di ottimizzazione
         self.network_optimizer = NetworkSearchOptimizer(logger=self)
-        self.large_file_handler = LargeFileHandler(logger=self)
+        self.large_file_handler = LargeFileHandler(logger=None)
         self.windows_search_helper = WindowsSearchHelper(logger=self)
 
         # Configura le opzioni di rete
@@ -1076,9 +1098,11 @@ class FileSearchApp:
         
         # Configura le opzioni per file di grandi dimensioni
         self.large_file_search_enabled = True
-        self.large_file_threshold = 50 * 1024 * 1024  # 50 MB
-        self.huge_file_threshold = 500 * 1024 * 1024  # 500 MB
-        
+        self.medium_file_threshold = 10 * 1024 * 1024  # 10 MB
+        self.large_file_threshold = 50 * 1024 * 1024   # 50 MB
+        self.huge_file_threshold = 500 * 1024 * 1024   # 500 MB
+        self.gigantic_file_threshold = 2 * 1024 * 1024 * 1024  # 2 GB
+
         # Configura anche la classe WindowsSearchHelper con le ottimizzazioni
         if hasattr(self, 'windows_search_helper'):
             self.windows_search_helper.set_network_optimization(self.network_search_enabled)
@@ -1496,49 +1520,58 @@ class FileSearchApp:
             content = ""
             # Verifica contenuto se richiesto e se non c'è già una corrispondenza nel nome
             if not matched and search_content and self.should_search_content(file_path):
-                content = self.get_file_content(file_path)
+                # NUOVA LOGICA: Controlla se il file è marcato per analisi parziale
+                is_partial_analysis = hasattr(self, '_partial_analysis_files') and file_path in self._partial_analysis_files
                 
-                # NUOVA GESTIONE: verifica se content è un dizionario (archivi compressi)
-                if isinstance(content, dict):
-                    for file_in_archive, file_content in content.items():
-                        # Controlla match nel nome del file interno
-                        for keyword in keywords:
-                            if self.whole_word_search.get():
-                                if self.is_whole_word_match(keyword, file_in_archive):
+                if is_partial_analysis:
+                    # Usa l'analisi parziale per file giganteschi
+                    self.log_debug(f"Applicando analisi parziale per file gigantesco: {os.path.basename(file_path)}")
+                    matched = self._partial_content_search(file_path, keywords)
+                else:
+                    # Continua con l'analisi normale
+                    content = self.get_file_content(file_path)
+                    
+                    # NUOVA GESTIONE: verifica se content è un dizionario (archivi compressi)
+                    if isinstance(content, dict):
+                        for file_in_archive, file_content in content.items():
+                            # Controlla match nel nome del file interno
+                            for keyword in keywords:
+                                if self.whole_word_search.get():
+                                    if self.is_whole_word_match(keyword, file_in_archive):
+                                        self.log_debug(f"Match trovato nel nome del file interno: {file_in_archive}")
+                                        matched = True
+                                        break
+                                elif keyword.lower() in file_in_archive.lower():
                                     self.log_debug(f"Match trovato nel nome del file interno: {file_in_archive}")
                                     matched = True
                                     break
-                            elif keyword.lower() in file_in_archive.lower():
-                                self.log_debug(f"Match trovato nel nome del file interno: {file_in_archive}")
-                                matched = True
-                                break
-                        
-                        # Se non ha già trovato match nel nome, controlla nel contenuto
-                        if not matched and isinstance(file_content, str):
-                            for keyword in keywords:
-                                if self.whole_word_search.get():
-                                    if self.is_whole_word_match(keyword, file_content):
+                            
+                            # Se non ha già trovato match nel nome, controlla nel contenuto
+                            if not matched and isinstance(file_content, str):
+                                for keyword in keywords:
+                                    if self.whole_word_search.get():
+                                        if self.is_whole_word_match(keyword, file_content):
+                                            self.log_debug(f"Match trovato nel contenuto del file interno: {file_in_archive}")
+                                            matched = True
+                                            break
+                                    elif keyword.lower() in file_content.lower():
                                         self.log_debug(f"Match trovato nel contenuto del file interno: {file_in_archive}")
                                         matched = True
                                         break
-                                elif keyword.lower() in file_content.lower():
-                                    self.log_debug(f"Match trovato nel contenuto del file interno: {file_in_archive}")
+                            
+                            # Interrompe il ciclo se ha già trovato una corrispondenza
+                            if matched:
+                                break
+                    # Contenuto standard (stringa)
+                    elif isinstance(content, str):
+                        for keyword in keywords:
+                            if self.whole_word_search.get():
+                                if self.is_whole_word_match(keyword, content):
                                     matched = True
                                     break
-                        
-                        # Interrompe il ciclo se ha già trovato una corrispondenza
-                        if matched:
-                            break
-                # Contenuto standard (stringa)
-                elif isinstance(content, str):
-                    for keyword in keywords:
-                        if self.whole_word_search.get():
-                            if self.is_whole_word_match(keyword, content):
+                            elif keyword.lower() in content.lower():
                                 matched = True
                                 break
-                        elif keyword.lower() in content.lower():
-                            matched = True
-                            break
             
             if matched:
                 # NUOVA LOGICA: Aggiungi il file all'elenco dei processati
@@ -1929,127 +1962,86 @@ class FileSearchApp:
         return descendants
     
     @error_handler
+    def set_controls_state(self, enabled=True, control_type=None, widget=None):
+        """Imposta lo stato abilitato/disabilitato per i controlli dell'interfaccia utente."""
+        # Stabilisci lo stato da applicare
+        state = "normal" if enabled else "disabled"
+        
+        # Usa il widget root se non è specificato un widget di partenza
+        if widget is None:
+            widget = self.root
+        
+        # Ottieni tutti i widget discendenti, incluso il widget di partenza
+        descendants = self._get_all_descendants(widget)
+        
+        # Traccia il tipo di controllo gestito
+        control_type_lower = control_type.lower() if control_type else None
+        
+        for w in descendants:
+            widget_type = w.winfo_class().lower()
+            
+            # Salta il widget se è richiesto un tipo specifico e questo non corrisponde
+            if control_type_lower and not (
+                (control_type_lower == 'checkbutton' and widget_type == 'ttk::checkbutton') or
+                (control_type_lower == 'button' and widget_type in ('ttk::button', 'button')) or
+                (control_type_lower == 'entry' and widget_type in ('ttk::entry', 'entry')) or
+                (control_type_lower == 'combobox' and widget_type == 'ttk::combobox') or
+                (control_type_lower == 'spinbox' and widget_type in ('ttk::spinbox', 'spinbox'))
+            ):
+                continue
+            
+            try:
+                # Gestisci i widget ttk in modo specifico 
+                if widget_type.startswith('ttk::'):
+                    w.configure(state=state)
+                # Gestisci i widget Text separatamente
+                elif widget_type == 'text':
+                    if state == "normal":
+                        w.configure(state="normal")
+                    else:
+                        # Salva il contenuto corrente
+                        content = w.get("1.0", "end-1c")
+                        w.configure(state="normal")
+                        w.delete("1.0", "end")
+                        w.insert("1.0", content)
+                        w.configure(state="disabled")
+                # Gestisci i widget standard Tkinter
+                elif hasattr(w, 'config') and not widget_type in ['frame', 'toplevel', 'canvas']:
+                    w.config(state=state)
+                
+                # Gestione speciale per le Listbox
+                if widget_type == 'listbox' or widget_type == 'ttk::treeview':
+                    if not enabled:
+                        w.bind('<Button-1>', lambda e: 'break')
+                    else:
+                        w.unbind('<Button-1>')
+                        
+                # Log per debug se necessario
+                if self.debug_mode:
+                    self.log_debug(f"{'Abilitato' if enabled else 'Disabilitato'} controllo: {widget_type}")
+                    
+            except Exception as e:
+                self.log_debug(f"Errore nel configurare lo stato del widget {widget_type}: {str(e)}")
+                
+    @error_handler
     def disable_all_controls(self):
         """Disabilita tutti i controlli UI durante la ricerca"""
-        try:
-            # Input e campi di testo
-            self.path_entry["state"] = "disabled"
-            self.keyword_entry["state"] = "disabled"
-            
-            # Pulsante Sfoglia
-            if hasattr(self, 'browse_btn'):
-                self.browse_btn["state"] = "disabled"
-            
-            # Pulsante Pulisci campi
-            if hasattr(self, 'clear_btn'):
-                self.clear_btn["state"] = "disabled"
-            
-            # Combobox e spinbox
-            if hasattr(self, 'theme_combobox'):
-                self.theme_combobox["state"] = "disabled"
-            
-            if hasattr(self, 'depth_spinbox'):
-                self.depth_spinbox["state"] = "disabled"
-            
-            # Pulsanti principali
-            if hasattr(self, 'search_button'):
-                self.search_button["state"] = "disabled"
-            
-            # Gestisci i pulsanti dei filtri
-            for btn_name in ['advanced_filters_btn', 'exclusions_btn', 'block_options_btn']:
-                if hasattr(self, btn_name):
-                    getattr(self, btn_name)["state"] = "disabled"
-            
-            # Gestisci specificamente il pulsante admin
-            if hasattr(self, 'admin_button') and not self.is_admin:
-                self.admin_button["state"] = "disabled"
-
-            # Disabilita il pulsante delle opzioni di performance
-            if hasattr(self, 'perf_options_btn'):
-                self.perf_options_btn["state"] = "disabled"
-            
-            # Pulsanti di azione sui risultati
-            if hasattr(self, 'copy_button'):
-                self.copy_button["state"] = "disabled"
-            if hasattr(self, 'compress_button'):
-                self.compress_button["state"] = "disabled"
-                
-        except Exception as e:
-            # Registra l'errore senza interrompere l'esecuzione
-            self.log_debug(f"Errore nella disabilitazione dei controlli: {str(e)}")
-
+        self.set_controls_state(enabled=False)
+        
     @error_handler
     def enable_all_controls(self):
-        """Riabilita tutti i controlli UI dopo la ricerca"""
-        # Input e campi di testo
-        self.path_entry["state"] = "normal"
-        self.keyword_entry["state"] = "normal"
-        
-        # Pulsante Sfoglia
-        if hasattr(self, 'browse_btn'):
-            self.browse_btn["state"] = "normal"
-        
-        # Pulsante Pulisci campi
-        if hasattr(self, 'clear_btn'):
-            self.clear_btn["state"] = "normal"
-        
-        # Combobox e spinbox
-        if hasattr(self, 'theme_combobox'):
-            self.theme_combobox["state"] = "readonly"
-        if hasattr(self, 'depth_spinbox'):
-            self.depth_spinbox["state"] = "normal"
-        
-        # Pulsanti principali
-        self.search_button["state"] = "normal"
-        
-        # Gestisci i pulsanti dei filtri
-        for btn_name in ['advanced_filters_btn', 'exclusions_btn']:
-            if hasattr(self, btn_name):
-                getattr(self, btn_name)["state"] = "normal"
-
-        # Gestisci i pulsanti  a blocchi
-        if hasattr(self, 'block_options_btn'):
-            self.block_options_btn["state"] = "normal"
-
-        # Gestisci specificamente il pulsante admin
-        if hasattr(self, 'admin_button') and not self.is_admin:
-            self.admin_button["state"] = "normal"
-        
-        # Checkbox
-        for widget in self.root.winfo_children():
-            self._enable_checkbuttons_recursive(widget)
-        
-        # Pulsanti di azione sui risultati
-        if hasattr(self, 'copy_button'):
-            self.copy_button["state"] = "normal"
-        if hasattr(self, 'compress_button'):
-            self.compress_button["state"] = "normal"
-        
-        # Abilita il pulsante delle opzioni di performance
-        if hasattr(self, 'perf_options_btn'):
-            self.perf_options_btn["state"] = "normal"
+        """Abilita tutti i controlli UI dopo la ricerca"""
+        self.set_controls_state(enabled=True)
 
     @error_handler     
     def _disable_checkbuttons_recursive(self, widget):
         """Disabilita ricorsivamente tutte le checkbox nei widget"""
-        if isinstance(widget, ttk.Checkbutton):
-            widget["state"] = "disabled"
-        
-        # Processa i widget figli ricorsivamente
-        if hasattr(widget, 'winfo_children'):
-            for child in widget.winfo_children():
-                self._disable_checkbuttons_recursive(child)
+        self.set_controls_state(enabled=False, control_type="checkbutton", widget=widget)
     
     @error_handler
     def _enable_checkbuttons_recursive(self, widget):
-        """Riabilita ricorsivamente tutte le checkbox nei widget"""
-        if isinstance(widget, ttk.Checkbutton):
-            widget["state"] = "normal"
-        
-        # Processa i widget figli ricorsivamente
-        if hasattr(widget, 'winfo_children'):
-            for child in widget.winfo_children():
-                self._enable_checkbuttons_recursive(child)
+        """Abilita tutti i checkbutton in modo ricorsivo"""
+        self.set_controls_state(enabled=True, control_type="checkbutton", widget=widget)
 
     @error_handler     
     def show_content_search_warning(self):
@@ -4016,7 +4008,72 @@ class FileSearchApp:
         # Prima verifica le condizioni più veloci (principio fail-fast)
         if not self.search_content.get():
             return False
-                    
+        
+        # Controlla la dimensione del file usando il nuovo sistema di categorizzazione
+        file_category = self.large_file_handler.get_file_size_category(file_path)
+        
+        # Verifica se il file è grande e se l'ottimizzazione per file grandi è disabilitata
+        if file_category in ["large", "huge", "gigantic"] and not getattr(self, 'large_file_search_enabled', True):
+            self.log_debug(f"File {file_category} ignorato (ottimizzazione disabilitata): {os.path.basename(file_path)}")
+            return False
+        
+        # Aggiunge log dettagliato sulla dimensione del file per debug
+        if file_category != "normal":
+            self.log_debug(f"Elaborazione file di dimensione {file_category}: {os.path.basename(file_path)}")
+        
+        # Se il file è gigantesco, applica la logica speciale per file giganteschi
+        if file_category == "gigantic":
+            # Registra l'evento nei log
+            self.log_debug(f"Applicazione strategia speciale per file gigantesco: {os.path.basename(file_path)}")
+            
+            # Imposta un flag per indicare alle altre funzioni che questo file richiede trattamento speciale
+            file_size = os.path.getsize(file_path)
+            file_extension = os.path.splitext(file_path)[1].lower()
+            
+            # Metodo 1: Verifica se il tipo di file è supportato per analisi parziale
+            binary_types = ['.exe', '.dll', '.bin', '.iso', '.img', '.msi']
+            archive_types = ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2']
+            media_types = ['.mp4', '.avi', '.mkv', '.mov', '.mpg', '.wmv', '.mp3', '.wav', '.flac']
+            
+            # Per file binari molto grandi, probabilmente contengono dati non testuali
+            if file_extension in binary_types and file_size > 5 * 1024 * 1024 * 1024:  # >5GB
+                self.log_debug(f"File binario gigantesco, contenuto probabilmente non testuale: {os.path.basename(file_path)}")
+                return False
+                
+            # Per archivi enormi, è generalmente meglio estrarre prima e cercare nei file estratti
+            if file_extension in archive_types and file_size > 4 * 1024 * 1024 * 1024:  # >4GB
+                # Qui potresti voler mostrare un messaggio all'utente suggerendo di estrarre prima l'archivio
+                self.log_debug(f"Archivio gigantesco, si consiglia di estrarre e cercare nei file estratti: {os.path.basename(file_path)}")
+                # Si potrebbe aggiungere un popup per l'utente qui
+                return False
+            
+            # Per file multimediali enormi, la ricerca di testo è raramente utile
+            if file_extension in media_types and file_size > 3 * 1024 * 1024 * 1024:  # >3GB
+                self.log_debug(f"File multimediale gigantesco, contenuto probabilmente non testuale: {os.path.basename(file_path)}")
+                return False
+            
+            # Metodo 2: Per database e file di log giganteschi, usa metodi speciali
+            db_types = ['.db', '.sqlite', '.mdb', '.accdb', '.sql']
+            log_types = ['.log', '.csv', '.tsv', '.txt']
+            
+            if file_extension in db_types or file_extension in log_types:
+                # Imposta un attributo temporaneo per indicare che questo file necessita di elaborazione speciale
+                # Questo verrà controllato dalla funzione di elaborazione
+                self._mark_file_for_partial_analysis(file_path)
+                self.log_debug(f"File dati gigantesco, verrà analizzato con metodi speciali: {os.path.basename(file_path)}")
+                return True  # Continua con l'elaborazione, ma sarà gestito diversamente
+            
+            # Metodo 3: Per altri tipi di file giganteschi, offri all'utente la possibilità di scegliere
+            # Questa è un'opzione più avanzata che potrebbe richiedere una UI specifica
+            if file_size > 2.5 * 1024 * 1024 * 1024:  # >2.5GB
+                # Implementa una logica di conferma tramite una variabile globale temporanea
+                if not hasattr(self, '_gigantic_files_confirmed') or file_path not in self._gigantic_files_confirmed:
+                    self.log_debug(f"File gigantesco richiede conferma per l'elaborazione: {os.path.basename(file_path)}")
+                    # Restituisci False per ora, ma imposta un flag per ulteriore elaborazione
+                    self._queue_gigantic_file_for_confirmation(file_path)
+                    return False
+        
+        # Il resto del codice rimane invariato
         ext = os.path.splitext(file_path)[1].lower()
         
         # Attiva sempre la ricerca nei file Office, indipendentemente dal livello di ricerca
@@ -4060,6 +4117,103 @@ class FileSearchApp:
             return True
         
         return False
+
+    @error_handler
+    def _mark_file_for_partial_analysis(self, file_path):
+        """Marca un file per l'analisi parziale invece che completa"""
+        if not hasattr(self, '_partial_analysis_files'):
+            self._partial_analysis_files = set()
+        self._partial_analysis_files.add(file_path)
+
+    @error_handler
+    def _queue_gigantic_file_for_confirmation(self, file_path):
+        """Accoda un file gigantesco per la conferma dell'utente"""
+        if not hasattr(self, '_gigantic_files_queue'):
+            self._gigantic_files_queue = []
+        if not hasattr(self, '_gigantic_files_confirmed'):
+            self._gigantic_files_confirmed = set()
+        
+        if file_path not in self._gigantic_files_queue and file_path not in self._gigantic_files_confirmed:
+            self._gigantic_files_queue.append(file_path)
+            
+            # Schedula un prompt per l'utente se non già in corso
+            if not hasattr(self, '_showing_gigantic_confirmation') or not self._showing_gigantic_confirmation:
+                self._showing_gigantic_confirmation = True
+                self.root.after(100, self._process_gigantic_file_queue)
+
+    @error_handler
+    def _process_gigantic_file_queue(self):
+        """Processa la coda di file giganteschi richiedendo conferma all'utente"""
+        if not hasattr(self, '_gigantic_files_queue') or not self._gigantic_files_queue:
+            self._showing_gigantic_confirmation = False
+            return
+        
+        file_path = self._gigantic_files_queue[0]
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+        formatted_size = self._format_size(file_size)
+        
+        # Calcola il tempo stimato di elaborazione (approssimativo)
+        estimated_time = self._estimate_processing_time(file_size)
+        
+        # Mostra un dialog all'utente
+        message = (f"Il file '{file_name}' è molto grande ({formatted_size}).\n\n"
+                f"L'elaborazione potrebbe richiedere circa {estimated_time}.\n"
+                "Vuoi procedere con l'analisi?")
+        
+        result = messagebox.askyesno("File gigantesco rilevato", message)
+        
+        if result:  # L'utente ha confermato
+            self._gigantic_files_confirmed.add(file_path)
+            # Riesamina il file nella ricerca
+            if hasattr(self, 'redo_search_for_file'):
+                self.redo_search_for_file(file_path)
+        
+        # Rimuovi il file dalla coda
+        self._gigantic_files_queue.pop(0)
+        
+        # Se ci sono altri file nella coda, continua a processarli
+        if self._gigantic_files_queue:
+            self.root.after(100, self._process_gigantic_file_queue)
+        else:
+            self._showing_gigantic_confirmation = False
+
+    @error_handler
+    def _estimate_processing_time(self, file_size):
+        """Stima il tempo di elaborazione per un file di grandi dimensioni"""
+        # Valori empirici basati su test (questi andrebbero regolati in base alle prestazioni reali)
+        bytes_per_second = 25 * 1024 * 1024  # ~25 MB/s per file di testo
+        
+        # Adatta la velocità in base alla dimensione (file più grandi sono più lenti da processare)
+        if file_size > 5 * 1024 * 1024 * 1024:  # >5GB
+            bytes_per_second = 15 * 1024 * 1024  # ~15 MB/s
+        
+        seconds = file_size / bytes_per_second
+        
+        # Formatta il tempo stimato
+        if seconds < 60:
+            return f"{int(seconds)} secondi"
+        elif seconds < 3600:
+            return f"{int(seconds / 60)} minuti"
+        else:
+            hours = int(seconds / 3600)
+            minutes = int((seconds % 3600) / 60)
+            return f"{hours} ore e {minutes} minuti"
+
+    @error_handler
+    def redo_search_for_file(self, file_path):
+        """Riesamina un file specifico nella ricerca corrente"""
+        if not hasattr(self, 'current_search_keywords') or not self.current_search_keywords:
+            return
+        
+        # Esegui la ricerca solo su questo file specifico
+        try:
+            result = self.process_file(file_path, self.current_search_keywords, search_content=True)
+            if result:
+                self.search_results.append(result)
+                self.update_results_list()
+        except Exception as e:
+            self.log_error(f"Errore durante l'elaborazione del file {file_path}", e)
 
     @error_handler
     def should_skip_file(self, file_path):
@@ -6454,8 +6608,6 @@ class FileSearchApp:
                     self.log_debug(f"Directory temporanea rimossa: {temp_dir}")
                 except Exception as e:
                     self.log_debug(f"Errore durante la rimozione della directory temporanea: {str(e)}")
-                
-
     
     @error_handler
     def process_email_attachment(self, attachment_data, attachment_name, content_type):
@@ -6753,6 +6905,218 @@ class FileSearchApp:
                     self.log_debug(f"Directory temporanea rimossa: {temp_dir}")
                 except Exception as e:
                     self.log_debug(f"Errore nella pulizia dei file temporanei: {str(e)}")
+
+    @error_handler
+    def _partial_content_search(self, file_path, keywords):
+        """Esegue una ricerca parziale in un file molto grande"""
+        try:
+            self.log_debug(f"Inizio analisi parziale per file gigantesco: {os.path.basename(file_path)}")
+            file_size = os.path.getsize(file_path)
+            
+            # Definisci quanto analizzare all'inizio e alla fine
+            head_size = 20 * 1024 * 1024  # Primi 20 MB
+            tail_size = 10 * 1024 * 1024  # Ultimi 10 MB
+            
+            # Adatta la dimensione all'analisi in base al file
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
+            # Per file di log, analizza più contenuto all'inizio (eventi recenti)
+            if file_ext in ['.log', '.txt']:
+                head_size = 30 * 1024 * 1024  # 30 MB all'inizio
+                tail_size = 5 * 1024 * 1024   # 5 MB alla fine
+            
+            # Per database, analizza più alla fine (record più recenti)
+            if file_ext in ['.db', '.sqlite', '.mdb']:
+                head_size = 10 * 1024 * 1024  # 10 MB all'inizio
+                tail_size = 25 * 1024 * 1024  # 25 MB alla fine
+            
+            # Crea buffer vuoti per contenere i dati
+            head_data = b''
+            tail_data = b''
+            
+            with open(file_path, 'rb') as f:
+                # Leggi l'inizio del file
+                head_data = f.read(min(head_size, file_size))
+                
+                # Vai alla fine meno tail_size se il file è abbastanza grande
+                if file_size > head_size + tail_size:
+                    f.seek(max(head_size, file_size - tail_size))
+                    # Leggi la fine del file
+                    tail_data = f.read(min(tail_size, file_size - head_size))
+                
+            # Converti i dati binari in testo (gestisce errori di decodifica)
+            encodings = ['utf-8', 'latin-1', 'windows-1252']
+            head_text = ""
+            tail_text = ""
+            
+            # Prova diverse codifiche per decodificare il contenuto
+            for encoding in encodings:
+                try:
+                    head_text = head_data.decode(encoding, errors='ignore')
+                    if tail_data:
+                        tail_text = tail_data.decode(encoding, errors='ignore')
+                    break
+                except:
+                    continue
+            
+            # Se nessuna codifica ha funzionato, usa l'ultima con ignore
+            if not head_text:
+                head_text = head_data.decode('utf-8', errors='ignore')
+            if tail_data and not tail_text:
+                tail_text = tail_data.decode('utf-8', errors='ignore')
+            
+            # Se il file è piccolo o la seconda lettura non ha ottenuto dati
+            if not tail_text or file_size <= head_size + tail_size:
+                combined_text = head_text
+            else:
+                # Unisci i testi con un indicatore che mostra che è un'analisi parziale
+                combined_text = head_text + "\n[...CONTENUTO INTERMEDIO NON ANALIZZATO...]\n" + tail_text
+            
+            # Cerca le keywords nel testo combinato
+            for keyword in keywords:
+                # Verifica corrispondenza intera parola se richiesto
+                if self.whole_word_search.get():
+                    if self.is_whole_word_match(keyword, combined_text):
+                        self.log_debug(f"Match trovato in analisi parziale di file gigantesco: {os.path.basename(file_path)}")
+                        return True
+                # Altrimenti cerca match normale
+                elif keyword.lower() in combined_text.lower():
+                    self.log_debug(f"Match trovato in analisi parziale di file gigantesco: {os.path.basename(file_path)}")
+                    return True
+            
+            self.log_debug(f"Nessun match trovato in analisi parziale di file gigantesco: {os.path.basename(file_path)}")
+            return False
+            
+        except Exception as e:
+            self.log_error(f"Errore durante l'analisi parziale del file {file_path}", e)
+            return False
+
+    @error_handler
+    def _mark_file_for_partial_analysis(self, file_path):
+        """Marca un file per l'analisi parziale invece che completa"""
+        if not hasattr(self, '_partial_analysis_files'):
+            self._partial_analysis_files = set()
+        self._partial_analysis_files.add(file_path)
+        self.log_debug(f"File marcato per analisi parziale: {os.path.basename(file_path)}")
+
+    @error_handler
+    def _queue_gigantic_file_for_confirmation(self, file_path):
+        """Accoda un file gigantesco per la conferma dell'utente"""
+        if not hasattr(self, '_gigantic_files_queue'):
+            self._gigantic_files_queue = []
+        if not hasattr(self, '_gigantic_files_confirmed'):
+            self._gigantic_files_confirmed = set()
+        
+        if file_path not in self._gigantic_files_queue and file_path not in self._gigantic_files_confirmed:
+            self._gigantic_files_queue.append(file_path)
+            self.log_debug(f"File gigantesco accodato per conferma: {os.path.basename(file_path)}")
+            
+            # Schedula un prompt per l'utente se non già in corso
+            if not hasattr(self, '_showing_gigantic_confirmation') or not self._showing_gigantic_confirmation:
+                self._showing_gigantic_confirmation = True
+                if self.root:  # Aggiungi controllo per evitare errori
+                    self.root.after(100, self._process_gigantic_file_queue)
+
+    @error_handler
+    def _process_gigantic_file_queue(self):
+        """Processa la coda di file giganteschi richiedendo conferma all'utente"""
+        if not hasattr(self, '_gigantic_files_queue') or not self._gigantic_files_queue:
+            self._showing_gigantic_confirmation = False
+            return
+        
+        # Verifica se l'interfaccia è disponibile
+        if not self.root or not self.root.winfo_exists():
+            self._showing_gigantic_confirmation = False
+            return
+        
+        file_path = self._gigantic_files_queue[0]
+        file_name = os.path.basename(file_path)
+        
+        try:
+            file_size = os.path.getsize(file_path)
+            formatted_size = self._format_size(file_size)
+            
+            # Calcola il tempo stimato di elaborazione (approssimativo)
+            estimated_time = self._estimate_processing_time(file_size)
+            
+            # Mostra un dialog all'utente
+            message = (f"Il file '{file_name}' è molto grande ({formatted_size}).\n\n"
+                    f"L'elaborazione potrebbe richiedere circa {estimated_time}.\n"
+                    "Vuoi procedere con l'analisi?")
+            
+            from tkinter import messagebox
+            result = messagebox.askyesno("File gigantesco rilevato", message)
+            
+            if result:  # L'utente ha confermato
+                self._gigantic_files_confirmed.add(file_path)
+                self.log_debug(f"Utente ha confermato l'analisi del file gigantesco: {file_name}")
+                # Riesamina il file nella ricerca
+                if hasattr(self, 'current_search_keywords') and self.current_search_keywords:
+                    self.root.after(100, lambda: self.redo_search_for_file(file_path))
+        except Exception as e:
+            self.log_error(f"Errore nel processare la conferma per file gigantesco: {file_path}", e)
+        
+        # Rimuovi il file dalla coda
+        if self._gigantic_files_queue:
+            self._gigantic_files_queue.pop(0)
+        
+        # Se ci sono altri file nella coda, continua a processarli
+        if self._gigantic_files_queue:
+            self.root.after(100, self._process_gigantic_file_queue)
+        else:
+            self._showing_gigantic_confirmation = False
+
+    @error_handler
+    def _estimate_processing_time(self, file_size):
+        """Stima il tempo di elaborazione per un file di grandi dimensioni"""
+        # Valori empirici basati su test (questi andrebbero regolati in base alle prestazioni reali)
+        bytes_per_second = 25 * 1024 * 1024  # ~25 MB/s per file di testo
+        
+        # Adatta la velocità in base alla dimensione (file più grandi sono più lenti da processare)
+        if file_size > 5 * 1024 * 1024 * 1024:  # >5GB
+            bytes_per_second = 15 * 1024 * 1024  # ~15 MB/s
+        elif file_size > 3 * 1024 * 1024 * 1024:  # >3GB
+            bytes_per_second = 20 * 1024 * 1024  # ~20 MB/s
+        
+        seconds = file_size / bytes_per_second
+        
+        # Formatta il tempo stimato
+        if seconds < 60:
+            return f"{int(seconds)} secondi"
+        elif seconds < 3600:
+            return f"{int(seconds / 60)} minuti"
+        else:
+            hours = int(seconds / 3600)
+            minutes = int((seconds % 3600) / 60)
+            return f"{hours} ore e {minutes} minuti"
+
+    @error_handler
+    def redo_search_for_file(self, file_path):
+        """Riesamina un file specifico nella ricerca corrente"""
+        if not hasattr(self, 'current_search_keywords') or not self.current_search_keywords:
+            self.log_debug(f"Impossibile eseguire ricerca su file {os.path.basename(file_path)}: nessuna keyword impostata")
+            return
+        
+        self.log_debug(f"Esecuzione ricerca sul file confermato: {os.path.basename(file_path)}")
+        
+        # Esegui la ricerca solo su questo file specifico
+        try:
+            # Rimuovi il file dai processati, se presente
+            normalized_path = os.path.normpath(os.path.abspath(file_path))
+            if hasattr(self, 'processed_files') and normalized_path in self.processed_files:
+                self.processed_files.remove(normalized_path)
+            
+            # Process file può restituire None se non trova match
+            result = self.process_file(file_path, self.current_search_keywords, search_content=True)
+            if result:
+                if not hasattr(self, 'search_results'):
+                    self.search_results = []
+                self.search_results.append(result)
+                self.log_debug(f"Match trovato nel file gigantesco confermato: {os.path.basename(file_path)}")
+                if hasattr(self, 'update_results_list'):
+                    self.update_results_list()
+        except Exception as e:
+            self.log_error(f"Errore durante l'elaborazione del file {file_path}", e)
 
     @error_handler
     def update_progress(self):
@@ -10576,21 +10940,21 @@ class FileSearchApp:
                         "potrebbero sovraccaricare connessioni lente.")
 
         # Ottimizzazione File Grandi
-        large_file_frame = ttk.LabelFrame(performance_frame, text="Ottimizzazione File Grandi", padding=10)
+        large_file_frame = ttk.LabelFrame(performance_frame, text="Ricerca su File Grandi", padding=10)
         large_file_frame.pack(fill=X, pady=10)
 
         large_file_grid = ttk.Frame(large_file_frame)
         large_file_grid.pack(fill=X)
 
-        # Checkbox per abilitare ottimizzazione file grandi
+        # Checkbox per abilitare ricerca in file grandi
         large_file_var = BooleanVar(value=getattr(self, 'large_file_search_enabled', True))
-        large_file_check = ttk.Checkbutton(large_file_grid, text="Ottimizza ricerca in file di grandi dimensioni", 
-                                        variable=large_file_var)
-        large_file_check.grid(row=0, column=0, columnspan=2, sticky=W, padx=5, pady=5)
+        large_file_check = ttk.Checkbutton(large_file_grid, text="Includi file di grandi dimensioni nella ricerca", 
+                                        variable=large_file_var, command=lambda: toggle_size_controls())
+        large_file_check.grid(row=0, column=0, columnspan=4, sticky=W, padx=5, pady=5)
         self.create_tooltip(large_file_check, 
-                        "Abilita ottimizzazioni per la gestione efficiente di file di grandi dimensioni.\n"
-                        "Riduce il consumo di memoria e aumenta le prestazioni durante la ricerca\n"
-                        "in file XML, JSON, CSV, log e altri file di grandi dimensioni.")
+                            "Quando attivata, l'applicazione analizzerà anche i file di grandi dimensioni.\n"
+                            "Per file giganteschi (>2GB), verranno applicate tecniche di analisi parziale.\n"
+                            "Disattivare questa opzione accelera la ricerca escludendo file di grandi dimensioni.")
 
         # Soglia file grandi
         large_threshold_label = ttk.Label(large_file_grid, text="Soglia file grandi (MB):")
@@ -10613,6 +10977,44 @@ class FileSearchApp:
                         "Dimensione in MB oltre la quale un file viene considerato 'enorme'.\n"
                         "Per questi file verranno applicate ulteriori ottimizzazioni e\n"
                         "potrebbero essere analizzati solo parzialmente per garantire prestazioni.")
+
+        # Soglia file medi
+        medium_threshold_label = ttk.Label(large_file_grid, text="Soglia file medi (MB):")
+        medium_threshold_label.grid(row=2, column=0, sticky=W, padx=5, pady=5)
+        medium_file_threshold_var = IntVar(value=getattr(self, 'medium_file_threshold', 10 * 1024 * 1024) // (1024 * 1024))
+        medium_file_threshold = ttk.Spinbox(large_file_grid, from_=1, to=100, width=5, textvariable=medium_file_threshold_var)
+        medium_file_threshold.grid(row=2, column=1, padx=5, pady=5, sticky=W)
+        self.create_tooltip(medium_file_threshold, 
+                        "Dimensione in MB oltre la quale un file viene considerato 'medio'.\n"
+                        "I file che superano questa soglia potrebbero richiedere ottimizzazioni leggere.")
+
+        # Soglia file giganteschi
+        gigantic_threshold_label = ttk.Label(large_file_grid, text="Soglia file giganteschi (MB):")
+        gigantic_threshold_label.grid(row=2, column=2, sticky=W, padx=20, pady=5)
+        gigantic_file_threshold_var = IntVar(value=getattr(self, 'gigantic_file_threshold', 2048 * 1024 * 1024) // (1024 * 1024))
+        gigantic_file_threshold = ttk.Spinbox(large_file_grid, from_=1000, to=10000, width=5, textvariable=gigantic_file_threshold_var)
+        gigantic_file_threshold.grid(row=2, column=3, padx=5, pady=5, sticky=W)
+        self.create_tooltip(gigantic_file_threshold, 
+                        "Dimensione in MB oltre la quale un file viene considerato 'gigantesco'.\n"
+                        "Per questi file verranno richieste conferme aggiuntive e\n"
+                        "saranno analizzati con tecniche speciali per evitare problemi di memoria.")
+        # Funzione per abilitare/disabilitare i controlli delle soglie
+        def toggle_size_controls():
+            enabled = large_file_var.get()
+            state = "normal" if enabled else "disabled"
+            
+            # Aggiorna stato dei controlli
+            medium_threshold_label.configure(state=state)
+            medium_file_threshold.configure(state=state)
+            large_threshold_label.configure(state=state)
+            large_file_threshold.configure(state=state)
+            huge_threshold_label.configure(state=state)
+            huge_file_threshold.configure(state=state)
+            gigantic_threshold_label.configure(state=state)
+            gigantic_file_threshold.configure(state=state)
+
+        # Imposta lo stato iniziale dei controlli
+        toggle_size_controls()
 
         toggle_memory_slider()
         # Pulsanti finali per la finestra
@@ -10847,8 +11249,10 @@ class FileSearchApp:
 
                 # Salva le opzioni per file di grandi dimensioni
                 self.large_file_search_enabled = large_file_var.get()
-                self.large_file_threshold = large_file_threshold_var.get() * 1024 * 1024  # Converte da MB a byte
-                self.huge_file_threshold = huge_file_threshold_var.get() * 1024 * 1024    # Converte da MB a byte
+                self.large_file_threshold = large_file_threshold_var.get() * 1024 * 1024
+                self.huge_file_threshold = huge_file_threshold_var.get() * 1024 * 1024
+                self.medium_file_threshold = medium_file_threshold_var.get() * 1024 * 1024
+                self.gigantic_file_threshold = gigantic_file_threshold_var.get() * 1024 * 1024
 
                 # Aggiorna il LargeFileHandler se è stato inizializzato
                 if hasattr(self, 'large_file_handler'):
