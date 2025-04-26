@@ -8070,6 +8070,26 @@ class FileSearchApp:
     @error_handler
     def get_directory_size(self, path):
         """Calculate the total size of a directory"""
+        # Implementazione di una cache in memoria per risultati recenti
+        if not hasattr(self, '_dir_size_cache'):
+            self._dir_size_cache = {}
+            self._dir_size_cache_timestamp = {}
+        
+        # Controllo rapido in cache
+        cache_valid = False
+        if path in self._dir_size_cache:
+            # Verifica se il risultato in cache è ancora valido (max 60 secondi)
+            if time.time() - self._dir_size_cache_timestamp.get(path, 0) < 60:
+                cache_valid = True
+                # Ulteriore verifica: controlla se la directory è stata modificata
+                try:
+                    if os.path.exists(path):
+                        last_modified = os.path.getmtime(path)
+                        if last_modified <= self._dir_size_cache_timestamp.get(f"{path}_mtime", 0):
+                            return self._dir_size_cache[path]
+                except:
+                    pass
+        
         if not os.path.exists(path):
             return 0
             
@@ -8083,68 +8103,361 @@ class FileSearchApp:
             max_time = 30  # massimo 30 secondi
             files_count = 0
             error_count = 0
+            
+            # Ottimizzazione 1: Usa set per tracciare i percorsi già visitati
+            visited = set()
+            
+            # Ottimizzazione 2: Buffer per file da processare e aggiornamenti UI più rari
+            file_batch = []
+            batch_size = 0
+            update_interval = 0.5  # aggiorna UI ogni 0.5 secondi
+            last_update = time.time()
                 
             # For directories, walk through all files and subdirectories
             for dirpath, dirnames, filenames in os.walk(path):
+                # Ottimizzazione 3: Salta directory già visitate (simbolici o hardlink)
+                if dirpath in visited:
+                    continue
+                visited.add(dirpath)
+                
+                # Ottimizzazione 4: Processa i file in batch
                 for f in filenames:
                     # Verifica se il timeout è scaduto
                     if time.time() - start_time > max_time:
                         self.log_debug(f"Timeout nel calcolo della dimensione per {path}")
+                        # Salva il risultato parziale in cache
+                        self._dir_size_cache[path] = total_size
+                        self._dir_size_cache_timestamp[path] = time.time()
+                        self._dir_size_cache_timestamp[f"{path}_mtime"] = os.path.getmtime(path) if os.path.exists(path) else 0
                         return total_size
-                        
-                    try:
-                        fp = os.path.join(dirpath, f)
-                        
-                        # Verifica esplicita che il file esiste ancora prima di tentare di leggerne la dimensione
-                        if os.path.exists(fp) and not os.path.islink(fp):
-                            total_size += os.path.getsize(fp)
-                            files_count += 1
-                    except FileNotFoundError:
-                        # Ignora silenziosamente i file che non esistono più
-                        pass
-                    except (OSError, PermissionError) as e:
-                        error_count += 1
-                        # Limita il numero di errori da registrare per evitare spam nel log
-                        if error_count < 100:  
-                            self.log_debug(f"Error getting size of {fp}: {str(e)}")
-                
-                # Update the status periodically to show progress
-                if files_count % 1000 == 0:  # Ogni 1000 file
-                    self.root.after(0, lambda size=total_size: 
-                        self.status_label.config(text=f"Calcolando dimensione: {self._format_size(size)}..."))
                     
+                    fp = os.path.join(dirpath, f)
+                    file_batch.append(fp)
+                    batch_size += 1
+                    
+                    # Processa il batch quando raggiunge una dimensione appropriata
+                    if batch_size >= 100:
+                        total_size += self._process_file_batch(file_batch, error_count)
+                        files_count += batch_size - error_count
+                        batch_size = 0
+                        file_batch = []
+                    
+                    # Update the status periodically to show progress
+                    current_time = time.time()
+                    if current_time - last_update > update_interval:
+                        self.root.after(0, lambda size=total_size: 
+                            self.status_label.config(text=f"Calcolando dimensione: {self._format_size(size)}...") 
+                            if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
+                        last_update = current_time
+            
+            # Processa gli ultimi file rimasti
+            if file_batch:
+                total_size += self._process_file_batch(file_batch, error_count)
+            
+            # Salva il risultato in cache
+            self._dir_size_cache[path] = total_size
+            self._dir_size_cache_timestamp[path] = time.time()
+            self._dir_size_cache_timestamp[f"{path}_mtime"] = os.path.getmtime(path) if os.path.exists(path) else 0
+                
             return total_size
         except Exception as e:
             self.log_debug(f"Error calculating directory size for {path}: {str(e)}")
             return 0
-    
+
+    @error_handler
+    def _process_file_batch(self, file_batch, error_count):
+        """Processo un batch di file per calcolare la dimensione totale"""
+        batch_size = 0
+        for fp in file_batch:
+            try:
+                # Verifica esplicita che il file esiste ancora prima di tentare di leggerne la dimensione
+                if os.path.exists(fp) and not os.path.islink(fp):
+                    batch_size += os.path.getsize(fp)
+            except FileNotFoundError:
+                # Ignora silenziosamente i file che non esistono più
+                pass
+            except (OSError, PermissionError) as e:
+                error_count += 1
+                # Limita il numero di errori da registrare per evitare spam nel log
+                if error_count < 100:  
+                    self.log_debug(f"Error getting size of {fp}: {str(e)}")
+        return batch_size
+
     @error_handler
     def get_directory_size_system(self, path):
         """Utilizza comandi di sistema per ottenere dimensioni di directory molto grandi"""
+        # Cache system per comandi di sistema
+        if not hasattr(self, '_system_size_cache'):
+            self._system_size_cache = {}
+            self._system_size_timestamp = {}
+        
+        # Verifica cache per risultati recenti
+        if path in self._system_size_cache:
+            if time.time() - self._system_size_timestamp.get(path, 0) < 120:  # 2 minuti
+                return self._system_size_cache[path]
+        
+        # Verifica se è un'unità disco completa o una directory troppo grande
+        is_root_drive = False
+        try:
+            if os.name == 'nt':
+                # Verifica se è una radice di unità come "C:/" o "C:\"
+                if path.endswith(':\\') or path.endswith(':/'):
+                    is_root_drive = True
+                elif len(path) <= 3 and path[1:] == ':\\':  # come "C:\"
+                    is_root_drive = True
+        except:
+            pass
+        
+        # Se è una radice di unità, fallback al metodo di stima
+        if is_root_drive:
+            self.log_debug(f"Rilevata richiesta per unità disco completa: {path}. Uso metodo di stima.")
+            return self.estimate_directory_size(path)
+        
+        # Tenta di ottenere il numero di file per verificare se è una directory molto grande
+        try:
+            file_count = 0
+            dir_count = 0
+            for _, dirs, files in os.walk(path, topdown=True):
+                file_count += len(files)
+                dir_count += len(dirs)
+                # Se la directory contiene troppi file/cartelle, usa il metodo di stima
+                if file_count + dir_count > 50000:
+                    self.log_debug(f"Directory troppo grande per comando di sistema: {path} ({file_count} file). Uso metodo di stima.")
+                    return self.estimate_directory_size(path)
+                # Limita la scansione iniziale
+                if file_count > 1000:
+                    break
+        except:
+            pass
+        
         try:
             if os.name == 'nt':  # Windows
-                # Aggiungiamo il flag CREATE_NO_WINDOW per nascondere la finestra CMD
                 import platform
-                CREATE_NO_WINDOW = 0x08000000  # Per versioni di Python precedenti alla 3.7
+                CREATE_NO_WINDOW = 0x08000000
                 
-                # Usa PowerShell ma nascondendo la finestra CMD
-                cmd = f'powershell -command "Get-ChildItem -Path \'{path}\' -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum | Select-Object -ExpandProperty Sum"'
-                result = subprocess.check_output(
-                    cmd, 
-                    shell=True, 
-                    stderr=subprocess.STDOUT,
-                    creationflags=CREATE_NO_WINDOW)
-                size = int(result.strip())
-                return size
-            # Puoi rimuovere la parte Linux come richiesto
+                # Imposta un timeout più breve per evitare blocchi
+                timeout = 30  # 30 secondi massimo
+                
+                # Usa robocopy che è più affidabile per questa operazione
+                cmd = f'robocopy "{path}" NULL /L /S /NJH /BYTES /NC /NFL /NDL /XJ'
+                
+                startupinfo = None
+                if hasattr(subprocess, 'STARTUPINFO'):
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = 0  # SW_HIDE
+                
+                try:
+                    result = subprocess.check_output(
+                        cmd, 
+                        stderr=subprocess.STDOUT,
+                        timeout=timeout,
+                        creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                        startupinfo=startupinfo)
+                    
+                    # Estrazione della dimensione dal risultato
+                    output = result.decode('utf-8', errors='ignore')
+                    size = 0
+                    
+                    # Cerca la riga con il totale bytes
+                    for line in output.splitlines():
+                        if "Bytes :" in line:
+                            # Trova numeri nella stringa
+                            size_str = line.split("Bytes :")[1].strip()
+                            try:
+                                # Rimuove eventuali separatori di migliaia
+                                size_str = size_str.replace(',', '').replace('.', '')
+                                size = int(size_str)
+                                break
+                            except ValueError:
+                                pass
+                    
+                    # Memorizza in cache
+                    self._system_size_cache[path] = size
+                    self._system_size_timestamp[path] = time.time()
+                    
+                    return size
+                    
+                except subprocess.TimeoutExpired:
+                    self.log_debug(f"Timeout durante il calcolo della dimensione per {path}")
+                    return self.estimate_directory_size(path)
+                    
+                except Exception as e:
+                    self.log_debug(f"Fallito metodo robocopy: {str(e)}. Provo con PowerShell.")
+                    
+                    # Prova con PowerShell come backup se robocopy fallisce
+                    try:
+                        ps_cmd = f'powershell -command "Get-ChildItem -Path \'{path}\' -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum | Select-Object -ExpandProperty Sum"'
+                        
+                        result = subprocess.check_output(
+                            ps_cmd, 
+                            shell=True, 
+                            stderr=subprocess.STDOUT,
+                            timeout=timeout,
+                            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                            startupinfo=startupinfo)
+                        
+                        size = int(result.strip())
+                        
+                        # Memorizza in cache
+                        self._system_size_cache[path] = size
+                        self._system_size_timestamp[path] = time.time()
+                        
+                        return size
+                    except:
+                        # Fallback finale al metodo di stima
+                        return self.estimate_directory_size(path)
         except Exception as e:
             self.log_error(f"Errore nel calcolo della dimensione della directory: {str(e)}")
-            return 0
-    
+            # Se fallisce il metodo system, prova con un metodo alternativo
+            return self.estimate_directory_size(path)
+
+    @error_handler
+    def _calculate_dir_size_thread(self, path):
+        """Thread function to calculate directory size with improved disk handling"""
+        # Limita il carico di lavoro per evitare blocchi del sistema
+        import threading
+        try:
+            # Imposta una priorità più bassa per questo thread
+            if hasattr(threading.current_thread(), "setName"):
+                threading.current_thread().name = "LowPriority_DirSize"
+        except:
+            pass
+            
+        calculation_mode = self.dir_size_calculation.get()
+        dir_size = 0
+        
+        try:
+            # Verifica se è un'unità disco
+            is_drive_root = False
+            if os.name == 'nt':
+                if path.endswith(':\\') or path.endswith(':/'):
+                    is_drive_root = True
+                elif len(path) <= 3 and path[1:] == ':':
+                    is_drive_root = True
+            
+            # Per unità disco, usa sempre il metodo accurato
+            if is_drive_root:
+                self.log_debug(f"Rilevata unità disco: {path}, utilizzo metodo accurato")
+                accurate_size = self.get_disk_accurate_size(path)
+                if accurate_size is not None:
+                    dir_size = accurate_size
+                    # Aggiorna l'interfaccia
+                    if self.root and self.root.winfo_exists():
+                        self.root.after(0, lambda: self.dir_size_var.set(self._format_size(dir_size)))
+                        self.root.after(0, lambda: self.status_label.config(text="In attesa...") 
+                                    if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
+                    return
+            
+            # Per le directory normali o se il metodo accurato fallisce, usa il metodo selezionato
+            if calculation_mode == "preciso":
+                dir_size = self.get_directory_size(path)
+            elif calculation_mode == "stimato":
+                dir_size = self.estimate_directory_size(path)
+            elif calculation_mode == "sistema":
+                dir_size = self.get_directory_size_system(path)
+            else:  # incrementale o fallback
+                dir_size = self.get_directory_size(path)
+                
+            # Update the UI from the main thread - CORREZIONE con check
+            if self.root and self.root.winfo_exists():
+                self.root.after(0, lambda: self.dir_size_var.set(self._format_size(dir_size)))
+                self.root.after(0, lambda: self.status_label.config(text="In attesa...") 
+                            if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
+        
+        except Exception as e:
+            self.log_debug(f"Errore nel calcolo della dimensione: {str(e)}")
+            if self.root and self.root.winfo_exists():
+                self.root.after(0, lambda: self.dir_size_var.set("Errore"))
+                self.root.after(0, lambda: self.status_label.config(text="In attesa...") 
+                            if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
+
+    @error_handler
+    def get_disk_accurate_size(self, drive_path):
+        """Calcola la dimensione reale dei dati su un'unità disco completa
+        utilizzando le API di Windows che forniscono dati più accurati."""
+        # Verifica se il percorso è una radice di unità
+        is_drive_root = False
+        drive_letter = None
+        
+        try:
+            if os.name == 'nt':
+                # Normalizza il percorso
+                if drive_path.endswith(':\\') or drive_path.endswith(':/'):
+                    is_drive_root = True
+                    drive_letter = drive_path[0]
+                elif len(drive_path) <= 3 and drive_path[1:] == ':':
+                    is_drive_root = True
+                    drive_letter = drive_path[0]
+        except:
+            pass
+        
+        if not is_drive_root or not drive_letter:
+            # Non è un'unità disco, usa il metodo standard
+            self.log_debug(f"Il percorso {drive_path} non è un'unità disco, utilizzo metodo standard")
+            return None
+        
+        try:
+            # Usa WMI per ottenere informazioni accurate sul disco
+            try:
+                import pythoncom
+                import wmi
+                import sys
+                
+            except ImportError:
+                self.log_debug("Libreria WMI non disponibile, utilizzo statistiche del sistema operativo")
+                # Fallback a shutil.disk_usage che è più accurato di get_directory_size per unità intere
+                total, used, free = shutil.disk_usage(drive_letter + ":\\")
+                return used
+            
+            # Inizializza COM in questo thread
+            pythoncom.CoInitialize()
+            
+            c = wmi.WMI()
+            
+            # Ottieni un'istanza più affidabile di DriveType=3 (disco locale)
+            for logical_disk in c.Win32_LogicalDisk(DriveType=3):
+                if logical_disk.DeviceID[0].lower() == drive_letter.lower():
+                    # Ottieni le dimensioni dal sistema operativo in modo affidabile
+                    used_space = int(logical_disk.Size) - int(logical_disk.FreeSpace)
+                    
+                    self.log_debug(f"Dimensione unità {drive_letter}: totale={self._format_size(int(logical_disk.Size))}, "
+                                f"usato={self._format_size(used_space)}, "
+                                f"libero={self._format_size(int(logical_disk.FreeSpace))}")
+                    
+                    # Restituisci lo spazio utilizzato, che è il dato più rilevante
+                    return used_space
+            
+            # Se non troviamo il disco specifico, usiamo shutil come fallback
+            self.log_debug(f"Disco {drive_letter} non trovato via WMI, uso metodo standard")
+            total, used, free = shutil.disk_usage(drive_letter + ":\\")
+            return used
+        
+        except Exception as e:
+            self.log_debug(f"Errore nel calcolo accurato della dimensione del disco {drive_letter}: {str(e)}")
+            return None
+        finally:
+            # Rilascia COM
+            try:
+                if 'pythoncom' in sys.modules:
+                    pythoncom.CoUninitialize()
+            except:
+                pass
+
     @error_handler
     def estimate_directory_size(self, path, sample_size=100):
-        """Stima la dimensione di una directory campionando alcuni file"""
+        """Stima la dimensione di una directory campionando alcuni file - Versione ottimizzata"""
         import random
+        
+        # Usa la cache quando disponibile
+        if not hasattr(self, '_estimate_size_cache'):
+            self._estimate_size_cache = {}
+            self._estimate_timestamp = {}
+        
+        # Verifica cache validità 5 minuti
+        if path in self._estimate_size_cache:
+            if time.time() - self._estimate_timestamp.get(path, 0) < 300:
+                return self._estimate_size_cache[path]
         
         if not os.path.exists(path) or os.path.isfile(path):
             return self.get_directory_size(path)  # Usa il metodo esatto per file o percorsi non validi
@@ -8155,41 +8468,64 @@ class FileSearchApp:
             sampled_files = 0
             total_sampled_size = 0
             
-            # Prima passata veloce per contare i file
-            for root, _, files in os.walk(path, topdown=True):
-                total_files += len(files)
-                # Limita il tempo della prima passata
-                if total_files > 10000:  # Se ci sono più di 10000 file, passiamo alla stima
-                    break
+            # Ottimizzazione: campionamento progressivo durante la scansione
+            file_paths = []
             
+            # Prima passata veloce combinata con campionamento
+            for root, _, files in os.walk(path, topdown=True):
+                # Aggiungi conteggio file
+                file_count = len(files)
+                total_files += file_count
+                
+                # Seleziona alcuni file da questo batch per il campionamento
+                # Campiona in modo uniforme ma non randomico (più efficiente)
+                if files and total_files < 50000:  # Limita la raccolta per grandi directory
+                    # Seleziona alcuni file da questo batch in modo più efficiente
+                    step = max(1, len(files) // min(10, sample_size // 10 + 1))
+                    for i in range(0, len(files), step):
+                        if len(file_paths) < sample_size * 2:  # Raccogliamo più file del necessario
+                            file_paths.append(os.path.join(root, files[i]))
+                
+                # Limita il tempo della prima passata ma assicura un campione minimo
+                if total_files > 10000 and len(file_paths) >= sample_size:
+                    break
+                    
             # Se pochi file, usare metodo preciso
-            if total_files < 1000:
+            if total_files < 500:
                 return self.get_directory_size(path)
                 
-            # Seconda passata per il campionamento
-            for root, _, files in os.walk(path, topdown=True):
-                for file in files:
-                    # Campiona casualmente 1 file ogni X
-                    if random.randint(1, max(1, total_files // sample_size)) == 1:
-                        try:
-                            file_path = os.path.join(root, file)
-                            if os.path.exists(file_path) and not os.path.islink(file_path):
-                                total_sampled_size += os.path.getsize(file_path)
-                                sampled_files += 1
-                        except:
-                            pass
-                    
-                    # Se abbiamo campionato abbastanza file, calcola la stima
-                    if sampled_files >= sample_size:
-                        break
+            # Seconda fase: calcola dimensione dei file campionati
+            # Usa un sottoinsieme casuale dei percorsi dei file per un campione rappresentativo
+            if len(file_paths) > sample_size:
+                random.shuffle(file_paths)
+                file_paths = file_paths[:sample_size]
                 
-                if sampled_files >= sample_size:
-                    break
+            for file_path in file_paths:
+                try:
+                    if os.path.exists(file_path) and not os.path.islink(file_path):
+                        file_size = os.path.getsize(file_path)
+                        total_sampled_size += file_size
+                        sampled_files += 1
+                        
+                        # Feedback progressivo
+                        if sampled_files % 10 == 0:
+                            avg_so_far = total_sampled_size / sampled_files
+                            est_so_far = avg_so_far * total_files
+                            if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                                self.root.after(0, lambda s=self._format_size(est_so_far): 
+                                        self.status_label.config(text=f"Stima dimensione: {s}..."))
+                except:
+                    pass
             
             # Calcola la stima finale
             if sampled_files > 0:
                 avg_file_size = total_sampled_size / sampled_files
                 estimated_size = avg_file_size * total_files
+                
+                # Salva in cache
+                self._estimate_size_cache[path] = estimated_size
+                self._estimate_timestamp[path] = time.time()
+                
                 self.log_debug(f"Dimensione stimata per {path}: {self._format_size(estimated_size)} (basata su {sampled_files} campioni)")
                 return estimated_size
             else:
@@ -8198,6 +8534,48 @@ class FileSearchApp:
         except Exception as e:
             self.log_debug(f"Errore nella stima della dimensione: {str(e)}")
             return 0
+
+    @error_handler
+    def refresh_directory_size(self):
+        """Aggiorna manualmente il calcolo della dimensione della directory - Versione ottimizzata"""
+        # Ottieni il percorso corrente
+        path = self.search_path.get()
+        
+        # Verifica che il percorso esista
+        if not path or not os.path.exists(path):
+            messagebox.showinfo("Informazione", "Seleziona prima un percorso valido")
+            return
+            
+        # Verifica la modalità di calcolo
+        calculation_mode = self.dir_size_calculation.get()
+        if calculation_mode == "disabilitato":
+            response = messagebox.askyesno("Calcolo disabilitato", 
+                                        "Il calcolo della dimensione è attualmente disabilitato.\n\n" +
+                                        "Vuoi attivarlo e procedere con il calcolo?")
+            if response:
+                # Seleziona la modalità "preciso"
+                self.dir_size_calculation.set("preciso")
+            else:
+                return
+        
+        # Aggiorna lo stato
+        self.dir_size_var.set("Calcolo in corso...")
+        if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+            self.status_label.config(text="Calcolo dimensione directory...")
+        
+        # Interrompi eventuali thread in esecuzione
+        if hasattr(self, '_dir_size_thread') and self._dir_size_thread is not None:
+            # Segnala interruzione
+            if hasattr(self, '_stop_calculation'):
+                self._stop_calculation = True
+        
+        # Flag per eventuali interruzioni
+        self._stop_calculation = False
+        
+        # Esegui il calcolo in un thread separato
+        self._dir_size_thread = threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True)
+        self._dir_size_thread.start()
+
     @error_handler
     def get_disk_space(self, path):
         """Get disk space information for the partition containing the path"""
@@ -8345,70 +8723,6 @@ class FileSearchApp:
         else:
             self.root.after(0, lambda: self.dir_size_var.set("Calcolo disattivato"))
     
-    @error_handler
-    def _calculate_dir_size_thread(self, path):
-        """Thread function to calculate directory size"""
-        # Limita il carico di lavoro per evitare blocchi del sistema
-        import threading
-        try:
-            # Imposta una priorità più bassa per questo thread
-            if hasattr(threading.current_thread(), "setName"):
-                threading.current_thread().name = "LowPriority_DirSize"
-        except:
-            pass
-            
-        calculation_mode = self.dir_size_calculation.get()
-        dir_size = 0
-        
-        try:
-            if calculation_mode == "preciso":
-                dir_size = self.get_directory_size(path)
-            elif calculation_mode == "stimato":
-                dir_size = self.estimate_directory_size(path)
-            elif calculation_mode == "sistema":
-                dir_size = self.get_directory_size_system(path)
-            else:  # incrementale o fallback
-                dir_size = self.get_directory_size(path)
-                
-            # Update the UI from the main thread - CORREZIONE con check
-            if self.root and self.root.winfo_exists():
-                self.root.after(0, lambda: self.dir_size_var.set(self._format_size(dir_size)))
-                self.root.after(0, lambda: self.status_label.config(text="In attesa...") if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
-        except Exception as e:
-            self.log_debug(f"Errore nel calcolo della dimensione: {str(e)}")
-            if self.root and self.root.winfo_exists():
-                self.root.after(0, lambda: self.dir_size_var.set("Errore"))
-                self.root.after(0, lambda: self.status_label.config(text="In attesa...") if hasattr(self, 'status_label') and self.status_label.winfo_exists() else None)
-
-    @error_handler
-    def refresh_directory_size(self):
-        """Aggiorna manualmente il calcolo della dimensione della directory"""
-        # Ottieni il percorso corrente
-        path = self.search_path.get()
-        
-        # Verifica che il percorso esista
-        if not path or not os.path.exists(path):
-            messagebox.showinfo("Informazione", "Seleziona prima un percorso valido")
-            return
-            
-        # Verifica la modalità di calcolo
-        calculation_mode = self.dir_size_calculation.get()
-        if calculation_mode == "disabilitato":
-            response = messagebox.askyesno("Calcolo disabilitato", 
-                                        "Il calcolo della dimensione è attualmente disabilitato.\n\n" +
-                                        "Vuoi attivarlo e procedere con il calcolo?")
-            if response:
-                # Seleziona la modalità "preciso"
-                self.dir_size_calculation.set("preciso")
-            else:
-                return
-        
-        # Aggiorna lo stato
-        self.dir_size_var.set("Calcolo in corso...")
-        self.status_label.config(text="Calcolo dimensione directory...")
-        
-        # Esegui il calcolo in un thread separato
-        threading.Thread(target=self._calculate_dir_size_thread, args=(path,), daemon=True).start()
 
     @error_handler # Funzione helper per formattare la dimensione del file
     def _format_size(self, size_bytes):
