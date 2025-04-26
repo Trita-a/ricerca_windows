@@ -30,6 +30,7 @@ import webbrowser
 import win32com.client
 import pythoncom
 import hashlib
+import uuid
 
 # Import necessari per Windows Search
 try:
@@ -10853,6 +10854,7 @@ class FileSearchApp:
                     "• stimato: più veloce ma approssimato\n"
                     "• sistema: usa comandi di sistema esterni\n"
                     "• disabilitato: non calcolare le dimensioni")
+        
         # Gestione memoria (Aggiunta)
         memory_frame = ttk.LabelFrame(performance_frame, text="Gestione memoria", padding=10)
         memory_frame.pack(fill=tk.X, pady=10)
@@ -10863,19 +10865,51 @@ class FileSearchApp:
         auto_memory_check = ttk.Checkbutton(memory_frame, text="Gestione automatica della memoria", variable=auto_memory_var)
         auto_memory_check.pack(anchor=tk.W, pady=5)
 
+        # Creiamo un frame contenitore per le due label affiancate
+        labels_container = ttk.Frame(memory_frame)
+        labels_container.pack(fill=tk.X, padx=5, pady=2)
+
+        # Creiamo la label che mostrerà la percentuale attuale (a sinistra)
+        memory_slider_label = ttk.Label(labels_container, text=f"Soglia utilizzo RAM: {memory_percent_var.get()}%")
+        memory_slider_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        # Nuova label per visualizzare la quantità di RAM corrispondente (a destra)
+        memory_ram_value_label = ttk.Label(labels_container, text="")
+        memory_ram_value_label.pack(side=tk.LEFT)
+
+        # Funzione per calcolare e aggiornare la RAM corrispondente alla percentuale
+        def update_ram_value_display():
+            percent = memory_percent_var.get()
+            try:
+                total_ram = psutil.virtual_memory().total / (1024 ** 3)
+                ram_threshold = total_ram * (percent / 100)
+                memory_ram_value_label.config(
+                    text=f"(Equivalente a {ram_threshold:.2f} GB di {total_ram:.2f} GB totali)"
+                )
+            except Exception as e:
+                memory_ram_value_label.config(
+                    text="(Errore nel calcolo della RAM)"
+                )
+
+        # Funzione per aggiornare il testo della label con la percentuale corrente
+        def update_slider_label(*args):
+            memory_slider_label.config(text=f"Soglia utilizzo RAM: {memory_percent_var.get()}%")
+            update_ram_value_display()  # Aggiorna anche la visualizzazione della RAM
+
+        # Utilizziamo trace_add invece di trace (che è deprecato)
+        memory_percent_var.trace_add("write", update_slider_label)
+
         def toggle_memory_slider():
             if auto_memory_var.get():
                 # When auto memory is enabled, reset slider to default 75%
                 memory_slider.set(75)
                 memory_slider.config(state="disabled")
+                # Le label si aggiorneranno automaticamente grazie al trace
             else:
                 # When manual control is enabled, enable slider
                 memory_slider.config(state="normal")
 
         auto_memory_check.config(command=toggle_memory_slider)
-
-        memory_slider_label = ttk.Label(memory_frame, text="Soglia utilizzo RAM (%):")
-        memory_slider_label.pack(anchor=tk.W, padx=5, pady=5)
 
         memory_slider = ttk.Scale(memory_frame, from_=10, to=95, orient=tk.HORIZONTAL,
                                 variable=memory_percent_var, command=lambda v: memory_percent_var.set(int(float(v))))
@@ -10887,7 +10921,7 @@ class FileSearchApp:
                 total_ram = psutil.virtual_memory().total / (1024 ** 3)
                 ram_usage = total_ram * (percent / 100)
                 memory_details_label.config(
-                    text=f"RAM utilizzabile: {ram_usage:.2f} GB di {total_ram:.2f} GB totali"
+                    text=f"RAM utilizzabile: {total_ram:.2f} GB totali"
                 )
             except Exception as e:
                 memory_details_label.config(
@@ -10895,10 +10929,37 @@ class FileSearchApp:
                 )
                 print(f"Errore nel calcolo della RAM: {e}")
 
-        memory_percent_var.trace("w", lambda *args: update_memory_details())
         memory_details_label = ttk.Label(memory_frame, text="")
         memory_details_label.pack(anchor=tk.W, padx=5, pady=5)
         update_memory_details()
+        update_ram_value_display()  # Inizializza la visualizzazione della RAM
+
+        self.create_tooltip(auto_memory_check, 
+                        "Quando attivata, l'applicazione gestisce automaticamente la memoria\n"
+                        "regolando la soglia al 75% e applicando ottimizzazioni quando necessario.\n"
+                        "Consigliato per la maggior parte degli utenti.")
+
+        self.create_tooltip(memory_slider, 
+                            "Imposta la soglia percentuale di utilizzo della RAM oltre la quale\n"
+                            "l'applicazione attiva automaticamente meccanismi di ottimizzazione.\n\n"
+                            "Quando l'utilizzo della memoria supera questa soglia, vengono attivate:\n"
+                            "• Pulizia della cache di ricerca\n"
+                            "• Raccolta automatica dei rifiuti (garbage collection)\n"
+                            "• Limitazione dei processi paralleli\n"
+                            "• Ottimizzazione delle strutture dati\n\n"
+                            "Valori più bassi (60-70%) riducono il rischio di rallentamenti ma\n"
+                            "potrebbero causare frequenti ottimizzazioni. Valori più alti (80-90%)\n"
+                            "massimizzano le prestazioni ma possono causare picchi di utilizzo RAM.")
+
+        # Aggiorniamo il tooltip per coprire entrambe le label nel container
+        self.create_tooltip(labels_container, 
+                            "Mostra la soglia percentuale di memoria RAM e il corrispondente\n"
+                            "valore in GB oltre il quale l'applicazione avvia procedure\n"
+                            "di ottimizzazione della memoria.")
+
+        self.create_tooltip(memory_details_label, 
+                            "Riepilogo delle impostazioni di gestione della memoria\n"
+                            "e del loro impatto sulle risorse del sistema.")
 
         # Ottimizzazione Rete
         network_frame = ttk.LabelFrame(performance_frame, text="Ottimizzazione Rete", padding=10)
@@ -11079,9 +11140,17 @@ class FileSearchApp:
             network_retry_var.set(3)
             network_parallel_var.set(4)
             
-            large_file_var.set(True)
-            large_file_threshold_var.set(50)
-            huge_file_threshold_var.set(500)
+            
+            # Ripristina i valori predefiniti per le soglie dei file
+            large_file_var.set(True)  # Abilita ricerca file grandi di default
+            # Ripristina valori predefiniti in MB (divisi per 1024*1024 per ottenere MB)
+            medium_file_threshold_var.set(10)  # 10 MB
+            large_file_threshold_var.set(50)   # 50 MB
+            huge_file_threshold_var.set(500)   # 500 MB
+            gigantic_file_threshold_var.set(2048)  # 2 GB = 2048 MB
+            
+            # Riattiva i controlli delle soglie se erano disabilitati
+            toggle_size_controls()
 
             # Mostra conferma all'utente
             messagebox.showinfo("Ripristino", "I valori predefiniti sono stati ripristinati.")
@@ -11695,8 +11764,7 @@ class FileSearchApp:
     def create_tooltip(self, widget, text, delay=500, fade=True):
         """Crea tooltip con ritardo, effetti di dissolvenza e larghezza automatica"""
         
-        tooltip_timer = None
-        fade_timer = None
+        tooltip_timer = None        
         
         def show_tooltip():
             x = widget.winfo_rootx() + 25
@@ -11762,17 +11830,8 @@ class FileSearchApp:
             widget._tooltip = tooltip
             
             if fade:
-                # Effetto dissolvenza in entrata
-                def fade_in(alpha=0.0):
-                    if not hasattr(widget, "_tooltip"):
-                        return
-                    
-                    tooltip.attributes("-alpha", alpha)
-                    if alpha < 1.0:
-                        nonlocal fade_timer
-                        fade_timer = widget.after(20, lambda: fade_in(alpha + 0.1))
-                
-                fade_in()
+                # Avvia il fade in utilizzando la nuova funzione generica
+                self.fade(tooltip, 0.0, 1.0, 0.1)
         
         def enter(event):
             nonlocal tooltip_timer
@@ -11780,49 +11839,98 @@ class FileSearchApp:
             tooltip_timer = widget.after(delay, show_tooltip)
         
         def leave(event):
-            nonlocal tooltip_timer, fade_timer
+            nonlocal tooltip_timer
             
             # Cancella il timer se esiste
             if tooltip_timer:
                 widget.after_cancel(tooltip_timer)
                 tooltip_timer = None
             
-            # Cancella il timer di dissolvenza se esiste
-            if fade_timer:
-                widget.after_cancel(fade_timer)
-                fade_timer = None
-            
             # Rimuovi il tooltip se esiste
             if hasattr(widget, "_tooltip"):
+                tooltip = widget._tooltip
+                
+                def destroy_tooltip():
+                    try:
+                        if hasattr(widget, "_tooltip"):
+                            del widget._tooltip
+                        tooltip.destroy()
+                    except Exception:
+                        pass  # Ignora errori durante la distruzione
+                        
                 if fade:
-                    # Effetto dissolvenza in uscita
-                    def fade_out(alpha=1.0):
-                        if alpha <= 0 or not hasattr(widget, "_tooltip"):
-                            if hasattr(widget, "_tooltip"):
-                                widget._tooltip.destroy()
-                                del widget._tooltip
-                        else:
-                            widget._tooltip.attributes("-alpha", alpha)
-                            nonlocal fade_timer
-                            fade_timer = widget.after(20, lambda: fade_out(alpha - 0.1))
-                    
-                    fade_out()
+                    # Tenta di avviare il fade out
+                    try:
+                        self.fade(tooltip, 1.0, 0.0, -0.1, destroy_tooltip)
+                    except Exception:
+                        # Se il fade fallisce, distruggi immediatamente
+                        destroy_tooltip()
                 else:
-                    widget._tooltip.destroy()
-                    del widget._tooltip
+                    destroy_tooltip()
         
         # Gestisce anche il caso in cui il widget venga distrutto
         def on_destroy(event):
-            nonlocal tooltip_timer, fade_timer
+            nonlocal tooltip_timer
             if tooltip_timer:
                 widget.after_cancel(tooltip_timer)
-            if fade_timer and hasattr(widget, "_tooltip"):
-                widget.after_cancel(fade_timer)
+            if hasattr(widget, "_tooltip"):
                 widget._tooltip.destroy()
         
         widget.bind("<Enter>", enter)
         widget.bind("<Leave>", leave)
         widget.bind("<Destroy>", on_destroy)
+
+    @error_handler
+    def fade(self, widget, from_alpha, to_alpha, step, callback=None):
+        """Anima la trasparenza di un widget da un valore alpha a un altro."""
+        # Memorizza l'ID del widget per verificare se è lo stesso nelle chiamate successive
+        widget_id = str(widget)
+        
+        # Imposta l'alpha iniziale
+        try:
+            if not widget.winfo_exists():
+                return  # Il widget non esiste più
+            widget.attributes("-alpha", from_alpha)
+        except (tk.TclError, RuntimeError, Exception) as e:
+            self.log_error(f"Errore nell'inizializzazione dell'animazione fade: {e}")
+            return
+        
+        # Funzione interna per gestire l'animazione frame per frame
+        def update_alpha(current_alpha=from_alpha):
+            # Verifica se il widget esiste ancora e ha lo stesso ID
+            try:
+                if not widget.winfo_exists() or str(widget) != widget_id:
+                    return  # Il widget non esiste più o è cambiato
+                    
+                # Calcola il nuovo valore alpha
+                new_alpha = current_alpha + step
+                
+                # Controlla se l'animazione è completa
+                if (step > 0 and new_alpha >= to_alpha) or (step < 0 and new_alpha <= to_alpha):
+                    # Imposta il valore finale esatto
+                    widget.attributes("-alpha", to_alpha)
+                    # Esegui il callback se fornito
+                    if callback:
+                        try:
+                            callback()
+                        except Exception as e:
+                            self.log_error(f"Errore nell'esecuzione del callback di fade: {e}")
+                    return
+                
+                # Altrimenti, continua l'animazione
+                widget.attributes("-alpha", new_alpha)
+                widget.after(20, lambda: update_alpha(new_alpha))
+                    
+            except (tk.TclError, RuntimeError, Exception) as e:
+                # Log dell'errore ma senza interrompere l'applicazione
+                self.log_debug(f"Animazione fade interrotta: {e}")
+                return
+        
+        # Avvia l'animazione
+        try:
+            widget.after(20, update_alpha)
+        except (tk.TclError, RuntimeError, Exception) as e:
+            self.log_debug(f"Impossibile avviare l'animazione fade: {e}")
 
     def select_all(self):
         self.results_list.selection_set(self.results_list.get_children())
@@ -11901,7 +12009,62 @@ class FileSearchApp:
             else:
                 # Rimuovi eventuali indicatori di ordinamento da altre colonne
                 tv.heading(c, text=tv.heading(c, 'text').split(' ')[0])
+    
+    @error_handler
+    def fade(self, widget, from_alpha, to_alpha, step, callback=None):
+        """Anima la trasparenza di un widget con gestione robusta degli errori."""
+        # Aggiungiamo un ID di animazione univoco al widget
+        animation_id = str(uuid.uuid4())
         
+        try:
+            # Assegna l'ID dell'animazione al widget
+            widget._fade_animation_id = animation_id
+            widget.attributes("-alpha", from_alpha)
+        except Exception:
+            return  # Widget non più valido, abbandona l'animazione
+        
+        def update_alpha(current_alpha=from_alpha):
+            try:
+                # Verifica che il widget esista ancora e che l'animazione non sia stata sostituita
+                if not hasattr(widget, '_fade_animation_id') or widget._fade_animation_id != animation_id:
+                    return  # Animazione cancellata o sostituita
+                    
+                # Calcola il nuovo valore alpha
+                new_alpha = current_alpha + step
+                
+                # Controlla se l'animazione è completa
+                if (step > 0 and new_alpha >= to_alpha) or (step < 0 and new_alpha <= to_alpha):
+                    try:
+                        widget.attributes("-alpha", to_alpha)
+                        # Rimuovi l'ID dell'animazione
+                        if hasattr(widget, '_fade_animation_id'):
+                            del widget._fade_animation_id
+                        # Esegui il callback in modo sicuro
+                        if callback:
+                            try:
+                                callback()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass  # Ignora gli errori finali
+                    return
+                
+                # Continua l'animazione
+                try:
+                    widget.attributes("-alpha", new_alpha)
+                    widget.after(20, lambda: update_alpha(new_alpha))
+                except Exception:
+                    pass  # Ignora gli errori e termina l'animazione
+                    
+            except Exception:
+                pass  # Ignora qualsiasi errore e termina l'animazione
+        
+        # Avvia l'animazione
+        try:
+            widget.after(20, update_alpha)
+        except Exception:
+            pass  # Avvio animazione fallito, abbandona
+
     @error_handler # Show debug log window with export functionality
     def show_debug_log(self):
         """Mostra una finestra con i log di debug e funzionalità di filtraggio, rispettando il tema corrente"""
