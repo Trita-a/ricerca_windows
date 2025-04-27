@@ -47,7 +47,7 @@ if platform.system() == "Windows":
     CREATE_NO_WINDOW = 0x08000000  # Per Python < 3.7
 
 # Informazioni sulla versione dell'applicazione
-APP_VERSION = "V9.2.8"
+APP_VERSION = "V9.3.0"
 APP_STAGE = "Beta"
 APP_NAME = "File Search Tool"
 APP_FULL_NAME = f"{APP_NAME} {APP_VERSION} {APP_STAGE}"
