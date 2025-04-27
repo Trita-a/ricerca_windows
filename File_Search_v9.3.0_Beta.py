@@ -3,12 +3,13 @@ import csv
 import functools
 import gc
 import getpass
+import hashlib
 import io
+import json
 import mimetypes
 import os
-import psutil
+import platform
 import queue
-import rarfile
 import re
 import shutil
 import signal
@@ -19,18 +20,19 @@ import threading
 import time
 import tkinter as tk
 import traceback
+import uuid
+import webbrowser
 import zipfile
 from datetime import datetime
 from tkinter import filedialog, messagebox, BooleanVar, StringVar, IntVar
-import ttkbootstrap as ttk
-from ttkbootstrap.constants import *
-import platform
-import json
-import webbrowser
-import win32com.client
+
+# Third-party imports
+import psutil
 import pythoncom
-import hashlib
-import uuid
+import rarfile
+import ttkbootstrap as ttk
+import win32com.client
+from ttkbootstrap.constants import *
 
 # Import necessari per Windows Search
 try:
@@ -1963,10 +1965,14 @@ class FileSearchApp:
         return descendants
     
     @error_handler
-    def set_controls_state(self, enabled=True, control_type=None, widget=None):
+    def set_controls_state(self, enabled=True, control_type=None, widget=None, exclude_widgets=None):
         """Imposta lo stato abilitato/disabilitato per i controlli dell'interfaccia utente."""
         # Stabilisci lo stato da applicare
         state = "normal" if enabled else "disabled"
+        
+        # Se exclude_widgets non è specificato, inizializzalo come lista vuota
+        if exclude_widgets is None:
+            exclude_widgets = []
         
         # Usa il widget root se non è specificato un widget di partenza
         if widget is None:
@@ -1979,6 +1985,10 @@ class FileSearchApp:
         control_type_lower = control_type.lower() if control_type else None
         
         for w in descendants:
+            # Salta questo widget se è nella lista dei widget da escludere
+            if w in exclude_widgets:
+                continue
+                
             widget_type = w.winfo_class().lower()
             
             # Salta il widget se è richiesto un tipo specifico e questo non corrisponde
@@ -2026,8 +2036,9 @@ class FileSearchApp:
                 
     @error_handler
     def disable_all_controls(self):
-        """Disabilita tutti i controlli UI durante la ricerca"""
-        self.set_controls_state(enabled=False)
+        """Disabilita tutti i controlli UI durante la ricerca eccetto il debug log button"""
+        # Assumendo che self.debug_log_button sia il riferimento al pulsante debug log
+        self.set_controls_state(enabled=False, exclude_widgets=[self.debug_button])       
         
     @error_handler
     def enable_all_controls(self):
@@ -9972,13 +9983,13 @@ class FileSearchApp:
         search_depth_combo.pack(side=LEFT, padx=5)
         search_depth_combo.current(0)
 
-        extensions_btn = ttk.Button(search_options, text="Configura estensioni", 
+        extensions_btn = ttk.Button(search_options, text="📄 Configura estensioni", 
                             command=lambda: self.configure_extensions(self.search_depth.get()))
         extensions_btn.pack(side=LEFT, padx=5)
         self.create_tooltip(extensions_btn, "Configura quali estensioni di file includere nella ricerca")
 
         # Pulsante impostazioni avanzate
-        advanced_options_btn = ttk.Button(search_options, text="Impostazioni avanzate", 
+        advanced_options_btn = ttk.Button(search_options, text="⚙ Impostazioni avanzate", 
                                         command=self.show_advanced_options)
         advanced_options_btn.pack(side=LEFT, padx=10)
         self.create_tooltip(advanced_options_btn, "Configura tutte le impostazioni avanzate (profondità, filtri, esclusioni, performance)")
@@ -9999,7 +10010,7 @@ class FileSearchApp:
         self.create_tooltip(self.search_button, "Avvia la ricerca con i criteri specificati")
 
         # Pulsante per interrompere la ricerca
-        self.stop_button = ttk.Button(action_buttons, text="Interrompi ricerca",
+        self.stop_button = ttk.Button(action_buttons, text="⏹️ Interrompi ricerca",
                                     command=self.stop_search_process,
                                     style="danger.TButton", width=20,
                                     state="disabled")
@@ -10007,7 +10018,7 @@ class FileSearchApp:
         self.create_tooltip(self.stop_button, "Ferma immediatamente la ricerca in corso")
 
         # Pulsante per pulire i campi di ricerca
-        self.clear_btn = ttk.Button(action_buttons, text="Pulisci campi", 
+        self.clear_btn = ttk.Button(action_buttons, text="🧹 Pulisci campi", 
                     command=lambda: [self.search_path.set(""), self.keywords.set("")],
                     style="secondary.Outline.TButton", width=15)
         self.clear_btn.pack(side=LEFT, padx=10)
@@ -10015,10 +10026,10 @@ class FileSearchApp:
 
         # Pulsante admin solo su Windows
         if os.name == 'nt':
-            self.admin_button = ttk.Button(action_buttons, text="Avvia come Admin", 
+            self.admin_button = ttk.Button(action_buttons, text="🛡️Avvia Admin", 
                                     command=self.restart_as_admin,
                                     style="info.Outline.TButton", width=20)
-            self.admin_button.pack(side=LEFT, padx=10)
+            self.admin_button.pack(side=LEFT, padx=0)
             
             # Disabilita il pulsante se l'app è già avviata come amministratore
             if self.is_admin:
@@ -10105,7 +10116,7 @@ class FileSearchApp:
         self.status_label.pack(side=LEFT, fill=X, expand=YES, padx=5)
 
         # Add Debug Button on the right side of the status row
-        self.debug_button = ttk.Button(status_row, text="Debug Log", command=self.show_debug_log, 
+        self.debug_button = ttk.Button(status_row, text="📊 Debug Log", command=self.show_debug_log, 
                                     style="info.Outline.TButton", width=12)
         self.debug_button.pack(side=RIGHT, padx=5)
         self.create_tooltip(self.debug_button, "Mostra la finestra di debug con log dettagliati sulla ricerca in corso")
@@ -10131,11 +10142,11 @@ class FileSearchApp:
         selection_frame = ttk.Frame(actions_frame)
         selection_frame.pack(side=LEFT)
 
-        select_all_btn = ttk.Button(selection_frame, text="Seleziona tutto", command=self.select_all)
+        select_all_btn = ttk.Button(selection_frame, text="☑ Seleziona tutto", command=self.select_all)
         select_all_btn.pack(side=LEFT, padx=2)
         self.create_tooltip(select_all_btn, "Seleziona tutti i risultati nella lista")
 
-        deselect_all_btn = ttk.Button(selection_frame, text="Deseleziona tutto", command=self.deselect_all)
+        deselect_all_btn = ttk.Button(selection_frame, text="☐ Deseleziona tutto", command=self.deselect_all)
         deselect_all_btn.pack(side=LEFT, padx=2)
         self.create_tooltip(deselect_all_btn, "Deseleziona tutti i risultati")
 
@@ -10159,19 +10170,19 @@ class FileSearchApp:
         action_frame = ttk.Frame(actions_frame)
         action_frame.pack(side=RIGHT)
 
-        self.copy_button = ttk.Button(action_frame, text="Copia selezionati",
+        self.copy_button = ttk.Button(action_frame, text="📋 Copia selezionati",
                                     command=self.copy_selected,
                                     style="TButton")
         self.copy_button.pack(side=LEFT, padx=5)
         self.create_tooltip(self.copy_button, "Copia i file selezionati nella directory specificata")
 
-        self.compress_button = ttk.Button(action_frame, text="Comprimi selezionati",
+        self.compress_button = ttk.Button(action_frame, text="📦 Comprimi selezionati",
                                         command=self.compress_selected,
                                         style="TButton")
         self.compress_button.pack(side=LEFT, padx=5)
         self.create_tooltip(self.compress_button, "Comprimi i file selezionati in un archivio ZIP")
 
-        self.view_log_button = ttk.Button(action_frame, text="Visualizza file esclusi",
+        self.view_log_button = ttk.Button(action_frame, text="🚫 Visualizza file esclusi",
                                         command=self.view_skipped_files_log,
                                         style="secondary.TButton")
         self.view_log_button.pack(side=LEFT, padx=5)
@@ -12606,3 +12617,4 @@ if __name__ == "__main__":
                 f"I dettagli sono stati salvati nel file error_log.txt")
         except:
             pass  # Se anche la visualizzazione del messaggio fallisce, continua
+
