@@ -3,6 +3,7 @@ import csv
 import functools
 import gc
 import getpass
+import glob
 import hashlib
 import io
 import json
@@ -2120,8 +2121,22 @@ class FileSearchApp:
         timestamp_full = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]  # Con millisecondi
         timestamp_short = timestamp_full.split(' ')[1]  # Solo l'ora per i log concisi
         
+        # MODIFICA QUI: Eccezioni speciali per messaggi sui file binari
+        binary_file_messages = [
+            "file binario ignorato per estrazione testo",
+            "file rilevato come binario",
+            "file ignorato per estrazione contenuto (binario)"
+        ]
+        
+        # Verifica se è un messaggio riguardante file binari che non dovrebbe essere segnalato come errore
+        is_binary_file_info = any(phrase in message.lower() for phrase in binary_file_messages)
+        
         # Rilevamento automatico dei messaggi di errore o warning
-        if any(keyword in message.lower() for keyword in ["error", "exception", "failed", "errore", "eccezione", "fallito"]):
+        if is_binary_file_info:
+            # Formattazione per messaggi sui file binari (come INFO, non ERRORE)
+            log_message_full = f"[INFO] {timestamp_full} - {message}"
+            log_message_short = f"[{timestamp_short}] [INFO] {message}"
+        elif any(keyword in message.lower() for keyword in ["error", "exception", "failed", "errore", "eccezione", "fallito"]):
             # Formattazione speciale per gli errori
             log_message_full = f"[ERRORE] {timestamp_full} - {message}"
             log_message_short = f"[{timestamp_short}] [ERRORE] {message}"
@@ -2196,92 +2211,211 @@ class FileSearchApp:
 
     @error_handler
     def log_current_settings(self, context="ricerca"):
-        """Funzione centralizzata per registrare le impostazioni correnti nel log."""
-        # Determina l'intestazione in base al contesto
-        if context == "ricerca":
-            header = "===== INIZIO RICERCA CON LE SEGUENTI IMPOSTAZIONI ====="
-            footer = "===== FINE LOGGING IMPOSTAZIONI - INIZIO RICERCA ====="
-        
-        # Registra l'intestazione
-        self.log_debug(header)
-        
-        # Log delle estensioni
-        mode = getattr(self, 'extension_mode', 'base')
+        """Funzione centralizzata per registrare le impostazioni correnti nel log con gestione degli errori robusta."""
         try:
-            extensions = self.get_extension_settings(mode)
-            self.log_debug(f"Saved {len(extensions)} extensions for {mode} mode")
-            self.log_debug(f"Extensions: {', '.join(extensions)}")
-            self.log_debug(f"Aggiornata UI per modalità {mode}")
+            # Log esplicito per debug
+            print(f"Avvio log_current_settings con context={context}...")
+            
+            # Determina l'intestazione in base al contesto
+            if context == "ricerca":
+                header = "===== INIZIO RICERCA CON LE SEGUENTI IMPOSTAZIONI ====="
+                footer = "===== FINE LOGGING IMPOSTAZIONI - INIZIO RICERCA ====="
+            else:
+                # Intestazioni predefinite per altri contesti
+                header = f"===== IMPOSTAZIONI ATTUALI ({context}) ====="
+                footer = f"===== FINE IMPOSTAZIONI ({context}) ====="
+            
+            # Registra l'intestazione
+            self.log_debug(header)
+            
+            # ---- IMPOSTAZIONI DI BASE ----
+            self.log_debug("--- IMPOSTAZIONI DI BASE ---")
+            
+            # Percorso di ricerca
+            search_path = self.search_path.get() if hasattr(self, 'search_path') else "Non impostato"
+            self.log_debug(f"Percorso di ricerca: {search_path}")
+            
+            # Parole chiave
+            keywords = self.search_keywords.get() if hasattr(self, 'search_keywords') else "Non impostato"
+            self.log_debug(f"Parole chiave: {keywords}")
+            
+            # Opzioni di ricerca principali
+            try:
+                search_files = self.search_files.get() if hasattr(self, 'search_files') else "N/A"
+                self.log_debug(f"Cerca nei file: {search_files}")
+            except Exception as e:
+                self.log_debug(f"Errore nel leggere 'search_files': {str(e)}")
+                
+            try:
+                search_folders = self.search_folders.get() if hasattr(self, 'search_folders') else "N/A"
+                self.log_debug(f"Cerca nelle cartelle: {search_folders}")
+            except Exception as e:
+                self.log_debug(f"Errore nel leggere 'search_folders': {str(e)}")
+                
+            try:
+                search_content = self.search_content.get() if hasattr(self, 'search_content') else "N/A"
+                self.log_debug(f"Cerca nei contenuti: {search_content}")
+            except Exception as e:
+                self.log_debug(f"Errore nel leggere 'search_content': {str(e)}")
+            
+            try:
+                whole_word = getattr(self, 'whole_word', tk.BooleanVar()).get()
+                self.log_debug(f"Parole intere: {whole_word}")
+            except Exception as e:
+                self.log_debug(f"Errore nel leggere 'whole_word': {str(e)}")
+            
+            # ---- IMPOSTAZIONI ESTENSIONI ----
+            self.log_debug("--- IMPOSTAZIONI ESTENSIONI ---")
+            try:
+                mode = getattr(self, 'search_depth', tk.StringVar()).get()
+                self.log_debug(f"Modalità estensioni: {mode}")
+                extensions = self.get_extension_settings(mode)
+                if extensions:
+                    self.log_debug(f"Estensioni ({len(extensions)}): {', '.join(extensions)}")
+                else:
+                    self.log_debug("Nessuna estensione specifica configurata")
+            except Exception as e:
+                self.log_debug(f"Errore nel recupero delle estensioni: {str(e)}")
+            
+            # ---- FILTRI AVANZATI ----
+            self.log_debug("--- FILTRI AVANZATI ---")
+            try:
+                if hasattr(self, 'advanced_filters') and isinstance(self.advanced_filters, dict):
+                    size_min_kb = self.advanced_filters.get('size_min', 0) // 1024
+                    size_max_kb = self.advanced_filters.get('size_max', 0) // 1024
+                    date_min = self.advanced_filters.get('date_min', '')
+                    date_max = self.advanced_filters.get('date_max', '')
+                    
+                    self.log_debug(f"Dimensione min (KB): {size_min_kb}")
+                    self.log_debug(f"Dimensione max (KB): {size_max_kb}")
+                    self.log_debug(f"Data min: '{date_min}'")
+                    self.log_debug(f"Data max: '{date_max}'")
+                else:
+                    self.log_debug("Filtri avanzati non configurati")
+            except Exception as e:
+                self.log_debug(f"Errore nei filtri avanzati: {str(e)}")
+            
+            # ---- GESTIONE MEMORIA ----
+            self.log_debug("--- GESTIONE MEMORIA ---")
+            try:
+                auto_memory = getattr(self, 'auto_memory_management', False)
+                memory_percent = getattr(self, 'memory_usage_percent', 38)
+                self.log_debug(f"Gestione memoria automatica: {auto_memory}")
+                self.log_debug(f"Percentuale utilizzo memoria: {memory_percent}%")
+                
+                # Memory limits
+                max_memory = getattr(self, 'max_memory_mb', tk.IntVar()).get() if hasattr(self, 'max_memory_mb') else "N/A"
+                self.log_debug(f"Limite memoria (MB): {max_memory}")
+            except Exception as e:
+                self.log_debug(f"Errore gestione memoria: {str(e)}")
+            
+            # ---- IMPOSTAZIONI PERFORMANCE ----
+            self.log_debug("--- IMPOSTAZIONI PERFORMANCE ---")
+            try:
+                # Ricerca di sistema (Windows Search)
+                use_system_search = getattr(self, 'use_system_search', tk.BooleanVar()).get() if hasattr(self, 'use_system_search') else "N/A"
+                self.log_debug(f"Usa ricerca di sistema: {use_system_search}")
+                
+                # Thread worker
+                worker_threads = getattr(self, 'worker_threads', tk.IntVar()).get() if hasattr(self, 'worker_threads') else "N/A"
+                self.log_debug(f"Thread worker: {worker_threads}")
+                
+                # Gestione file grandi
+                large_file_opt = getattr(self, 'large_file_search_enabled', True)
+                self.log_debug(f"Ottimizzazione file grandi: {large_file_opt}")
+                
+                # Blocchi di elaborazione
+                files_per_block = getattr(self, 'max_files_per_block', tk.IntVar()).get() if hasattr(self, 'max_files_per_block') else "N/A"
+                parallel_blocks = getattr(self, 'max_parallel_blocks', tk.IntVar()).get() if hasattr(self, 'max_parallel_blocks') else "N/A"
+                self.log_debug(f"File per blocco: {files_per_block}")
+                self.log_debug(f"Blocchi paralleli: {parallel_blocks}")
+                
+                # Ottimizzazione percorsi di rete
+                network_paths = getattr(self, 'optimize_network_paths', tk.BooleanVar()).get() if hasattr(self, 'optimize_network_paths') else "N/A"
+                self.log_debug(f"Ottimizzazione percorsi di rete: {network_paths}")
+                
+                # Calcolo dimensioni directory
+                dir_size_calc = getattr(self, 'dir_size_calculation', tk.StringVar()).get() if hasattr(self, 'dir_size_calculation') else "N/A"
+                self.log_debug(f"Calcolo dimensioni directory: {dir_size_calc}")
+                
+                # Profondità di ricerca
+                max_depth = getattr(self, 'max_depth', 0)
+                self.log_debug(f"Profondità massima ricerca: {max_depth}")
+                
+            except Exception as e:
+                self.log_debug(f"Errore impostazioni performance: {str(e)}")
+            
+            # ---- IMPOSTAZIONI BLOCCHI ----
+            self.log_debug("--- IMPOSTAZIONI BLOCCHI ---")
+            try:
+                files_per_block = getattr(self, 'max_files_per_block', tk.IntVar()).get() if hasattr(self, 'max_files_per_block') else "N/A"
+                parallel_blocks = getattr(self, 'max_parallel_blocks', tk.IntVar()).get() if hasattr(self, 'max_parallel_blocks') else "N/A"
+                auto_adjust = getattr(self, 'block_size_auto_adjust', tk.BooleanVar()).get() if hasattr(self, 'block_size_auto_adjust') else "N/A"
+                prioritize = getattr(self, 'prioritize_user_folders', tk.BooleanVar()).get() if hasattr(self, 'prioritize_user_folders') else "N/A"
+                
+                self.log_debug(f"File per blocco: {files_per_block}")
+                self.log_debug(f"Blocchi paralleli: {parallel_blocks}")
+                self.log_debug(f"Auto-adattamento blocchi: {auto_adjust}")
+                self.log_debug(f"Priorità cartelle utente: {prioritize}")
+            except Exception as e:
+                self.log_debug(f"Errore impostazioni blocchi: {str(e)}")
+            
+            # ---- TIMEOUT E LIMITI ----
+            self.log_debug("--- TIMEOUT E LIMITI ---")
+            try:
+                timeout_enabled = getattr(self, 'timeout_enabled', tk.BooleanVar()).get() if hasattr(self, 'timeout_enabled') else "N/A"
+                timeout_seconds = getattr(self, 'timeout_seconds', tk.IntVar()).get() if hasattr(self, 'timeout_seconds') else "N/A"
+                max_files = getattr(self, 'max_files_to_check', tk.IntVar()).get() if hasattr(self, 'max_files_to_check') else "N/A"
+                max_results = getattr(self, 'max_results', tk.IntVar()).get() if hasattr(self, 'max_results') else "N/A"
+                worker_threads = getattr(self, 'worker_threads', tk.IntVar()).get() if hasattr(self, 'worker_threads') else "N/A"
+                max_file_size = getattr(self, 'max_file_size_mb', tk.IntVar()).get() if hasattr(self, 'max_file_size_mb') else "N/A"
+                dir_size_calc = getattr(self, 'dir_size_calculation', tk.StringVar()).get() if hasattr(self, 'dir_size_calculation') else "N/A"
+                
+                self.log_debug(f"Timeout attivo: {timeout_enabled}")
+                self.log_debug(f"Secondi timeout: {timeout_seconds}")
+                self.log_debug(f"Max file da controllare: {max_files}")
+                self.log_debug(f"Max risultati: {max_results}")
+                self.log_debug(f"Thread paralleli: {worker_threads}")
+                self.log_debug(f"Dimensione max file (MB): {max_file_size}")
+                self.log_debug(f"Modalità calcolo dimensioni: '{dir_size_calc}'")
+            except Exception as e:
+                self.log_debug(f"Errore timeout e limiti: {str(e)}")
+            
+            # ---- PERCORSI ESCLUSI ----
+            self.log_debug("--- PERCORSI ESCLUSI ---")
+            try:
+                excluded_paths = getattr(self, 'excluded_paths', [])
+                if excluded_paths:
+                    self.log_debug(f"Numero percorsi esclusi: {len(excluded_paths)}")
+                    self.log_debug("Percorsi esclusi:")
+                    for idx, path in enumerate(excluded_paths, 1):
+                        self.log_debug(f"  {idx}. {path}")
+                else:
+                    self.log_debug("Nessun percorso escluso configurato")
+            except Exception as e:
+                self.log_debug(f"Errore percorsi esclusi: {str(e)}")
+            
+            # Registra il footer
+            self.log_debug(footer)
+            print("log_current_settings completato con successo")
+            return True
+            
         except Exception as e:
-            self.log_debug(f"Errore nel recupero delle estensioni: {str(e)}")
-        
-        # Log del percorso delle impostazioni
-        settings_path = os.path.join(os.path.expanduser('~'), '.file_search_tool', 'application_settings.json')
-        self.log_debug(f"Impostazioni dell'applicazione salvate in {settings_path}")
-        
-        # Log delle impostazioni di ricerca
-        self.log_debug(f"Profondità ricerca: {getattr(self, 'max_depth', 0)}")
-        self.log_debug(f"Cerca nei file: {self.search_files.get()}")
-        self.log_debug(f"Cerca nelle cartelle: {self.search_folders.get()}")
-        self.log_debug(f"Cerca nei contenuti: {self.search_content.get()}")
-        self.log_debug(f"Parole intere: {getattr(self, 'whole_word_search', tk.BooleanVar()).get()}")
-        
-        # Log dei filtri avanzati
-        size_min_kb = getattr(self, 'advanced_filters', {}).get('size_min', 0) // 1024
-        size_max_kb = getattr(self, 'advanced_filters', {}).get('size_max', 0) // 1024
-        self.log_debug(f"Dimensione min (KB): {size_min_kb}")
-        self.log_debug(f"Dimensione max (KB): {size_max_kb}")
-        
-        date_min = getattr(self, 'advanced_filters', {}).get('date_min', '')
-        date_max = getattr(self, 'advanced_filters', {}).get('date_max', '')
-        self.log_debug(f"Data min: '{date_min}'")
-        self.log_debug(f"Data max: '{date_max}'")
-        
-        # Log delle impostazioni di gestione memoria
-        auto_memory = getattr(self, 'auto_memory_management', False)
-        memory_percent = getattr(self, 'memory_usage_percent', 38)
-        self.log_debug(f"Gestione memoria automatica: {auto_memory}")
-        self.log_debug(f"Percentuale utilizzo memoria: {memory_percent}%")
-        
-        # Log delle impostazioni di blocco
-        files_per_block = getattr(self, 'max_files_per_block', tk.IntVar()).get()
-        parallel_blocks = getattr(self, 'max_parallel_blocks', tk.IntVar()).get()
-        auto_adjust = getattr(self, 'block_size_auto_adjust', tk.BooleanVar()).get()
-        prioritize = getattr(self, 'prioritize_user_folders', tk.BooleanVar()).get()
-        self.log_debug(f"File per blocco: {files_per_block}")
-        self.log_debug(f"Blocchi paralleli: {parallel_blocks}")
-        self.log_debug(f"Auto-adattamento blocchi: {auto_adjust}")
-        self.log_debug(f"Priorità cartelle utente: {prioritize}")
-        
-        # Log delle impostazioni di timeout e limiti
-        timeout_enabled = getattr(self, 'timeout_enabled', tk.BooleanVar()).get()
-        timeout_seconds = getattr(self, 'timeout_seconds', tk.IntVar()).get()
-        max_files = getattr(self, 'max_files_to_check', tk.IntVar()).get()
-        max_results = getattr(self, 'max_results', tk.IntVar()).get()
-        worker_threads = getattr(self, 'worker_threads', tk.IntVar()).get()
-        max_file_size = getattr(self, 'max_file_size_mb', tk.IntVar()).get()
-        dir_size_calc = getattr(self, 'dir_size_calculation', tk.StringVar()).get()
-        
-        self.log_debug(f"Timeout attivo: {timeout_enabled}")
-        self.log_debug(f"Secondi timeout: {timeout_seconds}")
-        self.log_debug(f"Max file da controllare: {max_files}")
-        self.log_debug(f"Max risultati: {max_results}")
-        self.log_debug(f"Thread paralleli: {worker_threads}")
-        self.log_debug(f"Dimensione max file (MB): {max_file_size}")
-        self.log_debug(f"Modalità calcolo dimensioni: '{dir_size_calc}'")
-        
-        # Log dei percorsi esclusi
-        excluded_paths = getattr(self, 'excluded_paths', [])
-        if excluded_paths:
-            self.log_debug(f"Numero percorsi esclusi: {len(excluded_paths)}")
-            self.log_debug("Percorsi esclusi:")
-            for idx, path in enumerate(excluded_paths, 1):
-                self.log_debug(f"  {idx}. {path}")
-        else:
-            self.log_debug("Nessun percorso escluso configurato")
-        
-        # Registra il footer
-        self.log_debug(footer)
+            # Cattura qualsiasi errore per garantire che la funzione non fermi l'app
+            error_message = f"Errore durante la registrazione delle impostazioni: {str(e)}"
+            print(error_message)  # Output anche sulla console per debug
+            
+            # Cerca di utilizzare log_error se disponibile
+            try:
+                self.log_error(error_message)
+            except:
+                print(f"Impossibile registrare errore nei log: {error_message}")
+                
+            import traceback
+            traceback_str = traceback.format_exc()
+            print(f"Traceback completo:\n{traceback_str}")
+            
+            return False
     
     @error_handler
     def add_new_logs_to_display(self):
@@ -6321,16 +6455,21 @@ class FileSearchApp:
                 sample = f.read(sample_size)
                 # Criterio semplice: se contiene byte nulli, probabilmente è binario
                 if b'\x00' in sample:
+                    self.log_debug(f"File rilevato come binario: {os.path.basename(file_path)}")
                     return True
                     
                 # Verifica il rapporto di caratteri non ASCII
                 text_chars = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x7f})
                 non_text = sample.translate(None, text_chars)
-                return float(len(non_text)) / float(len(sample) or 1) > 0.3
+                if float(len(non_text)) / float(len(sample) or 1) > 0.3:
+                    self.log_debug(f"File rilevato come binario (alto rapporto non-ASCII): {os.path.basename(file_path)}")
+                    return True
+                return False
         except Exception:
             # In caso di dubbio, considera come binario
+            self.log_debug(f"Errore nell'analisi del file, considerato binario: {os.path.basename(file_path)}")
             return True
-        
+    
     @error_handler
     def extract_archive_content(self, file_path):
         """Estrae e cerca all'interno dei file compressi.
@@ -6932,6 +7071,41 @@ class FileSearchApp:
                     self.log_debug(f"Directory temporanea rimossa: {temp_dir}")
                 except Exception as e:
                     self.log_debug(f"Errore nella pulizia dei file temporanei: {str(e)}")
+
+    @error_handler
+    def cleanup_temp_files(self, temp_dir=None):
+        """Pulisce i file temporanei con gestione robusta degli errori"""
+        
+        if temp_dir is None:
+            temp_dir = os.path.join(tempfile.gettempdir(), "email_att_*")
+        
+        try:
+            # Usa glob per trovare tutte le cartelle temporanee corrispondenti al pattern
+            temp_folders = glob.glob(temp_dir)
+            
+            for folder in temp_folders:
+                if os.path.exists(folder) and os.path.isdir(folder):
+                    try:
+                        # Rimuovi prima i file nella cartella
+                        for root, dirs, files in os.walk(folder, topdown=False):
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                try:
+                                    os.remove(file_path)
+                                except PermissionError:
+                                    # File in uso, salta e continua
+                                    self.log_debug(f"Impossibile rimuovere file temporaneo in uso: {file_path}")
+                                    pass
+                                except Exception as e:
+                                    self.log_debug(f"Errore nella rimozione del file temporaneo {file_path}: {str(e)}")
+                        
+                        # Ora rimuovi le cartelle vuote
+                        shutil.rmtree(folder, ignore_errors=True)
+                    except Exception as e:
+                        self.log_debug(f"Errore nella rimozione della cartella temporanea {folder}: {str(e)}")
+        
+        except Exception as e:
+            self.log_error(f"Errore nella pulizia dei file temporanei: {str(e)}")
 
     @error_handler
     def _partial_content_search(self, file_path, keywords):
