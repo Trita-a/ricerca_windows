@@ -1810,16 +1810,16 @@ class FileSearchApp:
     def monitor_memory_usage(self):
         """Monitoraggio periodico dell'utilizzo della memoria. Rileva situazioni critiche e interviene preventivamente."""
         try:
-            # Verifica se il monitoraggio dovrebbe essere attivo
-            if not hasattr(self, 'search_in_progress') or not self.search_in_progress:
-                self.log_debug("Monitoraggio memoria terminato: ricerca non più attiva")
+            # Verifica se il monitoraggio dovrebbe essere attivo usando il flag dedicato
+            if not hasattr(self, 'memory_monitor_running') or not self.memory_monitor_running:
+                self.log_debug("Monitoraggio memoria terminato: flag memory_monitor_running è False")
                 self.memory_monitor_id = None
                 return
                 
-            # Controlla anche il flag is_searching come doppia verifica
+            # Controllo aggiuntivo dello stato di ricerca
             if not hasattr(self, 'is_searching') or not self.is_searching:
-                self.log_debug("Monitoraggio memoria terminato: flag is_searching è False")
-                self.search_in_progress = False
+                self.log_debug("Monitoraggio memoria terminato: ricerca non più attiva")
+                self.memory_monitor_running = False
                 self.memory_monitor_id = None
                 return
                 
@@ -1876,28 +1876,28 @@ class FileSearchApp:
             
         finally:
             # Riprogramma il prossimo controllo solo se il monitoraggio è ancora attivo
-            if (hasattr(self, 'search_in_progress') and self.search_in_progress and 
-                hasattr(self, 'is_searching') and self.is_searching and 
+            if (hasattr(self, 'memory_monitor_running') and self.memory_monitor_running and 
                 hasattr(self, 'root') and self.root):
                 self.memory_monitor_id = self.root.after(30000, self.monitor_memory_usage)
             else:
-                self.log_debug("Monitoraggio memoria non riprogrammato: ricerca non più attiva")
+                self.log_debug("Monitoraggio memoria non riprogrammato: monitoraggio non più attivo")
                 # Assicuriamoci che i flag siano coerenti
-                self.search_in_progress = False
+                self.memory_monitor_running = False
                 # Azzera l'ID del timer
                 self.memory_monitor_id = None
 
     @error_handler
     def start_memory_monitoring(self):
         """Avvia il monitoraggio della memoria con sicurezza"""
+        
         # Prima ferma qualsiasi monitoraggio esistente per evitare duplicati
         self.stop_memory_monitoring()
         
         # Inizializza lo stato e il timestamp
-        self.search_in_progress = True
+        self.memory_monitor_running = True
         self._last_memory_check = time.time()
         
-        # Log diagnosticov
+        # Log diagnostico
         self.log_debug("AVVIO: Monitoraggio memoria automatica iniziato")
         
         # Avvia il ciclo di monitoraggio
@@ -1911,8 +1911,8 @@ class FileSearchApp:
         """Ferma il monitoraggio della memoria senza interferire con la ricerca"""
         self.log_debug("RICHIESTA STOP: Fermando monitoraggio memoria")
         
-        # Imposta SOLO il flag di monitoraggio memoria a False
-        self.search_in_progress = False
+        # Imposta il flag specifico per il monitoraggio della memoria
+        self.memory_monitor_running = False
         
         # Cancella timer in modo più aggressivo
         if hasattr(self, 'memory_monitor_id') and self.memory_monitor_id:
