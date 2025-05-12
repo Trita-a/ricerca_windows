@@ -1,1 +1,0 @@
-# ricerca_windows
